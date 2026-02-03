@@ -9,9 +9,5 @@ class GetCandleSeriesInput {
       {required this.symbol,
       required this.timeframe,
       required this.from,
-      required this.to})
-      : assert(symbol != null),
-        assert(timeframe != null),
-        assert(from != null),
-        assert(to != null);
+      required this.to});
 }
