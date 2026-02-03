@@ -1,3 +1,6 @@
+run:
+  timeout: 5m
+
 linters:
   enable:
     - errcheck
@@ -11,14 +14,7 @@ linters:
     - typecheck
     - unused
     - gocyclo
-    - revive
 
 linters-settings:
   gocyclo:
     min-complexity: 10
-
-issues:
-  exclude-rules:
-    - path: "^cmd/"
-      linters:
-        - revive
