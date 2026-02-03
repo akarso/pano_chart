@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:pano_chart_frontend/features/candles/infrastructure/http_candle_api.dart';
 import 'package:pano_chart_frontend/features/candles/api/candle_request.dart';
-import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
 
 class _FakeHttpClient extends http.BaseClient {
   http.Request? lastRequest;

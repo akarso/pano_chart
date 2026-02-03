@@ -7,7 +7,8 @@
       "name": "pano_chart_frontend",
       "version": "0.0.0",
       "dependencies": [
-        "flutter"
+        "flutter",
+        "http"
       ],
       "devDependencies": [
         "flutter_test"
@@ -39,6 +40,15 @@
         "test_api",
         "vector_math",
         "vm_service"
+      ]
+    },
+    {
+      "name": "http",
+      "version": "0.13.6",
+      "dependencies": [
+        "async",
+        "http_parser",
+        "meta"
       ]
     },
     {
@@ -212,9 +222,26 @@
       ]
     },
     {
+      "name": "http_parser",
+      "version": "4.1.2",
+      "dependencies": [
+        "collection",
+        "source_span",
+        "string_scanner",
+        "typed_data"
+      ]
+    },
+    {
       "name": "sky_engine",
       "version": "0.0.0",
       "dependencies": []
+    },
+    {
+      "name": "typed_data",
+      "version": "1.4.0",
+      "dependencies": [
+        "collection"
+      ]
     }
   ],
   "configVersion": 1
