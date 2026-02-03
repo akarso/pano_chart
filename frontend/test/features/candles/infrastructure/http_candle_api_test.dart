@@ -29,7 +29,9 @@ void main() {
     http.Request? captured;
     final fake = _FakeHttpClient((req) {
       captured = req;
-      return http.Response('{}', 200,
+      final body = jsonEncode(
+          {'symbol': 'BTCUSDT', 'timeframe': '1m', 'candles': <dynamic>[]});
+      return http.Response(body, 200,
           headers: {'content-type': 'application/json'});
     });
 
