@@ -137,14 +137,14 @@ func checkHour(rule alignRule, tf Timeframe, ts time.Time) error {
 }
 
 // Accessors
-func (c Candle) Symbol() Symbol { return c.symbol }
+func (c Candle) Symbol() Symbol       { return c.symbol }
 func (c Candle) Timeframe() Timeframe { return c.timeframe }
 func (c Candle) Timestamp() time.Time { return c.timestamp }
-func (c Candle) Open() float64 { return c.open }
-func (c Candle) High() float64 { return c.high }
-func (c Candle) Low() float64 { return c.low }
-func (c Candle) Close() float64 { return c.close }
-func (c Candle) Volume() float64 { return c.volume }
+func (c Candle) Open() float64        { return c.open }
+func (c Candle) High() float64        { return c.high }
+func (c Candle) Low() float64         { return c.low }
+func (c Candle) Close() float64       { return c.close }
+func (c Candle) Volume() float64      { return c.volume }
 
 // Identity equality: symbol + timeframe + timestamp
 func (c Candle) Equals(other Candle) bool {
