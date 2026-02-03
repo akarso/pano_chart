@@ -1,0 +1,24 @@
+linters:
+  enable:
+    - errcheck
+    - gofmt
+    - goimports
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - typecheck
+    - unused
+    - gocyclo
+    - revive
+
+linters-settings:
+  gocyclo:
+    min-complexity: 10
+
+issues:
+  exclude-rules:
+    - path: "^cmd/"
+      linters:
+        - revive
