@@ -60,7 +60,7 @@ class _OverviewWidgetState extends State<OverviewWidget> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('${input.symbol} • ${input.timeframe}',
-                      style: Theme.of(context).textTheme.subtitle1),
+                      style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   Expanded(
                     child: _buildChartArea(resp),
