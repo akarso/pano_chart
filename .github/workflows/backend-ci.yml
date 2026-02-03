@@ -48,7 +48,6 @@ jobs:
         with:
           version: v2.8.0
           working-directory: ./backend
-          args: --timeout=5m
 
   build:
     runs-on: ubuntu-latest
