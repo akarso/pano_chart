@@ -75,3 +75,9 @@ func (tf Timeframe) Duration() time.Duration {
 		return 0
 	}
 }
+
+// NewTimeframeUnsafe creates a Timeframe without validation.
+// Use only in tests.
+func NewTimeframeUnsafe(s string) Timeframe {
+	return Timeframe(strings.ToLower(s))
+}

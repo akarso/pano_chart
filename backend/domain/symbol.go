@@ -50,3 +50,9 @@ func isValidSymbolChar(ch rune) bool {
 func (s Symbol) String() string {
 	return string(s)
 }
+
+// NewSymbolUnsafe creates a Symbol without validation.
+// Use only in tests.
+func NewSymbolUnsafe(s string) Symbol {
+	return Symbol(strings.ToUpper(s))
+}

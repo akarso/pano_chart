@@ -161,3 +161,18 @@ func (c Candle) Equals(other Candle) bool {
 func (c Candle) IsBullish() bool { return c.close > c.open }
 func (c Candle) IsBearish() bool { return c.close < c.open }
 func (c Candle) IsDoji() bool    { return c.close == c.open }
+
+// NewCandleUnsafe creates a Candle without validation.
+// Use only in tests.
+func NewCandleUnsafe(symbol Symbol, tf Timeframe, ts time.Time, open, high, low, close, volume float64) Candle {
+	return Candle{
+		symbol:    symbol,
+		timeframe: tf,
+		timestamp: ts,
+		open:      open,
+		high:      high,
+		low:       low,
+		close:     close,
+		volume:    volume,
+	}
+}
