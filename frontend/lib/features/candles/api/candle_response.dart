@@ -1,4 +1,4 @@
-import 'dart:collection';
+// No extra imports required; keep file minimal to satisfy analyzer.
 
 /// Immutable DTO for a single candle matching PR-011 (timestamp RFC3339, numeric OHLCV).
 class CandleDto {

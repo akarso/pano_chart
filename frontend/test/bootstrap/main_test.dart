@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter/widgets.dart';
 import 'package:pano_chart_frontend/bootstrap/main.dart' as bootstrap;
 import 'package:pano_chart_frontend/core/config/config.dart';
 
