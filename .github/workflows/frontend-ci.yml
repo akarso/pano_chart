@@ -38,7 +38,7 @@ jobs:
 
       - name: Format check
         working-directory: frontend
-        run: flutter format --set-exit-if-changed .
+        run: dart format --set-exit-if-changed .
 
       - name: Static analysis
         working-directory: frontend
