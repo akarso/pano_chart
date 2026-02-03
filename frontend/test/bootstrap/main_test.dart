@@ -5,7 +5,8 @@ import 'package:pano_chart_frontend/core/config/config.dart';
 
 void main() {
   testWidgets('App starts without exceptions', (WidgetTester tester) async {
-    final widget = bootstrap.bootstrapApp(config: const AppConfig(apiBaseUrl: 'https://example', flavor: 'test'));
+    final widget = bootstrap.bootstrapApp(
+        config: const AppConfig(apiBaseUrl: 'https://example', flavor: 'test'));
     await tester.pumpWidget(widget);
     // pump and settle to ensure no exceptions during build
     await tester.pumpAndSettle();

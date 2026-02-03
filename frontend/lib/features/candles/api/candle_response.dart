@@ -9,7 +9,13 @@ class CandleDto {
   final double close;
   final double volume;
 
-  const CandleDto({required this.timestamp, required this.open, required this.high, required this.low, required this.close, required this.volume});
+  const CandleDto(
+      {required this.timestamp,
+      required this.open,
+      required this.high,
+      required this.low,
+      required this.close,
+      required this.volume});
 
   factory CandleDto.fromJson(Map<String, dynamic> json) {
     final ts = DateTime.parse(json['timestamp'] as String).toUtc();
@@ -45,7 +51,8 @@ class CandleDto {
   }
 
   @override
-  int get hashCode => Object.hash(timestamp.toUtc(), open, high, low, close, volume);
+  int get hashCode =>
+      Object.hash(timestamp.toUtc(), open, high, low, close, volume);
 }
 
 /// Response DTO containing symbol, timeframe and ordered candles.
@@ -54,14 +61,22 @@ class CandleSeriesResponse {
   final String timeframe;
   final List<CandleDto> candles;
 
-  CandleSeriesResponse({required String symbol, required String timeframe, required List<CandleDto> candles})
+  CandleSeriesResponse(
+      {required String symbol,
+      required String timeframe,
+      required List<CandleDto> candles})
       : symbol = symbol,
         timeframe = timeframe,
         candles = List.unmodifiable(candles);
 
   factory CandleSeriesResponse.fromJson(Map<String, dynamic> json) {
-    final cs = (json['candles'] as List<dynamic>).map((e) => CandleDto.fromJson(e as Map<String, dynamic>)).toList();
-    return CandleSeriesResponse(symbol: json['symbol'] as String, timeframe: json['timeframe'] as String, candles: cs);
+    final cs = (json['candles'] as List<dynamic>)
+        .map((e) => CandleDto.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return CandleSeriesResponse(
+        symbol: json['symbol'] as String,
+        timeframe: json['timeframe'] as String,
+        candles: cs);
   }
 
   Map<String, dynamic> toJson() => {

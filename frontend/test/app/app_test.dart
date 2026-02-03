@@ -5,8 +5,10 @@ import 'package:pano_chart_frontend/core/config/config.dart';
 import 'package:flutter/material.dart';
 
 void main() {
-  testWidgets('Root widget builds and shows placeholder', (WidgetTester tester) async {
-    final widget = bootstrap.bootstrapApp(config: const AppConfig(apiBaseUrl: 'https://example', flavor: 'test'));
+  testWidgets('Root widget builds and shows placeholder',
+      (WidgetTester tester) async {
+    final widget = bootstrap.bootstrapApp(
+        config: const AppConfig(apiBaseUrl: 'https://example', flavor: 'test'));
     await tester.pumpWidget(widget);
     await tester.pumpAndSettle();
     // Root placeholder contains the exact text defined in router

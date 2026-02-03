@@ -7,19 +7,34 @@ void main() {
     final later = now.add(const Duration(minutes: 1));
 
     // valid construction should not throw
-    expect(() => CandleRequest(symbol: 'BTCUSDT', timeframe: '1m', from: now, to: later), returnsNormally);
+    expect(
+        () => CandleRequest(
+            symbol: 'BTCUSDT', timeframe: '1m', from: now, to: later),
+        returnsNormally);
 
     // empty symbol
-    expect(() => CandleRequest(symbol: '  ', timeframe: '1m', from: now, to: later), throwsArgumentError);
+    expect(
+        () =>
+            CandleRequest(symbol: '  ', timeframe: '1m', from: now, to: later),
+        throwsArgumentError);
 
     // empty timeframe
-    expect(() => CandleRequest(symbol: 'BTCUSDT', timeframe: '', from: now, to: later), throwsArgumentError);
+    expect(
+        () => CandleRequest(
+            symbol: 'BTCUSDT', timeframe: '', from: now, to: later),
+        throwsArgumentError);
 
     // non-UTC times should throw
     final localFrom = DateTime(2024, 1, 1);
-    expect(() => CandleRequest(symbol: 'BTCUSDT', timeframe: '1m', from: localFrom, to: later), throwsArgumentError);
+    expect(
+        () => CandleRequest(
+            symbol: 'BTCUSDT', timeframe: '1m', from: localFrom, to: later),
+        throwsArgumentError);
 
     // from must be before to
-    expect(() => CandleRequest(symbol: 'BTCUSDT', timeframe: '1m', from: later, to: now), throwsArgumentError);
+    expect(
+        () => CandleRequest(
+            symbol: 'BTCUSDT', timeframe: '1m', from: later, to: now),
+        throwsArgumentError);
   });
 }
