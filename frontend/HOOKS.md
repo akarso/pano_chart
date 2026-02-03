@@ -23,6 +23,12 @@ Notes:
 - If `dart` is not available the hook will warn and continue — formatting will be skipped.
 - Hooks are not automatically enabled for other clones; each developer should run the installer.
 
+Note: the installer will also mark the tracked `frontend/.githooks/pre-commit` file as executable. If you see a message that the hook is being ignored, re-run the installer or run:
+
+```bash
+chmod +x frontend/.githooks/pre-commit
+```
+
 To revert the change:
 
 ```bash
