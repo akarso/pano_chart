@@ -1,0 +1,32 @@
+linters:
+  enable:
+    - deadcode
+    - depguard
+    - errcheck
+    - gofmt
+    - goimports
+    - golint
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - typecheck
+    - unused
+    - varcheck
+    - gocyclo
+
+linters-settings:
+  gocyclo:
+    min-complexity: 10
+  depguard:
+    rules:
+      - deny:
+          - pkg: fmt
+            desc: "use fmt.Println only in main packages"
+
+issues:
+  exclude-rules:
+    - path: cmd/
+      linters:
+        - depguard
