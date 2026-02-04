@@ -3,8 +3,10 @@ import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
 import '../candles/api/candle_response.dart';
 
-/// Simple overview widget that loads multiple candle series via the
+/// Simple overview widget that loads multiple time series via the
 /// provided [GetCandleSeries] use case and displays them in a scrollable list.
+///
+/// Default view mode: [SeriesViewMode.line] for overview, [SeriesViewMode.candles] for detail.
 class OverviewWidget extends StatefulWidget {
   final GetCandleSeries useCase;
   final List<GetCandleSeriesInput> items;
@@ -76,19 +78,19 @@ class OverviewWidgetState extends State<OverviewWidget> {
 
   Widget _buildChartArea(CandleSeriesResponse? resp) {
     if (resp == null) return const SizedBox.shrink();
-    if (resp.candles.isEmpty) return const Center(child: Text('No candles'));
+    if (resp.candles.isEmpty) return const Center(child: Text('No data'));
 
     // Minimal visualisation: draw simple bars using a CustomPaint
     return CustomPaint(
-      painter: MiniChartPainter(resp.candles),
+      painter: MiniChartRenderer(resp.candles),
       size: Size.infinite,
     );
   }
 }
 
-class MiniChartPainter extends CustomPainter {
+class MiniChartRenderer extends CustomPainter {
   final List<CandleDto> candles;
-  MiniChartPainter(this.candles);
+  MiniChartRenderer(this.candles);
 
   @override
   void paint(Canvas canvas, Size size) {
