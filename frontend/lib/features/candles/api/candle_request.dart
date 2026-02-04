@@ -10,12 +10,10 @@ class CandleRequest {
   CandleRequest(
       {required String symbol,
       required String timeframe,
-      required DateTime from,
-      required DateTime to})
+      required this.from,
+      required this.to})
       : symbol = symbol.trim(),
-        timeframe = timeframe.trim(),
-        from = from,
-        to = to {
+        timeframe = timeframe.trim() {
     if (this.symbol.isEmpty) {
       throw ArgumentError.value(symbol, 'symbol', 'symbol is required');
     }
@@ -23,13 +21,13 @@ class CandleRequest {
       throw ArgumentError.value(
           timeframe, 'timeframe', 'timeframe is required');
     }
-    if (!this.from.isUtc) {
+    if (!from.isUtc) {
       throw ArgumentError.value(from, 'from', 'from must be UTC');
     }
-    if (!this.to.isUtc) {
+    if (!to.isUtc) {
       throw ArgumentError.value(to, 'to', 'to must be UTC');
     }
-    if (!this.from.isBefore(this.to)) {
+    if (!from.isBefore(to)) {
       throw ArgumentError.value(from, 'from', 'from must be before to');
     }
   }

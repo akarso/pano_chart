@@ -105,6 +105,6 @@ void main() {
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();
 
-    expect(find.text('No candles'), findsOneWidget);
+    expect(find.text('No data'), findsOneWidget);
   });
 }

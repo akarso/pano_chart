@@ -24,13 +24,10 @@ CandleSeriesResponse _series(List<double> closes) => CandleSeriesResponse(
 void main() {
   group('LineSeriesChartRenderer', () {
     test('maps closes to normalized points', () {
-      final renderer = LineSeriesChartRenderer();
-      final series = _series([10, 20, 30]);
-      final painter = LineChartPainter(series);
-      final size = const Size(100, 100);
+      const size = Size(100, 100);
       // Access private logic by copying normalization here for test
       final closes = [10.0, 20.0, 30.0];
-      final min = 10.0, max = 30.0, range = 20.0;
+      const min = 10.0, range = 20.0;
       final pad = size.height * 0.08;
       final chartHeight = size.height - 2 * pad;
       final expected = <Offset>[];
@@ -48,7 +45,6 @@ void main() {
     });
 
     test('empty or single-point series renders safely', () {
-      final renderer = LineSeriesChartRenderer();
       final empty = _series([]);
       final single = _series([42]);
       final painterEmpty = LineChartPainter(empty);
@@ -63,14 +59,23 @@ void main() {
       final series = _series([1, 2, 3, 4, 5]);
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
-          body: renderer.build(
-            tester.element(find.byType(Scaffold)),
-            series: series,
-            viewMode: SeriesViewMode.line,
+          body: Builder(
+            builder: (context) => renderer.build(
+              context,
+              series: series,
+              viewMode: SeriesViewMode.line,
+            ),
           ),
         ),
       ));
-      expect(find.byType(CustomPaint), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) =>
+              w is CustomPaint &&
+              w.painter.runtimeType.toString() == 'LineChartPainter',
+        ),
+        findsOneWidget,
+      );
     });
   });
 }
