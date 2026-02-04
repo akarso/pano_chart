@@ -13,10 +13,10 @@ class OverviewWidget extends StatefulWidget {
       : super(key: key);
 
   @override
-  _OverviewWidgetState createState() => _OverviewWidgetState();
+  OverviewWidgetState createState() => OverviewWidgetState();
 }
 
-class _OverviewWidgetState extends State<OverviewWidget> {
+class OverviewWidgetState extends State<OverviewWidget> {
   bool _isLoading = true;
   late List<CandleSeriesResponse?> _responses;
 
@@ -80,15 +80,15 @@ class _OverviewWidgetState extends State<OverviewWidget> {
 
     // Minimal visualisation: draw simple bars using a CustomPaint
     return CustomPaint(
-      painter: _MiniChartPainter(resp.candles),
+      painter: MiniChartPainter(resp.candles),
       size: Size.infinite,
     );
   }
 }
 
-class _MiniChartPainter extends CustomPainter {
+class MiniChartPainter extends CustomPainter {
   final List<CandleDto> candles;
-  _MiniChartPainter(this.candles);
+  MiniChartPainter(this.candles);
 
   @override
   void paint(Canvas canvas, Size size) {

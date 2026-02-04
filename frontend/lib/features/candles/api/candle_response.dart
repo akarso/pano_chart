@@ -61,13 +61,11 @@ class CandleSeriesResponse {
   final String timeframe;
   final List<CandleDto> candles;
 
-  CandleSeriesResponse(
-      {required String symbol,
-      required String timeframe,
-      required List<CandleDto> candles})
-      : symbol = symbol,
-        timeframe = timeframe,
-        candles = List.unmodifiable(candles);
+  CandleSeriesResponse({
+    required this.symbol,
+    required this.timeframe,
+    required List<CandleDto> candles,
+  }) : candles = List.unmodifiable(candles);
 
   factory CandleSeriesResponse.fromJson(Map<String, dynamic> json) {
     final cs = (json['candles'] as List<dynamic>)

@@ -15,15 +15,21 @@ class CandleRequest {
         timeframe = timeframe.trim(),
         from = from,
         to = to {
-    if (this.symbol.isEmpty)
+    if (this.symbol.isEmpty) {
       throw ArgumentError.value(symbol, 'symbol', 'symbol is required');
-    if (this.timeframe.isEmpty)
+    }
+    if (this.timeframe.isEmpty) {
       throw ArgumentError.value(
           timeframe, 'timeframe', 'timeframe is required');
-    if (!this.from.isUtc)
+    }
+    if (!this.from.isUtc) {
       throw ArgumentError.value(from, 'from', 'from must be UTC');
-    if (!this.to.isUtc) throw ArgumentError.value(to, 'to', 'to must be UTC');
-    if (!this.from.isBefore(this.to))
+    }
+    if (!this.to.isUtc) {
+      throw ArgumentError.value(to, 'to', 'to must be UTC');
+    }
+    if (!this.from.isBefore(this.to)) {
       throw ArgumentError.value(from, 'from', 'from must be before to');
+    }
   }
 }

@@ -11,7 +11,15 @@
         "http"
       ],
       "devDependencies": [
+        "flutter_lints",
         "flutter_test"
+      ]
+    },
+    {
+      "name": "flutter_lints",
+      "version": "2.0.3",
+      "dependencies": [
+        "lints"
       ]
     },
     {
@@ -62,6 +70,11 @@
         "sky_engine",
         "vector_math"
       ]
+    },
+    {
+      "name": "lints",
+      "version": "2.1.1",
+      "dependencies": []
     },
     {
       "name": "vm_service",
