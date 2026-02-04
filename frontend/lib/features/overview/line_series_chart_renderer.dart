@@ -18,15 +18,15 @@ class LineSeriesChartRenderer implements SeriesChartRenderer {
     assert(viewMode == SeriesViewMode.line,
         'LineSeriesChartRenderer only supports SeriesViewMode.line');
     return CustomPaint(
-      painter: _LineChartPainter(series),
+      painter: LineChartPainter(series),
       size: Size.infinite,
     );
   }
 }
 
-class _LineChartPainter extends CustomPainter {
+class LineChartPainter extends CustomPainter {
   final CandleSeriesResponse series;
-  _LineChartPainter(this.series);
+  LineChartPainter(this.series);
 
   @override
   void paint(Canvas canvas, Size size) {

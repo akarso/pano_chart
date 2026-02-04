@@ -6,6 +6,7 @@ class CandleRequest {
   final DateTime to;
 
   /// All fields required. `from` and `to` must be UTC and `from` < `to`.
+  // ignore: prefer_initializing_formals
   CandleRequest(
       {required String symbol,
       required String timeframe,

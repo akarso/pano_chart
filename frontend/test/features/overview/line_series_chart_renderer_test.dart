@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/domain/series_view_mode.dart';
@@ -25,7 +26,7 @@ void main() {
     test('maps closes to normalized points', () {
       final renderer = LineSeriesChartRenderer();
       final series = _series([10, 20, 30]);
-      final painter = _LineChartPainter(series);
+      final painter = LineChartPainter(series);
       final size = const Size(100, 100);
       // Access private logic by copying normalization here for test
       final closes = [10.0, 20.0, 30.0];
@@ -50,8 +51,8 @@ void main() {
       final renderer = LineSeriesChartRenderer();
       final empty = _series([]);
       final single = _series([42]);
-      final painterEmpty = _LineChartPainter(empty);
-      final painterSingle = _LineChartPainter(single);
+      final painterEmpty = LineChartPainter(empty);
+      final painterSingle = LineChartPainter(single);
       // Should not throw
       painterEmpty.paint(Canvas(PictureRecorder()), const Size(100, 100));
       painterSingle.paint(Canvas(PictureRecorder()), const Size(100, 100));
