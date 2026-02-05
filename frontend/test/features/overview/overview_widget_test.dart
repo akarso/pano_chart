@@ -32,13 +32,17 @@ void main() {
           CandleSeriesResponse(symbol: 'BTCUSDT', timeframe: '1m', candles: [])
         ]);
 
-    final widget = OverviewWidget(useCase: usecase, items: [
-      GetCandleSeriesInput(
-          symbol: 'BTCUSDT',
-          timeframe: '1m',
-          from: DateTime.utc(2024, 1, 1),
-          to: DateTime.utc(2024, 1, 2))
-    ]);
+    final widget = OverviewWidget(
+      useCase: usecase,
+      items: [
+        GetCandleSeriesInput(
+            symbol: 'BTCUSDT',
+            timeframe: '1m',
+            from: DateTime.utc(2024, 1, 1),
+            to: DateTime.utc(2024, 1, 2))
+      ],
+      viewModel: Object(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
@@ -68,18 +72,22 @@ void main() {
     ]);
     final usecase = _FakeUseCase(responses: [resp1, resp2]);
 
-    final widget = OverviewWidget(useCase: usecase, items: [
-      GetCandleSeriesInput(
-          symbol: 'BTCUSDT',
-          timeframe: '1m',
-          from: DateTime.utc(2024, 1, 1),
-          to: DateTime.utc(2024, 1, 2)),
-      GetCandleSeriesInput(
-          symbol: 'ETHUSD',
-          timeframe: '5m',
-          from: DateTime.utc(2024, 1, 1),
-          to: DateTime.utc(2024, 1, 2)),
-    ]);
+    final widget = OverviewWidget(
+      useCase: usecase,
+      items: [
+        GetCandleSeriesInput(
+            symbol: 'BTCUSDT',
+            timeframe: '1m',
+            from: DateTime.utc(2024, 1, 1),
+            to: DateTime.utc(2024, 1, 2)),
+        GetCandleSeriesInput(
+            symbol: 'ETHUSD',
+            timeframe: '5m',
+            from: DateTime.utc(2024, 1, 1),
+            to: DateTime.utc(2024, 1, 2)),
+      ],
+      viewModel: Object(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();
@@ -94,13 +102,17 @@ void main() {
         CandleSeriesResponse(symbol: 'BTCUSDT', timeframe: '1m', candles: []);
     final usecase = _FakeUseCase(responses: [resp]);
 
-    final widget = OverviewWidget(useCase: usecase, items: [
-      GetCandleSeriesInput(
-          symbol: 'BTCUSDT',
-          timeframe: '1m',
-          from: DateTime.utc(2024, 1, 1),
-          to: DateTime.utc(2024, 1, 2)),
-    ]);
+    final widget = OverviewWidget(
+      useCase: usecase,
+      items: [
+        GetCandleSeriesInput(
+            symbol: 'BTCUSDT',
+            timeframe: '1m',
+            from: DateTime.utc(2024, 1, 1),
+            to: DateTime.utc(2024, 1, 2)),
+      ],
+      viewModel: Object(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
 import '../candles/api/candle_response.dart';
+import '../detail/detail_screen.dart';
+import '../../domain/symbol.dart';
 
 /// Simple overview widget that loads multiple time series via the
 /// provided [GetCandleSeries] use case and displays them in a scrollable list.
@@ -11,7 +13,12 @@ class OverviewWidget extends StatefulWidget {
   final GetCandleSeries useCase;
   final List<GetCandleSeriesInput> items;
 
-  const OverviewWidget({Key? key, required this.useCase, required this.items})
+  final dynamic viewModel; // Add this if not present in your codebase
+  const OverviewWidget(
+      {Key? key,
+      required this.useCase,
+      required this.items,
+      required this.viewModel})
       : super(key: key);
 
   @override
@@ -94,6 +101,7 @@ class OverviewWidgetState extends State<OverviewWidget> {
                 symbol: input.symbol,
                 timeframe: input.timeframe,
                 response: resp,
+                viewModel: widget.viewModel,
               );
             },
           ),
@@ -107,39 +115,56 @@ class _OverviewGridItem extends StatelessWidget {
   final String symbol;
   final String timeframe;
   final CandleSeriesResponse? response;
-  const _OverviewGridItem(
-      {required this.symbol, required this.timeframe, required this.response});
+  final dynamic viewModel;
+  const _OverviewGridItem({
+    required this.symbol,
+    required this.timeframe,
+    required this.response,
+    required this.viewModel,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: AspectRatio(
-        aspectRatio: 2.5,
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: _buildChartArea(response),
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => DetailScreen(
+              symbol: AppSymbol(symbol),
+              viewModel: viewModel,
             ),
-            Positioned(
-              left: 12,
-              top: 8,
-              child: Text(
-                symbol,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: Colors.white.withAlpha((0.85 * 255).round()),
-                          backgroundColor:
-                              Colors.black.withAlpha((0.25 * 255).round()),
-                        ) ??
-                    const TextStyle(),
+          ),
+        );
+      },
+      child: Card(
+        child: AspectRatio(
+          aspectRatio: 2.5,
+          child: Stack(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: _buildChartArea(response),
               ),
-            ),
-            Positioned(
-              right: 12,
-              top: 8,
-              child: _buildPercentChange(context, response),
-            ),
-          ],
+              Positioned(
+                left: 12,
+                top: 8,
+                child: Text(
+                  symbol,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            color: Colors.white.withAlpha((0.85 * 255).round()),
+                            backgroundColor:
+                                Colors.black.withAlpha((0.25 * 255).round()),
+                          ) ??
+                      const TextStyle(),
+                ),
+              ),
+              Positioned(
+                right: 12,
+                top: 8,
+                child: _buildPercentChange(context, response),
+              ),
+            ],
+          ),
         ),
       ),
     );
