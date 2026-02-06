@@ -1,9 +1,16 @@
+import '../../domain/candle_series.dart';
 import 'dart:math' as math;
 import '../../features/candles/api/candle_response.dart';
 import 'symbol_score_calculator.dart';
 
 /// Trend Predictability score: slope_normalized * R^2
 class TrendPredictabilityScoreCalculator implements SymbolScoreCalculator {
+  @override
+  double scoreSeries(CandleSeries series) {
+    return score(CandleSeriesResponse(
+        symbol: '', timeframe: '', candles: series.candles));
+  }
+
   @override
   String get name => 'Trend Predictability';
 

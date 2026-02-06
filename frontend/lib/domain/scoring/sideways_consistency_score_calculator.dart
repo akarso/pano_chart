@@ -1,9 +1,16 @@
+import '../../domain/candle_series.dart';
 import 'dart:math' as math;
 import '../../features/candles/api/candle_response.dart';
 import 'symbol_score_calculator.dart';
 
 /// Sideways Consistency score: 1 - (max deviation from mean / mean)
 class SidewaysConsistencyScoreCalculator implements SymbolScoreCalculator {
+  @override
+  double scoreSeries(CandleSeries series) {
+    return score(CandleSeriesResponse(
+        symbol: '', timeframe: '', candles: series.candles));
+  }
+
   @override
   String get name => 'Sideways Consistency';
 

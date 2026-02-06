@@ -1,8 +1,15 @@
+import '../../domain/candle_series.dart';
 import '../../features/candles/api/candle_response.dart';
 import 'symbol_score_calculator.dart';
 
 /// Gain/Loss score: (lastClose - firstClose) / firstClose
 class GainLossScoreCalculator implements SymbolScoreCalculator {
+  @override
+  double scoreSeries(CandleSeries series) {
+    return score(CandleSeriesResponse(
+        symbol: '', timeframe: '', candles: series.candles));
+  }
+
   @override
   String get name => 'Gain/Loss';
 
