@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"pano_chart/backend/application/ports"
-	"pano_chart/backend/adapters/infra"
+	infra "pano_chart/backend/adapters/infra"
 	"pano_chart/backend/domain"
 )
 
@@ -103,5 +103,30 @@ func TestFreeTierCandleRepository_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	_, err := repo.GetSeries(sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
+	}
+}
+
+func TestFreeTierCandleRepository_GetSeries_MapsProviderResponse(t *testing.T) {
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf := domain.Timeframe1h
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode([]map[string]interface{}{
+			{"timestamp": "2024-01-01T00:00:00Z", "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 100},
+		}); err != nil {
+			panic(err)
+		}
+	}))
+	defer server.Close()
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
+	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if series.Len() != 1 {
+		t.Fatalf("expected 1 candle, got %d", series.Len())
+	}
+	c, _ := series.At(0)
+	if c.Close() != 1.5 {
+		t.Errorf("expected close 1.5, got %v", c.Close())
 	}
 }
