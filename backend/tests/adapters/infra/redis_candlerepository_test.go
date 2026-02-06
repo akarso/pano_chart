@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/adapters/infra"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/adapters/infra"
+	"pano_chart/backend/domain"
 )
 
 // fakeRedisClient is a test double for Redis operations.

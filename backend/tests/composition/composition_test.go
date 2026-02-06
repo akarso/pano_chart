@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/cmd/server"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/cmd/server"
+	"pano_chart/backend/domain"
 )
 
 // fakeRepo implements ports.CandleRepositoryPort for tests.

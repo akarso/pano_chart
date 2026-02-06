@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 func mustTF(t *testing.T, s string) domain.Timeframe {

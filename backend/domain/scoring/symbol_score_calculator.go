@@ -1,6 +1,6 @@
 package scoring
 
-import "../"
+import "pano_chart/backend/domain"
 
 // SymbolScoreCalculator evaluates a CandleSeries and returns a normalized score.
 type SymbolScoreCalculator interface {

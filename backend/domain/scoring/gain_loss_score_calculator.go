@@ -1,7 +1,8 @@
+
 package scoring
 
 import (
-	"../"
+	"pano_chart/backend/domain"
 	"fmt"
 )
 

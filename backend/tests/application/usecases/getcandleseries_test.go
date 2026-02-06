@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/usecases"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/domain"
 )
 
 // fakeRepo records calls and can be configured to return a series or an error.

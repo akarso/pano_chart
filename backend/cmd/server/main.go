@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	adhttp "github.com/akarso/pano_chart/backend/adapters/http"
-	"github.com/akarso/pano_chart/backend/adapters/infra"
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/application/usecases"
+	adhttp "pano_chart/backend/adapters/http"
+		"pano_chart/backend/adapters/infra"
+		"pano_chart/backend/application/ports"
+		"pano_chart/backend/application/usecases"
 )
 
 // Config holds composition inputs. Fields are minimal and injectable for tests.

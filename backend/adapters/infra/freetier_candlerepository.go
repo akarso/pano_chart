@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 // FreeTierCandleRepository implements ports.CandleRepositoryPort using a free-tier HTTP API.

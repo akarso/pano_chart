@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/domain"
 )
 
 // FakeCandleRepository is a stub implementation for testing the port contract.

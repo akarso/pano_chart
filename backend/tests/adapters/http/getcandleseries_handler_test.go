@@ -8,8 +8,8 @@ import (
 	"time"
 	"encoding/json"
 
-	adhttp "github.com/akarso/pano_chart/backend/adapters/http"
-	"github.com/akarso/pano_chart/backend/domain"
+	adhttp "pano_chart/backend/adapters/http"
+		"pano_chart/backend/domain"
 )
 
 // fakeUseCase implements usecases.GetCandleSeries for testing.

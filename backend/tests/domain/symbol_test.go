@@ -3,7 +3,7 @@ package domain_test
 import (
 	"testing"
 
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 func TestSymbol_AcceptsValidSymbols(t *testing.T) {

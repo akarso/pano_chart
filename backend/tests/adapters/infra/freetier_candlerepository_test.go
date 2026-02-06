@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/adapters/infra"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/adapters/infra"
+	"pano_chart/backend/domain"
 )
 
 // sampleResponse is the external API payload shape used in tests.

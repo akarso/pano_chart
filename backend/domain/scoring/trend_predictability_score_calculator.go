@@ -1,9 +1,9 @@
+
 package scoring
 
 import (
-	"../"
+	"pano_chart/backend/domain"
 	"fmt"
-	"math"
 )
 
 // TrendPredictabilityScoreCalculator scores based on linear trend and fit.

@@ -3,7 +3,7 @@ package ports
 import (
 	"time"
 
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 // CandleRepositoryPort is a read-only interface for retrieving candle data.

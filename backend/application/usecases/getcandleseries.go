@@ -3,8 +3,8 @@ package usecases
 import (
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/domain"
 )
 
 // GetCandleSeries defines the use case interface.

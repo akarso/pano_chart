@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/domain"
 )
 
 // MinimalRedisClient is the minimal interface required by the decorator.

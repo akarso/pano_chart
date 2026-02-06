@@ -1,7 +1,7 @@
 package scoring
 
 import (
-	"../"
+	"pano_chart/backend/domain"
 	"testing"
 	"time"
 )
