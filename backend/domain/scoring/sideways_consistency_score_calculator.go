@@ -1,4 +1,3 @@
-
 package scoring
 
 import (
@@ -24,7 +23,7 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 		candle, _ := series.At(i)
 		closes[i] = candle.Close()
 	}
-	// 1. Net Displacement Ratio (NDR)
+	// --- 1. Net Displacement Ratio (NDR) ---
 	p0 := closes[0]
 	pn := closes[n-1]
 	minPrice, maxPrice := closes[0], closes[0]
@@ -38,7 +37,10 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 	}
 	rangePrice := maxPrice - minPrice
 	var ndr float64
-	if rangePrice > 0 {
+	if rangePrice == 0 {
+		// Flat line, per spec: score = 0
+		return 0, nil
+	} else {
 		ndr = math.Abs(pn-p0) / rangePrice
 	}
 	if ndr < 0 {
@@ -47,8 +49,11 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 	if ndr > 1 {
 		ndr = 1
 	}
-	// 2. Range Stability Score (RSS)
+	// --- 2. Range Stability Score (RSS) ---
 	window := 5
+	if n < window {
+		window = n
+	}
 	windowRanges := make([]float64, n-window+1)
 	for i := 0; i <= n-window; i++ {
 		wMin, wMax := closes[i], closes[i]
@@ -72,7 +77,7 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 		stddev += (v - mean) * (v - mean)
 	}
 	stddev = math.Sqrt(stddev / float64(len(windowRanges)))
-	rss := 1.0
+	rss := 0.0
 	if mean > 0 {
 		rss = 1 - (stddev / mean)
 	}
@@ -82,7 +87,7 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 	if rss > 1 {
 		rss = 1
 	}
-	// 3. Oscillation Density Score (ODS)
+	// --- 3. Oscillation Density Score (ODS) ---
 	extrema := 0
 	for i := 1; i < n-1; i++ {
 		if (closes[i] > closes[i-1] && closes[i] > closes[i+1]) || (closes[i] < closes[i-1] && closes[i] < closes[i+1]) {
@@ -99,7 +104,7 @@ func (c *SidewaysConsistencyScoreCalculator) Score(series domain.CandleSeries) (
 	if ods > 1 {
 		ods = 1
 	}
-	// Final score
+	// --- Final Score ---
 	score := (1 - ndr) * rss * ods
 	if score < 0 {
 		score = 0
