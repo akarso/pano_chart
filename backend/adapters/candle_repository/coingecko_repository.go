@@ -12,19 +12,20 @@ import (
 // CoinGeckoCandleRepository implements domain.CandleRepositoryPort
 // Fetches OHLC data from CoinGecko and maps to CandleSeries
 // Only supports 15m, 1h, 4h, 1d timeframes
+
 type CoinGeckoCandleRepository struct {
 	httpClient *http.Client
 	BaseURL    string
 }
 
 func NewCoinGeckoCandleRepository(client *http.Client) *CoinGeckoCandleRepository {
-   if client == nil {
-	   client = http.DefaultClient
-   }
-   return &CoinGeckoCandleRepository{
-	   httpClient: client,
-	   BaseURL:    "https://api.coingecko.com/api/v3",
-   }
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &CoinGeckoCandleRepository{
+		httpClient: client,
+		BaseURL:    "https://api.coingecko.com/api/v3",
+	}
 }
 
 func (r *CoinGeckoCandleRepository) GetSeries(symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
@@ -43,9 +44,7 @@ func (r *CoinGeckoCandleRepository) GetSeries(symbol domain.Symbol, timeframe do
 		return domain.CandleSeries{}, err
 	}
 	defer func() {
-		cerr := resp.Body.Close()
-		if cerr != nil {
-			// Optionally log or handle the error, but do not shadow the main error path
+		if cerr := resp.Body.Close(); cerr != nil {
 			fmt.Printf("warning: error closing response body: %v\n", cerr)
 		}
 	}()
