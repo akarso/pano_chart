@@ -60,7 +60,7 @@ func TestComposition_WiresWithoutRedis(t *testing.T) {
 	}
 
 	// Handler should be reachable via httptest
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -86,7 +86,7 @@ func TestComposition_WiresWithRedis(t *testing.T) {
 	}
 
 	// Call handler to trigger caching
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -111,7 +111,7 @@ func TestComposition_HTTPHandlerIsReachable(t *testing.T) {
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	res, err := http.Get(ts.URL + "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z")
+	res, err := http.Get(ts.URL + "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z")
 	if err != nil {
 		t.Fatalf("failed to reach handler: %v", err)
 	}

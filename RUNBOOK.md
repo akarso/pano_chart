@@ -223,4 +223,87 @@ flutter test
 
 ---
 
-If you want I can extend this runbook with deployment manifests (Kubernetes YAML), recommended CI job snippets for release signing, or a Fastlane configuration template for Android/iOS. Tell me which you prefer and I will add it.
+**Backend — Run on VPS (root access)**
+
+This section describes how to deploy and run the backend on a Linux VPS where you have root access. This is suitable for simple production or staging deployments without container orchestration.
+
+1. **Provision your VPS**
+   - Use a modern Linux distribution (Ubuntu 22.04 LTS or similar recommended).
+   - Ensure you have root or sudo access.
+
+2. **Install dependencies**
+   - Install Go (if building from source):
+     ```bash
+     sudo apt update && sudo apt install -y golang
+     # Or download from https://go.dev/dl/
+     ```
+   - Install PostgreSQL client (if needed):
+     ```bash
+     sudo apt install -y postgresql-client
+     ```
+
+3. **Copy backend binary and assets**
+   - Build the backend on your dev machine:
+     ```bash
+     cd backend
+     go build -o pano_chart_server ./cmd/server
+     ```
+   - Copy the binary to your VPS (replace $VPS with your server IP):
+     ```bash
+     scp backend/pano_chart_server user@$VPS:/opt/pano_chart/
+     # Or use rsync for directories
+     ```
+
+4. **Set up environment variables**
+   - Create a file `/opt/pano_chart/.env` with your secrets:
+     ```env
+     PC_PORT=8080
+     PC_DATABASE_URL=postgres://user:pass@localhost:5432/pano
+     # Add any other required env vars
+     ```
+
+5. **Create a systemd service**
+   - Create `/etc/systemd/system/pano_chart.service`:
+     ```ini
+     [Unit]
+     Description=Pano Chart Backend
+     After=network.target
+
+     [Service]
+     Type=simple
+     WorkingDirectory=/opt/pano_chart
+     EnvironmentFile=/opt/pano_chart/.env
+     ExecStart=/opt/pano_chart/pano_chart_server
+     Restart=on-failure
+     User=root
+
+     [Install]
+     WantedBy=multi-user.target
+     ```
+   - Reload systemd and start the service:
+     ```bash
+     sudo systemctl daemon-reload
+     sudo systemctl enable pano_chart
+     sudo systemctl start pano_chart
+     sudo systemctl status pano_chart
+     ```
+
+6. **Configure firewall (optional but recommended)**
+   - Allow only required ports (e.g., 8080 for HTTP):
+     ```bash
+     sudo ufw allow 8080/tcp
+     sudo ufw enable
+     ```
+
+7. **Logs and troubleshooting**
+   - View logs with:
+     ```bash
+     journalctl -u pano_chart -f
+     ```
+   - Check for crashes, port conflicts, or missing environment variables.
+
+8. **(Optional) Set up HTTPS**
+   - Use a reverse proxy (nginx, Caddy, or Traefik) to terminate TLS and forward to your backend.
+   - Or, configure the backend to serve TLS directly if supported (set `PC_TLS_CERT` and `PC_TLS_KEY`).
+
+---

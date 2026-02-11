@@ -36,7 +36,7 @@ func (f *fakeUseCase) Execute(sym domain.Symbol, tf domain.Timeframe, from time.
 }
 
 func TestGetCandleSeriesHandler_Returns200OnSuccess(t *testing.T) {
-	sym := domain.NewSymbolUnsafe("BTC")
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
 	tf := domain.NewTimeframeUnsafe("1m")
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -46,7 +46,7 @@ func TestGetCandleSeriesHandler_Returns200OnSuccess(t *testing.T) {
 	uc := &fakeUseCase{series: series}
 	h := adhttp.NewGetCandleSeriesHandler(uc)
 
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+from.Add(time.Minute).Format(time.RFC3339), nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+from.Add(time.Minute).Format(time.RFC3339), nil)
 	w := httptest.NewRecorder()
 
 	h.ServeHTTP(w, req)
@@ -91,7 +91,7 @@ func TestGetCandleSeriesHandler_Returns400OnInvalidParams(t *testing.T) {
 	h := adhttp.NewGetCandleSeriesHandler(uc)
 
 	// Missing required params
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC", nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -104,7 +104,7 @@ func TestGetCandleSeriesHandler_Returns400OnInvalidParams(t *testing.T) {
 }
 
 func TestGetCandleSeriesHandler_CallsUseCaseWithCorrectArgs(t *testing.T) {
-	sym := domain.NewSymbolUnsafe("BTC")
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
 	tf := domain.NewTimeframeUnsafe("1m")
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(5 * time.Minute)
@@ -112,7 +112,7 @@ func TestGetCandleSeriesHandler_CallsUseCaseWithCorrectArgs(t *testing.T) {
 	uc := &fakeUseCase{}
 	h := adhttp.NewGetCandleSeriesHandler(uc)
 
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339), nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339), nil)
 	w := httptest.NewRecorder()
 
 	h.ServeHTTP(w, req)
@@ -138,7 +138,7 @@ func TestGetCandleSeriesHandler_Returns500OnUseCaseError(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(5 * time.Minute)
 
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339), nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from="+from.Format(time.RFC3339)+"&to="+to.Format(time.RFC3339), nil)
 	w := httptest.NewRecorder()
 
 	h.ServeHTTP(w, req)

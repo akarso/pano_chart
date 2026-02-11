@@ -8,6 +8,7 @@ import (
    "pano_chart/backend/domain"
    "pano_chart/backend/application/usecases"
    "pano_chart/backend/application/ports"
+   "fmt"
 )
 
 type RankingsHandler struct {
@@ -58,8 +59,10 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	   // Load CandleSeries for all symbols (for now, use full available range)
 	   series = make(map[domain.Symbol]domain.CandleSeries)
 	   for _, sym := range h.Symbols {
-		cs, err := h.CandleRepo.GetSeries(sym, tf, /*from*/time.Time{}, /*to*/time.Time{}) // TODO: set real time range
+		   fmt.Printf("[rankings] Fetching series for symbol=%s, timeframe=%s\n", sym.String(), tf.String())
+		   cs, err := h.CandleRepo.GetSeries(sym, tf, time.Time{}, time.Time{}) // TODO: set real time range
 		   if err != nil {
+			   fmt.Printf("[rankings] Error fetching series for %s: %v\n", sym.String(), err)
 			   http.Error(w, `{"error":"upstream data error"}`, http.StatusBadGateway)
 			   return
 		   }
@@ -68,6 +71,7 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
    }
    ranked, err := h.Ranker.Rank(series)
    if err != nil {
+	   fmt.Printf("[rankings] Error ranking: %v\n", err)
 	   http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 	   return
    }
@@ -87,6 +91,7 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
    }
    w.Header().Set("Content-Type", "application/json")
    if err := json.NewEncoder(w).Encode(resp); err != nil {
+	   fmt.Printf("[rankings] Error encoding response: %v\n", err)
 	   http.Error(w, `{"error":"failed to encode response"}`, http.StatusInternalServerError)
 	   return
    }

@@ -45,7 +45,7 @@ func TestFreeTierCandleRepository_MapsValidResponseToCandleSeries(t *testing.T) 
 
 	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
 
-	sym := domain.NewSymbolUnsafe("BTC")
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
 	tf := domain.NewTimeframeUnsafe("1m")
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)

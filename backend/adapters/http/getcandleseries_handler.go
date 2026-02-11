@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -19,6 +20,8 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 		fromStr := q.Get("from")
 		toStr := q.Get("to")
 
+		fmt.Printf("[candles] Query: symbol=%s timeframe=%s from=%s to=%s\n", symStr, tfStr, fromStr, toStr)
+
 		if symStr == "" || tfStr == "" || fromStr == "" || toStr == "" {
 			http.Error(w, "missing required query parameters", http.StatusBadRequest)
 			return
@@ -27,17 +30,20 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 		// Construct domain objects
 		sym, err := domain.NewSymbol(symStr)
 		if err != nil {
+			fmt.Printf("[candles] Invalid symbol: %v\n", err)
 			http.Error(w, "invalid symbol", http.StatusBadRequest)
 			return
 		}
 		tf, err := domain.NewTimeframe(tfStr)
 		if err != nil {
+			fmt.Printf("[candles] Invalid timeframe: %v\n", err)
 			http.Error(w, "invalid timeframe", http.StatusBadRequest)
 			return
 		}
 
 		from, err := time.Parse(time.RFC3339, fromStr)
 		if err != nil {
+			fmt.Printf("[candles] Invalid from time: %v\n", err)
 			http.Error(w, "invalid from time", http.StatusBadRequest)
 			return
 		}
@@ -46,6 +52,7 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 		}
 		to, err := time.Parse(time.RFC3339, toStr)
 		if err != nil {
+			fmt.Printf("[candles] Invalid to time: %v\n", err)
 			http.Error(w, "invalid to time", http.StatusBadRequest)
 			return
 		}
@@ -55,6 +62,7 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 
 		series, err := uc.Execute(sym, tf, from, to)
 		if err != nil {
+			fmt.Printf("[candles] Use case error: %v\n", err)
 			http.Error(w, "use case error", http.StatusInternalServerError)
 			return
 		}
