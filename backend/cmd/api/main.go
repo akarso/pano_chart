@@ -5,31 +5,53 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/infrastructure/symbol_universe"
+	"pano_chart/backend/domain/scoring"
 )
 
 func main() {
 	addr := ":8080"
-	apiBase := os.Getenv("PC_API_BASE_URL")
-	if apiBase == "" {
-		apiBase = "https://api.coingecko.com/api/v3" // fallback for demo
+	binanceBase := os.Getenv("PC_BINANCE_BASE_URL")
+	if binanceBase == "" {
+		binanceBase = "https://api.binance.com/api/v3"
 	}
+	redisAddr := os.Getenv("PC_REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	// --- Redis client wiring ---
+	redisClient := symbol_universe.NewGoRedisClient(redisAddr)
+	redisAdapter := infra.NewRedisMinimalAdapter(redisClient)
 
-	// --- CandleRepository and SymbolUniverse wiring ---
-	repo := infra.NewFreeTierCandleRepository(apiBase, nil)
-	symbols := []string{"BTCUSDT", "ETHUSDT", "BNBUSDT"} // Add more as needed
-	symUni, err := infra.NewStaticSymbolUniverse(symbols)
-	if err != nil {
-		log.Fatalf("failed to create symbol universe: %v", err)
-	}
-	syms, _ := symUni.ListSymbols()
+	// --- CandleRepository with Redis caching ---
+	baseRepo := infra.NewFreeTierCandleRepository(binanceBase, nil)
+	cacheTTL := 5 * time.Minute
+	candleRepo := infra.NewRedisCandleRepository(redisAdapter, baseRepo, cacheTTL)
+
+	// --- Dynamic Binance Universe and Volume Providers with Redis caching ---
+	binanceHTTP := http.DefaultClient
+	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, binanceBase+"/exchangeInfo", 50)
+	cachedUniverse := symbol_universe.NewRedisCachedSymbolUniverse(
+		universe, redisClient, 30*time.Minute, "symbol_universe:exchange_info",
+	)
+	volumeProvider := symbol_universe.NewBinance24hTickerVolumeProvider(binanceHTTP, binanceBase+"/ticker/24hr")
+	cachedVolumeProvider := symbol_universe.NewRedisCachedVolumeProvider(
+		volumeProvider, redisClient, 2*time.Minute, "binance:24h_volume",
+	)
 
 	// --- Use cases ---
-	getCandleUC := usecases.NewGetCandleSeries(repo)
-	rankUC := usecases.NewDefaultRankSymbols(nil) // nil = default weights
+	weights := []usecases.ScoreWeight{
+		{Calculator: &scoring.SidewaysConsistencyScoreCalculator{}, Weight: 1.0},
+		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
+		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
+	}
+	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights)
+	getCandleUC := usecases.NewGetCandleSeries(candleRepo)
 
 	// --- Handlers ---
 	mux := http.NewServeMux()
@@ -41,8 +63,8 @@ func main() {
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
 	mux.Handle("/api/rankings", &adhttp.RankingsHandler{
 		Ranker:     rankUC,
-		CandleRepo: repo,
-		Symbols:    syms,
+		CandleRepo: candleRepo,
+		Symbols:    nil, // Not needed, dynamic universe used
 	})
 
 	fmt.Printf("Server starting on %s\n", addr)
