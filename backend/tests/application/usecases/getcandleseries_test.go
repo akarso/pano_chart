@@ -32,6 +32,13 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	return f.series, nil
 }
 
+func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+	if f.err != nil {
+		return domain.CandleSeries{}, f.err
+	}
+	return f.series, nil
+}
+
 func TestGetCandleSeries_DelegatesToRepository(t *testing.T) {
 	sym := domain.NewSymbolUnsafe("BTC")
 	tf := domain.NewTimeframeUnsafe("1m")

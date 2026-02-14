@@ -41,10 +41,12 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", infoURL, nil)
 	if err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error creating exchangeInfo request: %v\n", err)
 		return nil, err
 	}
 	resp, err := b.client.Do(req)
 	if err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error performing exchangeInfo request: %v\n", err)
 		return nil, err
 	}
 	defer func() {
@@ -54,10 +56,12 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 		}
 	}()
 	if resp.StatusCode != 200 {
+		fmt.Printf("[BinanceExchangeInfoUniverse] exchangeInfo HTTP status: %d\n", resp.StatusCode)
 		return nil, fmt.Errorf("binance: http %d", resp.StatusCode)
 	}
 	var info exchangeInfoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error decoding exchangeInfo response: %v\n", err)
 		return nil, err
 	}
 
@@ -68,29 +72,24 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 			filtered[s.Symbol] = struct{}{}
 		}
 	}
+	fmt.Printf("[BinanceExchangeInfoUniverse] Filtered USDT trading pairs: %d\n", len(filtered))
 	if len(filtered) == 0 {
+		fmt.Printf("[BinanceExchangeInfoUniverse] no USDT trading pairs found after filtering\n")
 		return []domain.Symbol{}, nil
 	}
 
 	// 3. Fetch 24h ticker stats
-	tickerURL := b.baseURL
-	//nolint:staticcheck // QF1003: tagged switch not appropriate here, see PR-020 rationale
-	if tickerURL == "" {
-		tickerURL = "https://api.binance.com/api/v3/ticker/24hr"
-	} else {
-		// Always append /ticker/24hr to the base URL root (for tests and prod)
-		if tickerURL[len(tickerURL)-1] == '/' {
-			tickerURL += "ticker/24hr"
-		} else {
-			tickerURL += "/ticker/24hr"
-		}
-	}
+	// Always use the correct ticker endpoint
+	tickerURL := "https://api.binance.com/api/v3/ticker/24hr"
+	fmt.Printf("[BinanceExchangeInfoUniverse] Requesting ticker URL: %s\n", tickerURL)
 	treq, err := http.NewRequestWithContext(ctx, "GET", tickerURL, nil)
 	if err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error creating ticker request: %v\n", err)
 		return nil, err
 	}
 	tresp, err := b.client.Do(treq)
 	if err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error performing ticker request: %v\n", err)
 		return nil, err
 	}
 	defer func() {
@@ -99,7 +98,9 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 			fmt.Printf("warning: error closing ticker response body: %v\n", cerr)
 		}
 	}()
+	fmt.Printf("[BinanceExchangeInfoUniverse] HTTP status: %d\n", tresp.StatusCode)
 	if tresp.StatusCode != 200 {
+		fmt.Printf("[BinanceExchangeInfoUniverse] ticker HTTP status: %d\n", tresp.StatusCode)
 		return nil, fmt.Errorf("binance: ticker http %d", tresp.StatusCode)
 	}
 	var tickers []struct {
@@ -107,8 +108,10 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 		QuoteVolume string `json:"quoteVolume"`
 	}
 	if err := json.NewDecoder(tresp.Body).Decode(&tickers); err != nil {
+		fmt.Printf("[BinanceExchangeInfoUniverse] error decoding ticker response: %v\n", err)
 		return nil, err
 	}
+	fmt.Printf("[BinanceExchangeInfoUniverse] Ticker volumes fetched: %d\n", len(tickers))
 
 	// 4. Build list of filtered symbols with their quoteVolume
 	type symVol struct {
@@ -161,6 +164,7 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 		}
 		out = append(out, dsym)
 	}
+	fmt.Printf("[BinanceExchangeInfoUniverse] Final sorted universe size: %d\n", len(out))
 	return out, nil
 }
 

@@ -28,6 +28,18 @@ func (f *FakeCandleRepository) GetSeries(
 	return f.series, nil
 }
 
+// GetLastNCandles implements CandleRepositoryPort.
+func (f *FakeCandleRepository) GetLastNCandles(
+	symbol domain.Symbol,
+	timeframe domain.Timeframe,
+	n int,
+) (domain.CandleSeries, error) {
+	if f.shouldErr {
+		return domain.CandleSeries{}, errors.New("fake error")
+	}
+	return f.series, nil
+}
+
 func TestCandleRepositoryPort_DefinesGetSeriesMethod(t *testing.T) {
 	// Verify the port interface can be implemented
 	_ = ports.CandleRepositoryPort((&FakeCandleRepository{}))

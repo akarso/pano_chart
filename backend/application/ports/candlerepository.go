@@ -29,4 +29,26 @@ type CandleRepositoryPort interface {
 		from time.Time,
 		to time.Time,
 	) (domain.CandleSeries, error)
+
+	// GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
+	//
+	// Parameters:
+	//   - symbol: the tradable instrument
+	//   - timeframe: the candle aggregation interval
+	//   - n: number of recent completed candles to retrieve
+	//
+	// Returns:
+	//   - A CandleSeries ordered by timestamp (oldest to newest)
+	//   - If fewer than N candles exist, returns all available candles
+	//   - An error if retrieval fails or arguments are invalid
+	//
+	// Implementation notes:
+	//   - Must exclude in-progress (incomplete) candles
+	//   - Must return exactly N completed candles if available
+	//   - Must handle candle alignment internally (no time math in caller)
+	GetLastNCandles(
+		symbol domain.Symbol,
+		timeframe domain.Timeframe,
+		n int,
+	) (domain.CandleSeries, error)
 }

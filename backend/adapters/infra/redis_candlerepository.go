@@ -17,9 +17,9 @@ type MinimalRedisClient interface {
 
 // RedisCandleRepository is a caching decorator that implements ports.CandleRepositoryPort.
 type RedisCandleRepository struct {
-	client MinimalRedisClient
+	client  MinimalRedisClient
 	wrapped ports.CandleRepositoryPort
-	ttl    time.Duration
+	ttl     time.Duration
 }
 
 // NewRedisCandleRepository constructs the decorator. TTL must be > 0.
@@ -48,6 +48,7 @@ type payloadItem struct {
 // GetSeries implements the ports.CandleRepositoryPort interface.
 func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	key := cacheKey(symbol, tf, from.UTC(), to.UTC())
+	fmt.Printf("[RedisCandleRepository] GetSeries: symbol=%s, tf=%s, from=%s, to=%s\n", symbol.String(), tf.String(), from.Format(time.RFC3339), to.Format(time.RFC3339))
 
 	// Try cache
 	if r.client != nil {
@@ -72,6 +73,7 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 				}
 				// If successfully reconstructed all candles, return series
 				if len(candles) == len(items) {
+					fmt.Printf("[RedisCandleRepository] cache hit: symbol=%s, tf=%s, count=%d\n", symbol.String(), tf.String(), len(candles))
 					return domain.NewCandleSeries(symbol, tf, candles)
 				}
 			}
@@ -79,14 +81,18 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 	}
 
 	// Cache miss or client absent -> delegate to wrapped repository
+	fmt.Printf("[RedisCandleRepository] cache miss or client absent: symbol=%s, tf=%s\n", symbol.String(), tf.String())
 	series, err := r.wrapped.GetSeries(symbol, tf, from, to)
 	if err != nil {
+		fmt.Printf("[RedisCandleRepository] wrapped repo error: symbol=%s, tf=%s, err=%v\n", symbol.String(), tf.String(), err)
 		return domain.CandleSeries{}, err
 	}
+	all := series.All()
+	fmt.Printf("[RedisCandleRepository] wrapped repo returned: symbol=%s, tf=%s, count=%d\n", symbol.String(), tf.String(), len(all))
 
 	// Attempt to cache the result; ignore cache errors
 	if r.client != nil {
-		all := series.All()
+		// ...existing code...
 		items := make([]payloadItem, 0, len(all))
 		for _, c := range all {
 			items = append(items, payloadItem{
@@ -106,4 +112,17 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 	}
 
 	return series, nil
+}
+
+// GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
+// Delegates to wrapped repository.
+func (r *RedisCandleRepository) GetLastNCandles(symbol domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+	if n <= 0 {
+		return domain.NewCandleSeries(symbol, tf, []domain.Candle{})
+	}
+
+	fmt.Printf("[RedisCandleRepository] GetLastNCandles: symbol=%s, tf=%s, n=%d\n", symbol.String(), tf.String(), n)
+
+	// Delegate to wrapped repository (no caching for now, as candles are time-sensitive)
+	return r.wrapped.GetLastNCandles(symbol, tf, n)
 }

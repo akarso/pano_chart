@@ -15,18 +15,23 @@ type SymbolUniverseProvider interface {
 }
 
 type VolumeSortedRankSymbols struct {
-	Universe SymbolUniverseProvider
+	universe SymbolUniverseProvider
 	Volumes  VolumeProvider
 	Weights  []ScoreWeight
 }
 
 func NewVolumeSortedRankSymbols(universe SymbolUniverseProvider, volumes VolumeProvider, weights []ScoreWeight) *VolumeSortedRankSymbols {
-	return &VolumeSortedRankSymbols{Universe: universe, Volumes: volumes, Weights: weights}
+	return &VolumeSortedRankSymbols{universe: universe, Volumes: volumes, Weights: weights}
+}
+
+// Universe returns the SymbolUniverseProvider for this ranker.
+func (v *VolumeSortedRankSymbols) Universe() SymbolUniverseProvider {
+	return v.universe
 }
 
 func (v *VolumeSortedRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
 	ctx := context.Background()
-	syms, err := v.Universe.Symbols(ctx)
+	syms, err := v.universe.Symbols(ctx)
 	if err != nil {
 		return nil, err
 	}

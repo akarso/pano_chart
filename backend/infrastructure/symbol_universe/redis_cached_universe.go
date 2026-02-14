@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+	"fmt"
 	"pano_chart/backend/domain"
 )
 
@@ -39,15 +40,26 @@ func (r *RedisCachedSymbolUniverse) Symbols(ctx context.Context) ([]domain.Symbo
 					out = append(out, dsym)
 				}
 			}
+			fmt.Printf("[RedisCachedSymbolUniverse] cache hit: %s, count=%d\n", r.key, len(out))
 			return out, nil
 		}
+		fmt.Printf("[RedisCachedSymbolUniverse] cache unmarshal error, treating as miss: %v\n", err)
 		// else: treat as cache miss
+	} else {
+		if err != nil {
+			fmt.Printf("[RedisCachedSymbolUniverse] cache get error: %v\n", err)
+		} else {
+			fmt.Printf("[RedisCachedSymbolUniverse] cache miss: %s\n", r.key)
+		}
 	}
 	// Cache miss or error: call next
+	fmt.Printf("[RedisCachedSymbolUniverse] calling next provider for key: %s\n", r.key)
 	syms, err := r.next.Symbols(ctx)
 	if err != nil {
+		fmt.Printf("[RedisCachedSymbolUniverse] error from next provider: %v\n", err)
 		return nil, err
 	}
+	fmt.Printf("[RedisCachedSymbolUniverse] next provider returned count=%d\n", len(syms))
 	// Serialize and store in Redis
 	strs := make([]string, 0, len(syms))
 	for _, s := range syms {

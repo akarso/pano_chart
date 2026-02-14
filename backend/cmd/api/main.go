@@ -1,17 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/usecases"
-	"pano_chart/backend/infrastructure/symbol_universe"
 	"pano_chart/backend/domain/scoring"
+	"pano_chart/backend/infrastructure/symbol_universe"
 )
 
 func main() {
@@ -24,6 +26,19 @@ func main() {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
+
+	// --- Parse sparkline precision at startup ---
+	sparklinePrecision := 30 // default
+	if precStr := os.Getenv("OVERVIEW_SPARKLINE_PRECISION"); precStr != "" {
+		if prec, err := strconv.Atoi(precStr); err == nil && prec > 0 {
+			if prec > 200 {
+				prec = 200 // clamp to max
+			}
+			sparklinePrecision = prec
+		}
+	}
+	fmt.Printf("[main] Sparkline precision: %d\n", sparklinePrecision)
+
 	// --- Redis client wiring ---
 	redisClient := symbol_universe.NewGoRedisClient(redisAddr)
 	redisAdapter := infra.NewRedisMinimalAdapter(redisClient)
@@ -35,6 +50,10 @@ func main() {
 
 	// --- Dynamic Binance Universe and Volume Providers with Redis caching ---
 	binanceHTTP := http.DefaultClient
+	// Ensure no trailing slash on binanceBase
+	if binanceBase[len(binanceBase)-1] == '/' {
+		binanceBase = binanceBase[:len(binanceBase)-1]
+	}
 	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, binanceBase+"/exchangeInfo", 50)
 	cachedUniverse := symbol_universe.NewRedisCachedSymbolUniverse(
 		universe, redisClient, 30*time.Minute, "symbol_universe:exchange_info",
@@ -53,6 +72,54 @@ func main() {
 	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights)
 	getCandleUC := usecases.NewGetCandleSeries(candleRepo)
 
+	// --- State snapshot before handler registration ---
+	fmt.Printf("[main] ==== STATE SNAPSHOT BEFORE HANDLER REGISTRATION ====\n")
+	ctx := context.Background()
+
+	// Test universe
+	univ, err := cachedUniverse.Symbols(ctx)
+	if err != nil {
+		fmt.Printf("[main] Universe error: %v\n", err)
+	} else {
+		fmt.Printf("[main] Universe size: %d\n", len(univ))
+		if len(univ) > 0 {
+			fmt.Printf("[main] Universe sample (first 5):\n")
+			for i := 0; i < 5 && i < len(univ); i++ {
+				fmt.Printf("[main]   [%d] %s\n", i, univ[i].String())
+			}
+		}
+	}
+
+	// Test volume provider
+	vols, err := cachedVolumeProvider.Volumes(ctx)
+	if err != nil {
+		fmt.Printf("[main] Volume provider error: %v\n", err)
+	} else {
+		fmt.Printf("[main] Volume map size: %d\n", len(vols))
+		if len(univ) > 0 && len(vols) > 0 {
+			// Check if sample universe symbols exist in volume map
+			foundCount := 0
+			for i := 0; i < 5 && i < len(univ); i++ {
+				if vol, ok := vols[univ[i].String()]; ok {
+					fmt.Printf("[main]   %s: volume=%.2f\n", univ[i].String(), vol)
+					foundCount++
+				}
+			}
+			if foundCount == 0 {
+				fmt.Printf("[main]   WARNING: First 5 universe symbols NOT found in volume map!\n")
+			}
+		}
+	}
+
+	// Test ranker
+	fmt.Printf("[main] Ranker type: %T\n", rankUC)
+	fmt.Printf("[main] Ranker Universe provider: %v\n", rankUC.Universe())
+	fmt.Printf("[main] Ranker Volumes field: %v\n", rankUC.Volumes)
+	fmt.Printf("[main] ==== END STATE SNAPSHOT ====\n")
+
+	// --- Overview use case ---
+	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +133,7 @@ func main() {
 		CandleRepo: candleRepo,
 		Symbols:    nil, // Not needed, dynamic universe used
 	})
+	mux.Handle("/api/overview", adhttp.NewOverviewHandler(getOverviewUC))
 
 	fmt.Printf("Server starting on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))

@@ -120,3 +120,73 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 	}
 	return domain.NewCandleSeries(symbol, timeframe, candles)
 }
+
+// GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
+// Implementation strategy:
+// 1. Calculate time range required to fetch at least N+1 candles (to exclude in-progress)
+// 2. Fetch series for that range
+// 3. Exclude the last (in-progress) candle if present
+// 4. Return last N candles
+func (r *FreeTierCandleRepository) GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
+	if n <= 0 {
+		return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
+	}
+
+	// Calculate time range: fetch enough candles to get N completed ones.
+	// Multiply by 1.5 to account for potential gaps and in-progress candle.
+	now := time.Now().UTC()
+	durationPerCandle := timeframe.Duration()
+	timeRangeNeeded := time.Duration(float64(n)*1.5) * durationPerCandle
+
+	from := now.Add(-timeRangeNeeded)
+	to := now
+
+	fmt.Printf("[freetier] GetLastNCandles: symbol=%s, tf=%s, n=%d, fetching from %s to %s\n", symbol.String(), timeframe.String(), n, from.Format(time.RFC3339), to.Format(time.RFC3339))
+
+	// Fetch the series
+	series, err := r.GetSeries(symbol, timeframe, from, to)
+	if err != nil {
+		return domain.CandleSeries{}, err
+	}
+
+	totalCandles := series.Len()
+	fmt.Printf("[freetier] GetLastNCandles: fetched %d candles, needed %d\n", totalCandles, n)
+
+	// Exclude the last (in-progress) candle if it exists and is too recent
+	availableCandles := totalCandles
+	if totalCandles > 0 {
+		lastCandle, _ := series.Last()
+		// If the last candle is too recent (within the last timeframe duration), it may be in-progress.
+		// Exclude it to be safe.
+		if now.Sub(lastCandle.Timestamp()) < durationPerCandle {
+			availableCandles--
+			fmt.Printf("[freetier] GetLastNCandles: excluded in-progress candle, available=%d\n", availableCandles)
+		}
+	}
+
+	// Extract the last N candles from the series
+	start := 0
+	if availableCandles > n {
+		start = availableCandles - n
+	}
+
+	// Build result series from the extracted range
+	resultCandles := make([]domain.Candle, 0, min(n, availableCandles))
+	for i := start; i < availableCandles && i < totalCandles; i++ {
+		candle, err := series.At(i)
+		if err == nil {
+			resultCandles = append(resultCandles, candle)
+		}
+	}
+
+	result, err := domain.NewCandleSeries(symbol, timeframe, resultCandles)
+	fmt.Printf("[freetier] GetLastNCandles: returning %d candles\n", len(resultCandles))
+	return result, err
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
