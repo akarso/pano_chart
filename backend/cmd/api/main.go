@@ -67,7 +67,17 @@ func main() {
 		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
 	}
 	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights, exchangeInfoURL, tickerURL)
+	symbolScorer := usecases.NewWeightedSymbolScorer(weights)
 	getCandleUC := usecases.NewGetCandleSeries(candleRepo)
+	getSymbolDetailUC := usecases.NewGetSymbolDetail(
+		candleRepo,
+		symbolScorer,
+		cachedUniverse,
+		exchangeInfoURL,
+		tickerURL,
+		usecases.DefaultSymbolDetailLimit,
+		usecases.MaxSymbolDetailLimit,
+	)
 
 	// --- State snapshot before handler registration ---
 	fmt.Printf("[main] ==== STATE SNAPSHOT BEFORE HANDLER REGISTRATION ====\n")
@@ -133,6 +143,7 @@ func main() {
 		TickerURL:       tickerURL,
 	})
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(getOverviewUC))
+	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
 
 	fmt.Printf("Server starting on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, mux))
