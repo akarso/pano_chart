@@ -12,11 +12,11 @@ import (
 
 // OverviewHandler handles GET /api/overview requests.
 type OverviewHandler struct {
-	getOverviewUC *usecases.GetOverview
+	getOverviewUC usecases.OverviewUseCase
 }
 
 // NewOverviewHandler constructs the handler.
-func NewOverviewHandler(getOverviewUC *usecases.GetOverview) *OverviewHandler {
+func NewOverviewHandler(getOverviewUC usecases.OverviewUseCase) *OverviewHandler {
 	return &OverviewHandler{getOverviewUC: getOverviewUC}
 }
 

@@ -13,6 +13,7 @@ import (
 	"pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain/scoring"
+	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/symbol_universe"
 )
 
@@ -127,6 +128,24 @@ func main() {
 	// --- Overview use case ---
 	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
 
+	// --- Overview cache TTL ---
+	overviewCacheTTL := 45 * time.Second // default
+	if ttlStr := os.Getenv("OVERVIEW_CACHE_TTL_SECONDS"); ttlStr != "" {
+		if secs, err := strconv.Atoi(ttlStr); err == nil {
+			if secs < 5 {
+				secs = 5
+			}
+			if secs > 300 {
+				secs = 300
+			}
+			overviewCacheTTL = time.Duration(secs) * time.Second
+		}
+	}
+	fmt.Printf("[main] Overview cache TTL: %v\n", overviewCacheTTL)
+
+	// Wrap with Redis cache decorator
+	overviewUC := overview.NewRedisCachedOverview(getOverviewUC, redisClient, overviewCacheTTL, "overview")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +161,7 @@ func main() {
 		ExchangeInfoURL: exchangeInfoURL,
 		TickerURL:       tickerURL,
 	})
-	mux.Handle("/api/overview", adhttp.NewOverviewHandler(getOverviewUC))
+	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
 
 	fmt.Printf("Server starting on %s\n", addr)

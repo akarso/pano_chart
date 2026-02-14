@@ -11,6 +11,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// OverviewUseCase defines the boundary for the overview use case.
+type OverviewUseCase interface {
+	Execute(ctx context.Context, req GetOverviewRequest) ([]OverviewResult, error)
+}
+
 // GetOverview is a use case that fetches ranked symbols with precomputed sparkline data.
 // Sparkline contains close prices only, for efficient frontend rendering.
 type GetOverview struct {
