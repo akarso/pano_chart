@@ -7,7 +7,7 @@ import (
 
 func TestStaticBinanceTop15Universe_DeterministicOrderAndSize(t *testing.T) {
 	provider := NewStaticBinanceTop15Universe()
-	syms, err := provider.Symbols(context.Background())
+	syms, err := provider.Symbols(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

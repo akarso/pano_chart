@@ -3,9 +3,9 @@ package symbol_universe
 import (
 	"context"
 	"encoding/json"
-	"time"
 	"fmt"
 	"pano_chart/backend/domain"
+	"time"
 )
 
 type RedisClient interface {
@@ -14,7 +14,7 @@ type RedisClient interface {
 }
 
 type SymbolUniverseProvider interface {
-	Symbols(ctx context.Context) ([]domain.Symbol, error)
+	Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error)
 }
 
 type RedisCachedSymbolUniverse struct {
@@ -28,7 +28,7 @@ func NewRedisCachedSymbolUniverse(next SymbolUniverseProvider, redis RedisClient
 	return &RedisCachedSymbolUniverse{next: next, redis: redis, ttl: ttl, key: key}
 }
 
-func (r *RedisCachedSymbolUniverse) Symbols(ctx context.Context) ([]domain.Symbol, error) {
+func (r *RedisCachedSymbolUniverse) Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error) {
 	cached, err := r.redis.Get(ctx, r.key)
 	if err == nil && cached != "" {
 		var syms []string
@@ -54,7 +54,7 @@ func (r *RedisCachedSymbolUniverse) Symbols(ctx context.Context) ([]domain.Symbo
 	}
 	// Cache miss or error: call next
 	fmt.Printf("[RedisCachedSymbolUniverse] calling next provider for key: %s\n", r.key)
-	syms, err := r.next.Symbols(ctx)
+	syms, err := r.next.Symbols(ctx, exchangeInfoURL, tickerURL)
 	if err != nil {
 		fmt.Printf("[RedisCachedSymbolUniverse] error from next provider: %v\n", err)
 		return nil, err

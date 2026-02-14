@@ -3,6 +3,7 @@ package symbol_universe
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,11 +12,13 @@ import (
 func mockExchangeInfoResponse(symbols []map[string]interface{}) []byte {
 	resp := map[string]interface{}{"symbols": symbols}
 	b, _ := json.Marshal(resp)
+	fmt.Printf("[test] mock exchangeInfo JSON: %s\n", string(b))
 	return b
 }
 
 func mockTicker24hrResponse(tickers []map[string]interface{}) []byte {
 	b, _ := json.Marshal(tickers)
+	fmt.Printf("[test] mock ticker24hr JSON: %s\n", string(b))
 	return b
 }
 
@@ -26,26 +29,27 @@ func TestBinanceExchangeInfoUniverse_VolumeSortAndTieBreaker(t *testing.T) {
 		{"symbol": "ETHUSDT", "status": "TRADING", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
 		{"symbol": "BNBUSDT", "status": "TRADING", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
 	}
+	t.Logf("mock symbols: %+v", mockSymbols)
 	mockTickers := []map[string]interface{}{
 		{"symbol": "BTCUSDT", "quoteVolume": "1000"},
 		{"symbol": "ETHUSDT", "quoteVolume": "2000"},
 		{"symbol": "BNBUSDT", "quoteVolume": "2000"}, // tie with ETHUSDT
 	}
-	call := 0
+	t.Logf("mock tickers: %+v", mockTickers)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		if call == 0 {
+		if r.URL.Path == "/api/v3/exchangeInfo" || r.URL.Path == "" {
 			_, _ = w.Write(mockExchangeInfoResponse(mockSymbols))
 		} else {
 			_, _ = w.Write(mockTicker24hrResponse(mockTickers))
 		}
-		call++
 	}))
 	defer ts.Close()
 
-	uni := NewBinanceExchangeInfoUniverse(ts.Client(), ts.URL, 0)
-	syms, err := uni.Symbols(context.Background())
+	uni := NewBinanceExchangeInfoUniverse(ts.Client(), 0)
+	exchangeInfoURL, tickerURL := BuildBinanceURLs(ts.URL + "/api/v3")
+	syms, err := uni.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,26 +71,27 @@ func TestBinanceExchangeInfoUniverse_LimitAfterSort(t *testing.T) {
 		{"symbol": "ETHUSDT", "status": "TRADING", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
 		{"symbol": "BNBUSDT", "status": "TRADING", "quoteAsset": "USDT", "isSpotTradingAllowed": true},
 	}
+	t.Logf("mock symbols: %+v", mockSymbols)
 	mockTickers := []map[string]interface{}{
 		{"symbol": "BTCUSDT", "quoteVolume": "1000"},
 		{"symbol": "ETHUSDT", "quoteVolume": "2000"},
 		{"symbol": "BNBUSDT", "quoteVolume": "3000"},
 	}
-	call := 0
+	t.Logf("mock tickers: %+v", mockTickers)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		if call == 0 {
+		if r.URL.Path == "/api/v3/exchangeInfo" || r.URL.Path == "" {
 			_, _ = w.Write(mockExchangeInfoResponse(mockSymbols))
 		} else {
 			_, _ = w.Write(mockTicker24hrResponse(mockTickers))
 		}
-		call++
 	}))
 	defer ts.Close()
 
-	uni := NewBinanceExchangeInfoUniverse(ts.Client(), ts.URL, 2)
-	syms, err := uni.Symbols(context.Background())
+	uni := NewBinanceExchangeInfoUniverse(ts.Client(), 2)
+	exchangeInfoURL, tickerURL := BuildBinanceURLs(ts.URL + "/api/v3")
+	syms, err := uni.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,21 +107,20 @@ func TestBinanceExchangeInfoUniverse_LimitAfterSort(t *testing.T) {
 }
 
 func TestBinanceExchangeInfoUniverse_Empty(t *testing.T) {
-	call := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		if call == 0 {
+		if r.URL.Path == "/api/v3/exchangeInfo" || r.URL.Path == "" {
 			_, _ = w.Write(mockExchangeInfoResponse(nil))
 		} else {
 			_, _ = w.Write(mockTicker24hrResponse(nil))
 		}
-		call++
 	}))
 	defer ts.Close()
 
-	uni := NewBinanceExchangeInfoUniverse(ts.Client(), ts.URL, 0)
-	syms, err := uni.Symbols(context.Background())
+	uni := NewBinanceExchangeInfoUniverse(ts.Client(), 0)
+	exchangeInfoURL, tickerURL := BuildBinanceURLs(ts.URL + "/api/v3")
+	syms, err := uni.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -131,8 +135,9 @@ func TestBinanceExchangeInfoUniverse_ErrorCases(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer ts1.Close()
-	uni := NewBinanceExchangeInfoUniverse(ts1.Client(), ts1.URL, 0)
-	_, err := uni.Symbols(context.Background())
+	uni := NewBinanceExchangeInfoUniverse(ts1.Client(), 0)
+	exchangeInfoURL, tickerURL := BuildBinanceURLs(ts1.URL + "/api/v3")
+	_, err := uni.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err == nil {
 		t.Error("expected error on non-200 exchangeInfo")
 	}
@@ -144,16 +149,16 @@ func TestBinanceExchangeInfoUniverse_ErrorCases(t *testing.T) {
 		_, _ = w.Write([]byte("not json"))
 	}))
 	defer ts2.Close()
-	uni2 := NewBinanceExchangeInfoUniverse(ts2.Client(), ts2.URL, 0)
-	_, err = uni2.Symbols(context.Background())
+	uni2 := NewBinanceExchangeInfoUniverse(ts2.Client(), 0)
+	exchangeInfoURL, tickerURL = BuildBinanceURLs(ts2.URL + "/api/v3")
+	_, err = uni2.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err == nil {
 		t.Error("expected error on malformed exchangeInfo json")
 	}
 
 	// Non-200 ticker
-	call := 0
 	ts3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if call == 0 {
+		if r.URL.Path == "/api/v3/exchangeInfo" || r.URL.Path == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_, _ = w.Write(mockExchangeInfoResponse([]map[string]interface{}{
@@ -162,19 +167,18 @@ func TestBinanceExchangeInfoUniverse_ErrorCases(t *testing.T) {
 		} else {
 			w.WriteHeader(500)
 		}
-		call++
 	}))
 	defer ts3.Close()
-	uni3 := NewBinanceExchangeInfoUniverse(ts3.Client(), ts3.URL, 0)
-	_, err = uni3.Symbols(context.Background())
+	uni3 := NewBinanceExchangeInfoUniverse(ts3.Client(), 0)
+	exchangeInfoURL, tickerURL = BuildBinanceURLs(ts3.URL + "/api/v3")
+	_, err = uni3.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err == nil {
 		t.Error("expected error on non-200 ticker")
 	}
 
 	// Malformed JSON ticker
-	call = 0
 	ts4 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if call == 0 {
+		if r.URL.Path == "/api/v3/exchangeInfo" || r.URL.Path == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_, _ = w.Write(mockExchangeInfoResponse([]map[string]interface{}{
@@ -185,11 +189,11 @@ func TestBinanceExchangeInfoUniverse_ErrorCases(t *testing.T) {
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte("not json"))
 		}
-		call++
 	}))
 	defer ts4.Close()
-	uni4 := NewBinanceExchangeInfoUniverse(ts4.Client(), ts4.URL, 0)
-	_, err = uni4.Symbols(context.Background())
+	uni4 := NewBinanceExchangeInfoUniverse(ts4.Client(), 0)
+	exchangeInfoURL, tickerURL = BuildBinanceURLs(ts4.URL + "/api/v3")
+	_, err = uni4.Symbols(context.Background(), exchangeInfoURL, tickerURL)
 	if err == nil {
 		t.Error("expected error on malformed ticker json")
 	}

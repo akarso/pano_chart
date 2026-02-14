@@ -7,5 +7,5 @@ import (
 
 // SymbolUniverseProvider defines the contract for symbol universe providers.
 type SymbolUniverseProvider interface {
-	Symbols(ctx context.Context) ([]domain.Symbol, error)
+	Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error)
 }

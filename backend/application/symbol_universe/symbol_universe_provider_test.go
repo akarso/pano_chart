@@ -12,6 +12,6 @@ func TestSymbolUniverseProvider_Interface(t *testing.T) {
 
 type mockProvider struct{}
 
-func (m *mockProvider) Symbols(ctx context.Context) ([]domain.Symbol, error) {
+func (m *mockProvider) Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error) {
 	return []domain.Symbol{}, nil
 }

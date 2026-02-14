@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"fmt"
 	"pano_chart/backend/domain"
 	"sort"
 )
@@ -11,17 +12,25 @@ type VolumeProvider interface {
 }
 
 type SymbolUniverseProvider interface {
-	Symbols(ctx context.Context) ([]domain.Symbol, error)
+	Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error)
 }
 
 type VolumeSortedRankSymbols struct {
-	universe SymbolUniverseProvider
-	Volumes  VolumeProvider
-	Weights  []ScoreWeight
+	universe        SymbolUniverseProvider
+	Volumes         VolumeProvider
+	Weights         []ScoreWeight
+	ExchangeInfoURL string
+	TickerURL       string
 }
 
-func NewVolumeSortedRankSymbols(universe SymbolUniverseProvider, volumes VolumeProvider, weights []ScoreWeight) *VolumeSortedRankSymbols {
-	return &VolumeSortedRankSymbols{universe: universe, Volumes: volumes, Weights: weights}
+func NewVolumeSortedRankSymbols(universe SymbolUniverseProvider, volumes VolumeProvider, weights []ScoreWeight, exchangeInfoURL, tickerURL string) *VolumeSortedRankSymbols {
+	return &VolumeSortedRankSymbols{
+		universe:        universe,
+		Volumes:         volumes,
+		Weights:         weights,
+		ExchangeInfoURL: exchangeInfoURL,
+		TickerURL:       tickerURL,
+	}
 }
 
 // Universe returns the SymbolUniverseProvider for this ranker.
@@ -31,7 +40,10 @@ func (v *VolumeSortedRankSymbols) Universe() SymbolUniverseProvider {
 
 func (v *VolumeSortedRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
 	ctx := context.Background()
-	syms, err := v.universe.Symbols(ctx)
+	if v.ExchangeInfoURL == "" || v.TickerURL == "" {
+		return nil, fmt.Errorf("exchangeInfo and ticker URLs are required")
+	}
+	syms, err := v.universe.Symbols(ctx, v.ExchangeInfoURL, v.TickerURL)
 	if err != nil {
 		return nil, err
 	}

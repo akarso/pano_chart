@@ -20,8 +20,9 @@ func main() {
 	addr := ":8080"
 	binanceBase := os.Getenv("PC_BINANCE_BASE_URL")
 	if binanceBase == "" {
-		binanceBase = "https://api.binance.com/api/v3"
+		binanceBase = symbol_universe.DefaultBinanceAPIBaseURL
 	}
+	exchangeInfoURL, tickerURL := symbol_universe.BuildBinanceURLs(binanceBase)
 	redisAddr := os.Getenv("PC_REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
@@ -50,15 +51,11 @@ func main() {
 
 	// --- Dynamic Binance Universe and Volume Providers with Redis caching ---
 	binanceHTTP := http.DefaultClient
-	// Ensure no trailing slash on binanceBase
-	if binanceBase[len(binanceBase)-1] == '/' {
-		binanceBase = binanceBase[:len(binanceBase)-1]
-	}
-	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, binanceBase+"/exchangeInfo", 50)
+	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, 50)
 	cachedUniverse := symbol_universe.NewRedisCachedSymbolUniverse(
 		universe, redisClient, 30*time.Minute, "symbol_universe:exchange_info",
 	)
-	volumeProvider := symbol_universe.NewBinance24hTickerVolumeProvider(binanceHTTP, binanceBase+"/ticker/24hr")
+	volumeProvider := symbol_universe.NewBinance24hTickerVolumeProvider(binanceHTTP, tickerURL)
 	cachedVolumeProvider := symbol_universe.NewRedisCachedVolumeProvider(
 		volumeProvider, redisClient, 2*time.Minute, "binance:24h_volume",
 	)
@@ -69,7 +66,7 @@ func main() {
 		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
 		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
 	}
-	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights)
+	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights, exchangeInfoURL, tickerURL)
 	getCandleUC := usecases.NewGetCandleSeries(candleRepo)
 
 	// --- State snapshot before handler registration ---
@@ -77,7 +74,7 @@ func main() {
 	ctx := context.Background()
 
 	// Test universe
-	univ, err := cachedUniverse.Symbols(ctx)
+	univ, err := cachedUniverse.Symbols(ctx, exchangeInfoURL, tickerURL)
 	if err != nil {
 		fmt.Printf("[main] Universe error: %v\n", err)
 	} else {
@@ -129,9 +126,11 @@ func main() {
 	})
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
 	mux.Handle("/api/rankings", &adhttp.RankingsHandler{
-		Ranker:     rankUC,
-		CandleRepo: candleRepo,
-		Symbols:    nil, // Not needed, dynamic universe used
+		Ranker:          rankUC,
+		CandleRepo:      candleRepo,
+		Symbols:         nil, // Not needed, dynamic universe used
+		ExchangeInfoURL: exchangeInfoURL,
+		TickerURL:       tickerURL,
 	})
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(getOverviewUC))
 

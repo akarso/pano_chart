@@ -20,8 +20,8 @@ func NewRankSymbolsWithUniverse(ranker RankSymbols, universe symbol_universe.Sym
 }
 
 // RankAll fetches symbols from the universe and ranks them.
-func (r *RankSymbolsWithUniverse) RankAll(ctx context.Context, series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
-	syms, err := r.Universe.Symbols(ctx)
+func (r *RankSymbolsWithUniverse) RankAll(ctx context.Context, exchangeInfoURL, tickerURL string, series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
+	syms, err := r.Universe.Symbols(ctx, exchangeInfoURL, tickerURL)
 	if err != nil {
 		return nil, err
 	}

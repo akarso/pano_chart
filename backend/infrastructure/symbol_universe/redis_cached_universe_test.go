@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"pano_chart/backend/domain"
 	"testing"
 	"time"
-	"pano_chart/backend/domain"
 )
 
 type fakeRedis struct {
@@ -29,12 +29,12 @@ func (f *fakeRedis) Set(ctx context.Context, key string, value string, ttl time.
 }
 
 type fakeProvider struct {
-	syms []domain.Symbol
-	err error
+	syms   []domain.Symbol
+	err    error
 	called int
 }
 
-func (f *fakeProvider) Symbols(ctx context.Context) ([]domain.Symbol, error) {
+func (f *fakeProvider) Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error) {
 	f.called++
 	return f.syms, f.err
 }
@@ -46,7 +46,7 @@ func TestRedisCachedSymbolUniverse_ReturnsCachedValueWhenPresent(t *testing.T) {
 	fr.store["key"] = string(b)
 	prov := &fakeProvider{syms: nil}
 	cache := NewRedisCachedSymbolUniverse(prov, fr, time.Minute, "key")
-	out, err := cache.Symbols(context.Background())
+	out, err := cache.Symbols(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestRedisCachedSymbolUniverse_CallsNextOnCacheMiss(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
 	prov := &fakeProvider{syms: []domain.Symbol{domain.NewSymbolUnsafe("BTCUSDT")}}
 	cache := NewRedisCachedSymbolUniverse(prov, fr, time.Minute, "key")
-	out, err := cache.Symbols(context.Background())
+	out, err := cache.Symbols(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestRedisCachedSymbolUniverse_StoresValueWithTTL(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
 	prov := &fakeProvider{syms: []domain.Symbol{domain.NewSymbolUnsafe("BTCUSDT")}}
 	cache := NewRedisCachedSymbolUniverse(prov, fr, 42*time.Second, "key")
-	_, _ = cache.Symbols(context.Background())
+	_, _ = cache.Symbols(context.Background(), "", "")
 	if _, ok := fr.store["key"]; !ok {
 		t.Errorf("should store value in redis")
 	}
@@ -88,7 +88,7 @@ func TestRedisCachedSymbolUniverse_FallsBackWhenRedisFails(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}, fail: true}
 	prov := &fakeProvider{syms: []domain.Symbol{domain.NewSymbolUnsafe("BTCUSDT")}}
 	cache := NewRedisCachedSymbolUniverse(prov, fr, time.Minute, "key")
-	out, err := cache.Symbols(context.Background())
+	out, err := cache.Symbols(context.Background(), "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestRedisCachedSymbolUniverse_DoesNotCacheOnNextError(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
 	prov := &fakeProvider{err: errors.New("fail")}
 	cache := NewRedisCachedSymbolUniverse(prov, fr, time.Minute, "key")
-	_, err := cache.Symbols(context.Background())
+	_, err := cache.Symbols(context.Background(), "", "")
 	if err == nil {
 		t.Fatal("expected error from provider")
 	}

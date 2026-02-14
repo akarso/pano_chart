@@ -2,8 +2,8 @@ package symbol_universe
 
 import (
 	"context"
-	"sort"
 	"pano_chart/backend/domain"
+	"sort"
 )
 
 // StaticBinanceTop15Universe provides a deterministic, hardcoded list of top 15 Binance USDT pairs.
@@ -31,7 +31,7 @@ func NewStaticBinanceTop15Universe() *StaticBinanceTop15Universe {
 	return &StaticBinanceTop15Universe{}
 }
 
-func (s *StaticBinanceTop15Universe) Symbols(ctx context.Context) ([]domain.Symbol, error) {
+func (s *StaticBinanceTop15Universe) Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error) {
 	syms := make([]domain.Symbol, 0, len(binanceTop15))
 	for _, str := range binanceTop15 {
 		sym, err := domain.NewSymbol(str)

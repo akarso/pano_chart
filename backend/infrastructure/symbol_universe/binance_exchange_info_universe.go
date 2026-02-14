@@ -5,22 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"pano_chart/backend/domain"
 	"sort"
 	"strconv"
-	"pano_chart/backend/domain"
 )
 
 type BinanceExchangeInfoUniverse struct {
-	client  *http.Client
-	baseURL string
-	limit   int
+	client *http.Client
+	limit  int
 }
 
-func NewBinanceExchangeInfoUniverse(client *http.Client, baseURL string, limit int) *BinanceExchangeInfoUniverse {
+func NewBinanceExchangeInfoUniverse(client *http.Client, limit int) *BinanceExchangeInfoUniverse {
 	return &BinanceExchangeInfoUniverse{
-		client:  client,
-		baseURL: baseURL,
-		limit:   limit,
+		client: client,
+		limit:  limit,
 	}
 }
 
@@ -33,13 +31,12 @@ type exchangeInfoResponse struct {
 	} `json:"symbols"`
 }
 
-func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Symbol, error) {
+func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context, exchangeInfoURL, tickerURL string) ([]domain.Symbol, error) {
 	// 1. Fetch exchangeInfo
-	infoURL := b.baseURL
-	if infoURL == "" {
-		infoURL = "https://api.binance.com/api/v3/exchangeInfo"
+	if exchangeInfoURL == "" {
+		return nil, fmt.Errorf("exchangeInfo URL is required")
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", infoURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", exchangeInfoURL, nil)
 	if err != nil {
 		fmt.Printf("[BinanceExchangeInfoUniverse] error creating exchangeInfo request: %v\n", err)
 		return nil, err
@@ -79,8 +76,9 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 	}
 
 	// 3. Fetch 24h ticker stats
-	// Always use the correct ticker endpoint
-	tickerURL := "https://api.binance.com/api/v3/ticker/24hr"
+	if tickerURL == "" {
+		return nil, fmt.Errorf("ticker URL is required")
+	}
 	fmt.Printf("[BinanceExchangeInfoUniverse] Requesting ticker URL: %s\n", tickerURL)
 	treq, err := http.NewRequestWithContext(ctx, "GET", tickerURL, nil)
 	if err != nil {
@@ -115,8 +113,8 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 
 	// 4. Build list of filtered symbols with their quoteVolume
 	type symVol struct {
-		sym  string
-		vol  float64
+		sym string
+		vol float64
 	}
 	var svs []symVol
 	for _, t := range tickers {
@@ -141,6 +139,7 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context) ([]domain.Sym
 			svs = append(svs, symVol{sym: s, vol: 0})
 		}
 	}
+	fmt.Printf("[BinanceExchangeInfoUniverse] Mapped symbols to volumes: %+v\n", svs)
 
 	// 5. Sort by descending volume, then alphabetically
 	sort.Slice(svs, func(i, j int) bool {
