@@ -14,34 +14,25 @@ import (
 	"pano_chart/backend/domain"
 )
 
-// --- Fake use case (stub) ---
+// --- Fake use case (stub at the use-case boundary) ---
 
-type fakeGetSymbolDetail struct {
+type fakeGetSymbolDetailUC struct {
 	result usecases.SymbolDetailResult
 	err    error
 }
 
-func (f *fakeGetSymbolDetail) Execute(_ context.Context, req usecases.GetSymbolDetailRequest) (usecases.SymbolDetailResult, error) {
+func (f *fakeGetSymbolDetailUC) Execute(_ context.Context, _ usecases.GetSymbolDetailRequest) (usecases.SymbolDetailResult, error) {
 	if f.err != nil {
 		return usecases.SymbolDetailResult{}, f.err
 	}
 	return f.result, nil
 }
 
-// --- Helper to build a valid use case stub ---
+// --- Helper to build a handler with a stubbed use case ---
 
-func newFakeUC(result usecases.SymbolDetailResult, err error) *usecases.GetSymbolDetail {
-	fake := &fakeGetSymbolDetail{result: result, err: err}
-	// Provide nil or zero values for other dependencies as fakes for testing
-	return usecases.NewGetSymbolDetail(
-		fake,         // CandleRepositoryPort
-		nil,          // SymbolScorer
-		nil,          // SymbolUniverseProvider
-		"",           // exchange string
-		"",           // venue string
-		0,            // lookback int
-		0,            // minCandles int
-	)
+func newHandler(result usecases.SymbolDetailResult, err error) http.Handler {
+	fake := &fakeGetSymbolDetailUC{result: result, err: err}
+	return httpAdapter.NewSymbolDetailHandler(fake)
 }
 
 // --- Error response DTO for assertions ---
@@ -53,10 +44,12 @@ type errorResponse struct {
 	} `json:"error"`
 }
 
+var errGeneric = fmt.Errorf("something broke")
+
 // --- Tests ---
 
 func TestSymbolDetailHandler_MissingSymbol(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, nil))
+	handler := newHandler(usecases.SymbolDetailResult{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/", nil)
 	rec := httptest.NewRecorder()
@@ -77,7 +70,7 @@ func TestSymbolDetailHandler_MissingSymbol(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_InvalidPrefix(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, nil))
+	handler := newHandler(usecases.SymbolDetailResult{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/other/BTCUSDT?timeframe=1h", nil)
 	rec := httptest.NewRecorder()
@@ -98,7 +91,7 @@ func TestSymbolDetailHandler_InvalidPrefix(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_MissingTimeframe(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, nil))
+	handler := newHandler(usecases.SymbolDetailResult{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT", nil)
 	rec := httptest.NewRecorder()
@@ -122,7 +115,7 @@ func TestSymbolDetailHandler_MissingTimeframe(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_InvalidTimeframe(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, nil))
+	handler := newHandler(usecases.SymbolDetailResult{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=invalid", nil)
 	rec := httptest.NewRecorder()
@@ -143,7 +136,7 @@ func TestSymbolDetailHandler_InvalidTimeframe(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_SymbolNotFound(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, usecases.ErrSymbolNotFound))
+	handler := newHandler(usecases.SymbolDetailResult{}, usecases.ErrSymbolNotFound)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h", nil)
 	rec := httptest.NewRecorder()
@@ -167,7 +160,7 @@ func TestSymbolDetailHandler_SymbolNotFound(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_InternalError(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, errGeneric))
+	handler := newHandler(usecases.SymbolDetailResult{}, errGeneric)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h", nil)
 	rec := httptest.NewRecorder()
@@ -187,8 +180,6 @@ func TestSymbolDetailHandler_InternalError(t *testing.T) {
 	}
 }
 
-var errGeneric = fmt.Errorf("something broke")
-
 func TestSymbolDetailHandler_SuccessWithCandles(t *testing.T) {
 	sym, _ := domain.NewSymbol("BTCUSDT")
 	tf, _ := domain.NewTimeframe("1h")
@@ -205,7 +196,7 @@ func TestSymbolDetailHandler_SuccessWithCandles(t *testing.T) {
 		},
 	}
 
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(result, nil))
+	handler := newHandler(result, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h", nil)
 	rec := httptest.NewRecorder()
@@ -279,7 +270,7 @@ func TestSymbolDetailHandler_SuccessNilStats(t *testing.T) {
 		Stats:   nil,
 	}
 
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(result, nil))
+	handler := newHandler(result, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/ETHUSDT?timeframe=4h", nil)
 	rec := httptest.NewRecorder()
@@ -315,7 +306,7 @@ func TestSymbolDetailHandler_LimitParam(t *testing.T) {
 		Stats:   nil,
 	}
 
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(result, nil))
+	handler := newHandler(result, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h&limit=50", nil)
 	rec := httptest.NewRecorder()
@@ -336,14 +327,13 @@ func TestSymbolDetailHandler_InvalidLimitDefaultsToZero(t *testing.T) {
 		Stats:   nil,
 	}
 
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(result, nil))
+	handler := newHandler(result, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h&limit=abc", nil)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	// Invalid limit should not cause an error; it defaults to 0
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
@@ -429,7 +419,7 @@ func TestSymbolDetailHandler_ResponseContentType(t *testing.T) {
 		Stats:   nil,
 	}
 
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(result, nil))
+	handler := newHandler(result, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT?timeframe=1h", nil)
 	rec := httptest.NewRecorder()
@@ -443,7 +433,7 @@ func TestSymbolDetailHandler_ResponseContentType(t *testing.T) {
 }
 
 func TestSymbolDetailHandler_ErrorResponseContentType(t *testing.T) {
-	handler := httpAdapter.NewSymbolDetailHandler(newFakeUC(usecases.SymbolDetailResult{}, nil))
+	handler := newHandler(usecases.SymbolDetailResult{}, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/symbol/BTCUSDT", nil)
 	rec := httptest.NewRecorder()
