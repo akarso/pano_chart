@@ -14,6 +14,7 @@ import (
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/infrastructure/overview"
+	"pano_chart/backend/infrastructure/rankings"
 	"pano_chart/backend/infrastructure/symbol_universe"
 )
 
@@ -146,6 +147,34 @@ func main() {
 	// Wrap with Redis cache decorator
 	overviewUC := overview.NewRedisCachedOverview(getOverviewUC, redisClient, overviewCacheTTL, "overview")
 
+	// --- Rankings v2 use case ---
+	getRankingsUC := usecases.NewGetRankings(
+		cachedUniverse,
+		rankUC,
+		cachedVolumeProvider,
+		candleRepo,
+		exchangeInfoURL,
+		tickerURL,
+	)
+
+	// --- Rankings cache TTL ---
+	rankingsCacheTTL := 60 * time.Second // default
+	if ttlStr := os.Getenv("RANKINGS_CACHE_TTL_SECONDS"); ttlStr != "" {
+		if secs, err := strconv.Atoi(ttlStr); err == nil {
+			if secs < 10 {
+				secs = 10
+			}
+			if secs > 300 {
+				secs = 300
+			}
+			rankingsCacheTTL = time.Duration(secs) * time.Second
+		}
+	}
+	fmt.Printf("[main] Rankings cache TTL: %v\n", rankingsCacheTTL)
+
+	// Wrap with Redis cache decorator
+	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -154,13 +183,7 @@ func main() {
 		}
 	})
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
-	mux.Handle("/api/rankings", &adhttp.RankingsHandler{
-		Ranker:          rankUC,
-		CandleRepo:      candleRepo,
-		Symbols:         nil, // Not needed, dynamic universe used
-		ExchangeInfoURL: exchangeInfoURL,
-		TickerURL:       tickerURL,
-	})
+	mux.Handle("/api/rankings", adhttp.NewRankingsV2Handler(rankingsUC))
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
 
