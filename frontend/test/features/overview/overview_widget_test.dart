@@ -4,7 +4,6 @@ import 'package:pano_chart_frontend/features/overview/overview_widget.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
 import 'package:pano_chart_frontend/features/overview/overview_state.dart';
-import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
 
 class _FakeGetOverview extends GetOverview {
   final Duration delay;
@@ -43,31 +42,15 @@ void main() {
 
   testWidgets('OverviewScreen_rendersList', (WidgetTester tester) async {
     final items = [
-      OverviewItem(
+      const OverviewItem(
         symbol: 'BTCUSDT',
-        candles: [
-          CandleDto(
-            timestamp: DateTime.utc(2024, 1, 1),
-            open: 1,
-            high: 2,
-            low: 0.5,
-            close: 1.5,
-            volume: 1,
-          ),
-        ],
+        totalScore: 2.75,
+        sparkline: [100.0, 105.0, 110.0],
       ),
-      OverviewItem(
+      const OverviewItem(
         symbol: 'ETHUSD',
-        candles: [
-          CandleDto(
-            timestamp: DateTime.utc(2024, 1, 1),
-            open: 2,
-            high: 3,
-            low: 1.5,
-            close: 2.5,
-            volume: 1,
-          ),
-        ],
+        totalScore: -1.5,
+        sparkline: [200.0, 195.0, 190.0],
       ),
     ];
 
@@ -85,10 +68,10 @@ void main() {
     expect(find.textContaining('ETHUSD'), findsOneWidget);
   });
 
-  testWidgets('OverviewScreen_handlesEmptyCandles',
+  testWidgets('OverviewScreen_handlesEmptySparkline',
       (WidgetTester tester) async {
     final items = [
-      const OverviewItem(symbol: 'BTCUSDT', candles: []),
+      const OverviewItem(symbol: 'BTCUSDT'),
     ];
 
     final getOverview = _FakeGetOverview(

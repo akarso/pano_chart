@@ -1,13 +1,13 @@
-import '../candles/api/candle_response.dart';
-
 /// A single item in the overview grid.
 class OverviewItem {
   final String symbol;
-  final List<CandleDto> candles;
+  final double totalScore;
+  final List<double> sparkline;
 
   const OverviewItem({
     required this.symbol,
-    required this.candles,
+    this.totalScore = 0.0,
+    this.sparkline = const [],
   });
 }
 

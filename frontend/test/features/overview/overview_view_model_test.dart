@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
 import 'package:pano_chart_frontend/features/overview/overview_state.dart';
-import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
 
 class _FakeGetOverview extends GetOverview {
   final List<OverviewResult> results;
@@ -76,18 +75,10 @@ void main() {
 
     test('loadInitial sets loading then items', () async {
       final items = [
-        OverviewItem(
+        const OverviewItem(
           symbol: 'BTCUSDT',
-          candles: [
-            CandleDto(
-              timestamp: DateTime.utc(2024, 1, 1),
-              open: 100,
-              high: 110,
-              low: 90,
-              close: 105,
-              volume: 1000,
-            ),
-          ],
+          totalScore: 2.75,
+          sparkline: [100.0, 105.0, 110.0],
         ),
       ];
 
@@ -155,16 +146,10 @@ void main() {
 
     test('loadNext appends items', () async {
       final page1Items = [
-        const OverviewItem(
-          symbol: 'BTCUSDT',
-          candles: [],
-        ),
+        const OverviewItem(symbol: 'BTCUSDT'),
       ];
       final page2Items = [
-        const OverviewItem(
-          symbol: 'ETHUSDT',
-          candles: [],
-        ),
+        const OverviewItem(symbol: 'ETHUSDT'),
       ];
 
       fakeGetOverview = _FakeGetOverview(results: [
@@ -219,7 +204,7 @@ void main() {
 
     test('loadNext sets error on failure without clearing items', () async {
       final items = [
-        const OverviewItem(symbol: 'BTCUSDT', candles: []),
+        const OverviewItem(symbol: 'BTCUSDT'),
       ];
 
       fakeGetOverview = _FakeGetOverview(results: [
@@ -242,10 +227,10 @@ void main() {
 
     test('changeSort resets state and reloads', () async {
       final totalItems = [
-        const OverviewItem(symbol: 'BTCUSDT', candles: []),
+        const OverviewItem(symbol: 'BTCUSDT'),
       ];
       final gainItems = [
-        const OverviewItem(symbol: 'ETHUSDT', candles: []),
+        const OverviewItem(symbol: 'ETHUSDT'),
       ];
 
       fakeGetOverview = _FakeGetOverview(results: [
@@ -331,13 +316,13 @@ void main() {
       // 5. its results must be discarded (stale generation)
 
       final page1Items = [
-        const OverviewItem(symbol: 'BTCUSDT', candles: []),
+        const OverviewItem(symbol: 'BTCUSDT'),
       ];
       final staleNextItems = [
-        const OverviewItem(symbol: 'STALE', candles: []),
+        const OverviewItem(symbol: 'STALE'),
       ];
       final newSortItems = [
-        const OverviewItem(symbol: 'ETHUSDT', candles: []),
+        const OverviewItem(symbol: 'ETHUSDT'),
       ];
 
       fakeGetOverview = _FakeGetOverview(results: [

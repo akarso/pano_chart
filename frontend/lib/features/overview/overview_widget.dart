@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
-import '../candles/api/candle_response.dart';
-import '../detail/detail_screen.dart';
-import '../../domain/symbol.dart';
-import '../../domain/timeframe.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 
-/// Overview widget that displays a scrollable grid of market charts.
+/// Overview widget that displays a scrollable grid of market sparklines.
 ///
 /// All data and loading state is owned by [OverviewViewModel].
 /// Widget rebuilds via [OverviewViewModel.onChanged] callback.
@@ -93,10 +89,7 @@ class OverviewWidgetState extends State<OverviewWidget> {
             itemCount: state.items.length,
             itemBuilder: (context, index) {
               final item = state.items[index];
-              return _OverviewGridItem(
-                item: item,
-                timeframe: _timeframe,
-              );
+              return _OverviewGridItem(item: item);
             },
           ),
         ),
@@ -107,81 +100,56 @@ class OverviewWidgetState extends State<OverviewWidget> {
 
 class _OverviewGridItem extends StatelessWidget {
   final OverviewItem item;
-  final String timeframe;
 
-  const _OverviewGridItem({
-    required this.item,
-    required this.timeframe,
-  });
+  const _OverviewGridItem({required this.item});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => DetailScreen(
-              symbol: AppSymbol(item.symbol),
-              timeframe: Timeframe(timeframe),
-              series: CandleSeriesResponse(
-                symbol: item.symbol,
-                timeframe: timeframe,
-                candles: item.candles,
+    return Card(
+      child: AspectRatio(
+        aspectRatio: 2.5,
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: _buildSparkline(item.sparkline),
+            ),
+            Positioned(
+              left: 12,
+              top: 8,
+              child: Text(
+                item.symbol,
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: Colors.white.withAlpha((0.85 * 255).round()),
+                          backgroundColor:
+                              Colors.black.withAlpha((0.25 * 255).round()),
+                        ) ??
+                    const TextStyle(),
               ),
             ),
-          ),
-        );
-      },
-      child: Card(
-        child: AspectRatio(
-          aspectRatio: 2.5,
-          child: Stack(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: _buildChartArea(item.candles),
-              ),
-              Positioned(
-                left: 12,
-                top: 8,
-                child: Text(
-                  item.symbol,
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                            color: Colors.white.withAlpha((0.85 * 255).round()),
-                            backgroundColor:
-                                Colors.black.withAlpha((0.25 * 255).round()),
-                          ) ??
-                      const TextStyle(),
-                ),
-              ),
-              Positioned(
-                right: 12,
-                top: 8,
-                child: _buildPercentChange(context, item.candles),
-              ),
-            ],
-          ),
+            Positioned(
+              right: 12,
+              top: 8,
+              child: _buildScoreBadge(context, item.totalScore),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildChartArea(List<CandleDto> candles) {
-    if (candles.isEmpty) return const Center(child: Text('No data'));
+  Widget _buildSparkline(List<double> points) {
+    if (points.isEmpty) return const Center(child: Text('No data'));
     return CustomPaint(
-      painter: MiniChartRenderer(candles),
+      painter: SparklineRenderer(points),
       size: Size.infinite,
     );
   }
 
-  Widget _buildPercentChange(BuildContext context, List<CandleDto> candles) {
-    if (candles.length < 2) return const SizedBox.shrink();
-    final first = candles.first.close;
-    final last = candles.last.close;
-    final pct = ((last - first) / first) * 100;
-    final color = pct >= 0 ? Colors.green : Colors.red;
+  Widget _buildScoreBadge(BuildContext context, double score) {
+    final color = score >= 0 ? Colors.green : Colors.red;
     return Text(
-      '${pct >= 0 ? '+' : ''}${pct.toStringAsFixed(2)}%',
+      score.toStringAsFixed(2),
       style: Theme.of(context).textTheme.labelLarge?.copyWith(
                 color: color.withAlpha((0.85 * 255).round()),
                 backgroundColor: Colors.black.withAlpha((0.15 * 255).round()),
@@ -191,36 +159,35 @@ class _OverviewGridItem extends StatelessWidget {
   }
 }
 
-class MiniChartRenderer extends CustomPainter {
-  final List<CandleDto> candles;
-  MiniChartRenderer(this.candles);
+/// Draws a simple sparkline (line chart) from a list of values.
+class SparklineRenderer extends CustomPainter {
+  final List<double> points;
+  SparklineRenderer(this.points);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = Colors.blue;
-    if (candles.isEmpty) return;
+    if (points.length < 2) return;
 
-    final minVal = candles.map((c) => c.low).reduce((a, b) => a < b ? a : b);
-    final maxVal = candles.map((c) => c.high).reduce((a, b) => a > b ? a : b);
+    final minVal = points.reduce((a, b) => a < b ? a : b);
+    final maxVal = points.reduce((a, b) => a > b ? a : b);
     final range = (maxVal - minVal) == 0 ? 1.0 : (maxVal - minVal);
 
-    final w = size.width / candles.length;
-    for (var i = 0; i < candles.length; i++) {
-      final c = candles[i];
-      final openY = size.height - ((c.open - minVal) / range) * size.height;
-      final closeY = size.height - ((c.close - minVal) / range) * size.height;
-      final top = size.height - ((c.high - minVal) / range) * size.height;
-      final bottom = size.height - ((c.low - minVal) / range) * size.height;
+    final paint = Paint()
+      ..color = points.last >= points.first ? Colors.green : Colors.red
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
 
-      // Draw wick
-      final x = i * w + w / 2;
-      canvas.drawLine(
-          Offset(x, top), Offset(x, bottom), paint..strokeWidth = 1);
-
-      // Draw body
-      final rect = Rect.fromLTRB(i * w + 1, openY, (i + 1) * w - 1, closeY);
-      canvas.drawRect(rect, paint..style = PaintingStyle.fill);
+    final path = Path();
+    for (var i = 0; i < points.length; i++) {
+      final x = (i / (points.length - 1)) * size.width;
+      final y = size.height - ((points[i] - minVal) / range) * size.height;
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
     }
+    canvas.drawPath(path, paint);
   }
 
   @override
