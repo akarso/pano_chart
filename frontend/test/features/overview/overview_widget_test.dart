@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/features/candles/application/get_candle_series.dart';
+import 'package:pano_chart_frontend/features/candles/application/get_candle_series_input.dart';
+import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
 import 'package:pano_chart_frontend/features/overview/overview_widget.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
@@ -23,6 +26,17 @@ class _FakeGetOverview extends GetOverview {
   }
 }
 
+class _FakeGetCandleSeries implements GetCandleSeries {
+  @override
+  Future<CandleSeriesResponse> execute(GetCandleSeriesInput input) async {
+    return CandleSeriesResponse(
+      symbol: input.symbol,
+      timeframe: input.timeframe,
+      candles: [],
+    );
+  }
+}
+
 Widget _wrap(Widget w) => MaterialApp(home: Scaffold(body: w));
 
 void main() {
@@ -33,7 +47,10 @@ void main() {
     );
     final vm = OverviewViewModel(getOverview);
 
-    final widget = OverviewWidget(viewModel: vm);
+    final widget = OverviewWidget(
+      viewModel: vm,
+      getCandleSeries: _FakeGetCandleSeries(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
@@ -59,7 +76,10 @@ void main() {
     );
     final vm = OverviewViewModel(getOverview);
 
-    final widget = OverviewWidget(viewModel: vm);
+    final widget = OverviewWidget(
+      viewModel: vm,
+      getCandleSeries: _FakeGetCandleSeries(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();
@@ -79,7 +99,10 @@ void main() {
     );
     final vm = OverviewViewModel(getOverview);
 
-    final widget = OverviewWidget(viewModel: vm);
+    final widget = OverviewWidget(
+      viewModel: vm,
+      getCandleSeries: _FakeGetCandleSeries(),
+    );
 
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();

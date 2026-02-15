@@ -8,15 +8,20 @@ import '../features/overview/overview_widget.dart';
 Widget bootstrapApp({required AppConfig config}) {
   final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
   final overviewViewModel = root.createOverviewViewModel();
+  final getCandleSeries = root.createGetCandleSeries();
   final component = AppComponent(
     config,
-    home: OverviewWidget(viewModel: overviewViewModel),
+    home: OverviewWidget(
+      viewModel: overviewViewModel,
+      getCandleSeries: getCandleSeries,
+    ),
   );
   return component.createApp();
 }
 
 void main() {
   // In real apps these values could come from compile-time variables or CI.
-  const config = AppConfig(apiBaseUrl: 'https://api.example', flavor: 'dev');
+  const config = AppConfig(
+      apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
   runApp(bootstrapApp(config: config));
 }

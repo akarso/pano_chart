@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../domain/symbol.dart';
+import '../../domain/timeframe.dart';
+import '../candles/application/get_candle_series.dart';
+import '../candles/application/get_candle_series_input.dart';
+import '../detail/detail_screen.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 
@@ -8,8 +13,13 @@ import 'overview_view_model.dart';
 /// Widget rebuilds via [OverviewViewModel.onChanged] callback.
 class OverviewWidget extends StatefulWidget {
   final OverviewViewModel viewModel;
+  final GetCandleSeries getCandleSeries;
 
-  const OverviewWidget({Key? key, required this.viewModel}) : super(key: key);
+  const OverviewWidget({
+    Key? key,
+    required this.viewModel,
+    required this.getCandleSeries,
+  }) : super(key: key);
 
   @override
   OverviewWidgetState createState() => OverviewWidgetState();
@@ -32,6 +42,68 @@ class OverviewWidgetState extends State<OverviewWidget> {
   void dispose() {
     vm.onChanged = null;
     super.dispose();
+  }
+
+  /// Returns the duration of one candle for the given timeframe string.
+  Duration _candleDuration(String tf) {
+    switch (tf) {
+      case '1m':
+        return const Duration(minutes: 1);
+      case '5m':
+        return const Duration(minutes: 5);
+      case '15m':
+        return const Duration(minutes: 15);
+      case '1h':
+        return const Duration(hours: 1);
+      case '4h':
+        return const Duration(hours: 4);
+      case '1d':
+        return const Duration(days: 1);
+      default:
+        return const Duration(hours: 1);
+    }
+  }
+
+  /// Number of candles to fetch — must match backend sparkline precision.
+  static const int _precision = 30;
+
+  Future<void> _onItemTapped(OverviewItem item) async {
+    final now = DateTime.now().toUtc();
+    final from = now.subtract(_candleDuration(_timeframe) * _precision);
+    final input = GetCandleSeriesInput(
+      symbol: item.symbol,
+      timeframe: _timeframe,
+      from: from,
+      to: now,
+    );
+
+    // Show a loading dialog while fetching candles.
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final series = await widget.getCandleSeries.execute(input);
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading dialog
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => DetailScreen(
+            symbol: AppSymbol(item.symbol),
+            timeframe: Timeframe(_timeframe),
+            series: series,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load chart: $e')),
+      );
+    }
   }
 
   @override
@@ -89,7 +161,10 @@ class OverviewWidgetState extends State<OverviewWidget> {
             itemCount: state.items.length,
             itemBuilder: (context, index) {
               final item = state.items[index];
-              return _OverviewGridItem(item: item);
+              return GestureDetector(
+                onTap: () => _onItemTapped(item),
+                child: _OverviewGridItem(item: item),
+              );
             },
           ),
         ),
@@ -127,11 +202,6 @@ class _OverviewGridItem extends StatelessWidget {
                     const TextStyle(),
               ),
             ),
-            Positioned(
-              right: 12,
-              top: 8,
-              child: _buildScoreBadge(context, item.totalScore),
-            ),
           ],
         ),
       ),
@@ -143,18 +213,6 @@ class _OverviewGridItem extends StatelessWidget {
     return CustomPaint(
       painter: SparklineRenderer(points),
       size: Size.infinite,
-    );
-  }
-
-  Widget _buildScoreBadge(BuildContext context, double score) {
-    final color = score >= 0 ? Colors.green : Colors.red;
-    return Text(
-      score.toStringAsFixed(2),
-      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                color: color.withAlpha((0.85 * 255).round()),
-                backgroundColor: Colors.black.withAlpha((0.15 * 255).round()),
-              ) ??
-          const TextStyle(),
     );
   }
 }
@@ -191,5 +249,7 @@ class SparklineRenderer extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant SparklineRenderer oldDelegate) {
+    return !identical(points, oldDelegate.points);
+  }
 }

@@ -27,7 +27,8 @@ class OverviewViewModel {
   Future<void> loadInitial(String timeframe) async {
     final currentGen = ++_generation;
 
-    _setState(_state.copyWith(isLoading: true, error: null));
+    _setState(
+        _state.copyWith(isLoading: true, items: [], page: 0, error: null));
 
     try {
       final result = await _getOverview(

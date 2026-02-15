@@ -15,7 +15,8 @@ class App extends StatelessWidget {
       title: 'Pano Chart',
       home: home != null ? Scaffold(body: home) : null,
       onGenerateRoute: home == null ? _placeholderRoute : null,
-      theme: ThemeData.light(),
+      themeMode: ThemeMode.dark,
+      darkTheme: ThemeData.dark(useMaterial3: true),
     );
   }
 

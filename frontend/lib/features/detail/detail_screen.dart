@@ -91,7 +91,8 @@ class _DetailScreenState extends State<DetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
+            AspectRatio(
+              aspectRatio: 2.5,
               child: Card(
                 color: Colors.grey[900],
                 shape: RoundedRectangleBorder(

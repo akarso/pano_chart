@@ -27,7 +27,7 @@ class CandleSeriesChartRenderer implements SeriesChartRenderer {
 
 class CandleChartPainter extends CustomPainter {
   final CandleSeriesResponse series;
-  CandleChartPainter(this.series);
+  CandleChartPainter(this.series) : super(repaint: null);
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -73,5 +73,7 @@ class CandleChartPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant CandleChartPainter oldDelegate) {
+    return !identical(series, oldDelegate.series);
+  }
 }
