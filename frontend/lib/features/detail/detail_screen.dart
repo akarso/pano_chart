@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
-import '../overview/overview_view_model.dart';
+import '../candles/api/candle_response.dart';
 import '../../domain/symbol.dart';
+import '../../domain/timeframe.dart';
 import 'candle_series_chart_renderer.dart';
 import '../../domain/series_view_mode.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart, metadata, and favourite toggle.
 class DetailScreen extends StatefulWidget {
   final AppSymbol symbol;
-  final OverviewViewModel viewModel;
+  final Timeframe timeframe;
+  final CandleSeriesResponse series;
 
   const DetailScreen({
     Key? key,
     required this.symbol,
-    required this.viewModel,
+    required this.timeframe,
+    required this.series,
   }) : super(key: key);
 
   @override
@@ -24,8 +27,8 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final timeframe = widget.viewModel.timeframe;
-    final series = widget.viewModel.getCandleSeries(widget.symbol, timeframe);
+    final timeframe = widget.timeframe;
+    final series = widget.series;
     final candles = series.candles;
     double? percentChange;
     double? lastPrice;

@@ -1,60 +1,54 @@
 import 'package:flutter/material.dart';
-import '../candles/application/get_candle_series.dart';
-import '../candles/application/get_candle_series_input.dart';
 import '../candles/api/candle_response.dart';
 import '../detail/detail_screen.dart';
 import '../../domain/symbol.dart';
+import '../../domain/timeframe.dart';
+import 'overview_state.dart';
+import 'overview_view_model.dart';
 
-/// Simple overview widget that loads multiple time series via the
-/// provided [GetCandleSeries] use case and displays them in a scrollable list.
+/// Overview widget that displays a scrollable grid of market charts.
 ///
-/// Default view mode: [SeriesViewMode.line] for overview, [SeriesViewMode.candles] for detail.
+/// All data and loading state is owned by [OverviewViewModel].
+/// Widget rebuilds via [OverviewViewModel.onChanged] callback.
 class OverviewWidget extends StatefulWidget {
-  final GetCandleSeries useCase;
-  final List<GetCandleSeriesInput> items;
+  final OverviewViewModel viewModel;
 
-  final dynamic viewModel; // Add this if not present in your codebase
-  const OverviewWidget(
-      {Key? key,
-      required this.useCase,
-      required this.items,
-      required this.viewModel})
-      : super(key: key);
+  const OverviewWidget({Key? key, required this.viewModel}) : super(key: key);
 
   @override
   OverviewWidgetState createState() => OverviewWidgetState();
 }
 
 class OverviewWidgetState extends State<OverviewWidget> {
-  bool _isLoading = true;
-  late List<CandleSeriesResponse?> _responses;
+  late final OverviewViewModel vm;
   int _columns = 2;
   String _timeframe = '1h';
 
   @override
   void initState() {
     super.initState();
-    _responses = List<CandleSeriesResponse?>.filled(widget.items.length, null);
-    _loadAll();
+    vm = widget.viewModel;
+    vm.onChanged = () => setState(() {});
+    vm.loadInitial(_timeframe);
   }
 
-  Future<void> _loadAll() async {
-    setState(() => _isLoading = true);
-    final futures = <Future<void>>[];
-    for (var i = 0; i < widget.items.length; i++) {
-      final idx = i;
-      final input = widget.items[i];
-      futures.add(widget.useCase.execute(input).then((resp) {
-        _responses[idx] = resp;
-      }));
-    }
-    await Future.wait(futures);
-    if (mounted) setState(() => _isLoading = false);
+  @override
+  void dispose() {
+    vm.onChanged = null;
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    final state = vm.state;
+
+    if (state.isLoading && state.items.isEmpty) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (state.error != null && state.items.isEmpty) {
+      return Center(child: Text(state.error!));
+    }
 
     return Column(
       children: [
@@ -79,7 +73,10 @@ class OverviewWidgetState extends State<OverviewWidget> {
                 items: const ['1m', '5m', '15m', '1h', '4h', '1d']
                     .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
                     .toList(),
-                onChanged: (v) => setState(() => _timeframe = v ?? '1h'),
+                onChanged: (v) {
+                  setState(() => _timeframe = v ?? '1h');
+                  vm.loadInitial(_timeframe);
+                },
               ),
             ],
           ),
@@ -93,15 +90,12 @@ class OverviewWidgetState extends State<OverviewWidget> {
               mainAxisSpacing: 8,
               childAspectRatio: 2.5,
             ),
-            itemCount: widget.items.length,
+            itemCount: state.items.length,
             itemBuilder: (context, index) {
-              final input = widget.items[index];
-              final resp = _responses[index];
+              final item = state.items[index];
               return _OverviewGridItem(
-                symbol: input.symbol,
-                timeframe: input.timeframe,
-                response: resp,
-                viewModel: widget.viewModel,
+                item: item,
+                timeframe: _timeframe,
               );
             },
           ),
@@ -112,15 +106,12 @@ class OverviewWidgetState extends State<OverviewWidget> {
 }
 
 class _OverviewGridItem extends StatelessWidget {
-  final String symbol;
+  final OverviewItem item;
   final String timeframe;
-  final CandleSeriesResponse? response;
-  final dynamic viewModel;
+
   const _OverviewGridItem({
-    required this.symbol,
+    required this.item,
     required this.timeframe,
-    required this.response,
-    required this.viewModel,
   });
 
   @override
@@ -130,8 +121,13 @@ class _OverviewGridItem extends StatelessWidget {
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => DetailScreen(
-              symbol: AppSymbol(symbol),
-              viewModel: viewModel,
+              symbol: AppSymbol(item.symbol),
+              timeframe: Timeframe(timeframe),
+              series: CandleSeriesResponse(
+                symbol: item.symbol,
+                timeframe: timeframe,
+                candles: item.candles,
+              ),
             ),
           ),
         );
@@ -143,13 +139,13 @@ class _OverviewGridItem extends StatelessWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.all(8.0),
-                child: _buildChartArea(response),
+                child: _buildChartArea(item.candles),
               ),
               Positioned(
                 left: 12,
                 top: 8,
                 child: Text(
-                  symbol,
+                  item.symbol,
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                             color: Colors.white.withAlpha((0.85 * 255).round()),
                             backgroundColor:
@@ -161,7 +157,7 @@ class _OverviewGridItem extends StatelessWidget {
               Positioned(
                 right: 12,
                 top: 8,
-                child: _buildPercentChange(context, response),
+                child: _buildPercentChange(context, item.candles),
               ),
             ],
           ),
@@ -170,19 +166,18 @@ class _OverviewGridItem extends StatelessWidget {
     );
   }
 
-  Widget _buildChartArea(CandleSeriesResponse? resp) {
-    if (resp == null) return const SizedBox.shrink();
-    if (resp.candles.isEmpty) return const Center(child: Text('No data'));
+  Widget _buildChartArea(List<CandleDto> candles) {
+    if (candles.isEmpty) return const Center(child: Text('No data'));
     return CustomPaint(
-      painter: MiniChartRenderer(resp.candles),
+      painter: MiniChartRenderer(candles),
       size: Size.infinite,
     );
   }
 
-  Widget _buildPercentChange(BuildContext context, CandleSeriesResponse? resp) {
-    if (resp == null || resp.candles.length < 2) return const SizedBox.shrink();
-    final first = resp.candles.first.close;
-    final last = resp.candles.last.close;
+  Widget _buildPercentChange(BuildContext context, List<CandleDto> candles) {
+    if (candles.length < 2) return const SizedBox.shrink();
+    final first = candles.first.close;
+    final last = candles.last.close;
     final pct = ((last - first) / first) * 100;
     final color = pct >= 0 ? Colors.green : Colors.red;
     return Text(
