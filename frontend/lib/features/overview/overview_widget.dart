@@ -183,26 +183,34 @@ class _OverviewGridItem extends StatelessWidget {
     return Card(
       child: AspectRatio(
         aspectRatio: 2.5,
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: _buildSparkline(item.sparkline),
-            ),
-            Positioned(
-              left: 12,
-              top: 8,
-              child: Text(
-                item.symbol,
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: Colors.white.withAlpha((0.85 * 255).round()),
-                          backgroundColor:
-                              Colors.black.withAlpha((0.25 * 255).round()),
-                        ) ??
-                    const TextStyle(),
-              ),
-            ),
-          ],
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Scale font proportionally to card width.
+            final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
+            final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
+            return Stack(
+              children: [
+                Padding(
+                  padding: EdgeInsets.all(pad),
+                  child: _buildSparkline(item.sparkline),
+                ),
+                Positioned(
+                  left: pad + 4,
+                  top: pad,
+                  child: Text(
+                    item.symbol,
+                    style: TextStyle(
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white.withAlpha((0.85 * 255).round()),
+                      backgroundColor:
+                          Colors.black.withAlpha((0.25 * 255).round()),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );

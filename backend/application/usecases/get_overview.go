@@ -129,9 +129,9 @@ func (g *GetOverview) Execute(ctx context.Context, req GetOverviewRequest) ([]Ov
 		}
 	}
 
-	// If all symbols failed, return error.
+	// If all symbols failed, return empty slice (not an error).
 	if len(filtered) == 0 {
-		return nil, fmt.Errorf("no candles available for any ranked symbol")
+		return []OverviewResult{}, nil
 	}
 
 	return filtered, nil

@@ -62,10 +62,13 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context, exchangeInfoU
 		return nil, err
 	}
 
-	// 2. Filter for USDT spot trading pairs, status=TRADING
+	// 2. Filter for USDT spot trading pairs, status=TRADING, excluding stablecoins
 	filtered := make(map[string]struct{})
 	for _, s := range info.Symbols {
 		if s.QuoteAsset == "USDT" && s.Status == "TRADING" && s.IsSpotTradingAllowed {
+			if _, excluded := ExcludedSymbols[s.Symbol]; excluded {
+				continue
+			}
 			filtered[s.Symbol] = struct{}{}
 		}
 	}

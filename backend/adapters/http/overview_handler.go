@@ -86,16 +86,21 @@ func (h *OverviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	fmt.Printf("[overview] Entering slow step at line 92, tickers len=%d\n", len(dtoResults))
+
+	precision := 0
+	if len(results) > 0 {
+		precision = len(results[0].Sparkline)
+	}
+
 	resp := overviewResponse{
 		Timeframe: tfStr,
 		Count:     len(dtoResults),
-		Precision: len(results[0].Sparkline), // assumes all have same precision
+		Precision: precision,
 		Results:   dtoResults,
 	}
 
-	if len(results) == 0 {
-		resp.Precision = 0
-	}
+	fmt.Printf("[overview] Exited line 92\n")
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

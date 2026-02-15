@@ -81,7 +81,12 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 
 	// Otherwise, use Binance URL and mapping
 	interval := timeframe.String()
-	binanceURL := fmt.Sprintf("https://api.binance.com/api/v3/uiKlines?symbol=%s&interval=%s", symbol.String(), interval)
+	startMs := from.UnixMilli()
+	endMs := to.UnixMilli()
+	binanceURL := fmt.Sprintf(
+		"https://api.binance.com/api/v3/uiKlines?symbol=%s&interval=%s&startTime=%d&endTime=%d&limit=1000",
+		symbol.String(), interval, startMs, endMs,
+	)
 	fmt.Printf("[freetier] Binance URL: %s\n", binanceURL)
 	resp, err := r.client.Get(binanceURL)
 	if err != nil {

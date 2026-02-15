@@ -73,6 +73,21 @@ func (v *VolumeSortedRankSymbols) Rank(series map[domain.Symbol]domain.CandleSer
 			filteredSeries[s] = cs
 		}
 	}
+
+	// If no series data was provided (e.g. called from GetOverview),
+	// return symbols ordered by volume with zero scores — the caller
+	// will fetch candle data separately.
+	if len(filteredSeries) == 0 {
+		result := make([]RankedSymbol, len(filtered))
+		for i, s := range filtered {
+			result[i] = RankedSymbol{
+				Symbol:     s,
+				TotalScore: 0,
+			}
+		}
+		return result, nil
+	}
+
 	// Use DefaultRankSymbols logic for scoring
 	base := NewDefaultRankSymbols(v.Weights)
 	return base.Rank(filteredSeries)

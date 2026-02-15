@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rs/cors"
+
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/usecases"
@@ -187,6 +189,14 @@ func main() {
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
 
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"*"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+		AllowCredentials: false,
+	})
+	handler := c.Handler(mux)
+
 	fmt.Printf("Server starting on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
