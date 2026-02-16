@@ -27,21 +27,37 @@ class OverviewWidget extends StatefulWidget {
 
 class OverviewWidgetState extends State<OverviewWidget> {
   late final OverviewViewModel vm;
+  final ScrollController _scrollController = ScrollController();
   int _columns = 2;
   String _timeframe = '1h';
+
+  /// Threshold in pixels from bottom to trigger loading more items.
+  static const double _scrollThreshold = 200.0;
 
   @override
   void initState() {
     super.initState();
     vm = widget.viewModel;
     vm.onChanged = () => setState(() {});
+    _scrollController.addListener(_onScroll);
     vm.loadInitial(_timeframe);
   }
 
   @override
   void dispose() {
     vm.onChanged = null;
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - _scrollThreshold) {
+      if (!vm.state.isLoading && vm.state.hasMore) {
+        vm.loadNext(_timeframe);
+      }
+    }
   }
 
   /// Returns the duration of one candle for the given timeframe string.
@@ -120,7 +136,8 @@ class OverviewWidgetState extends State<OverviewWidget> {
 
     return Column(
       children: [
-        Padding(
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
             children: [
@@ -146,11 +163,28 @@ class OverviewWidgetState extends State<OverviewWidget> {
                   vm.loadInitial(_timeframe);
                 },
               ),
+              const SizedBox(width: 24),
+              const Text('Sort:'),
+              const SizedBox(width: 8),
+              DropdownButton<String>(
+                value: state.sort,
+                items: const [
+                  DropdownMenuItem(value: 'total', child: Text('Total')),
+                  DropdownMenuItem(value: 'gain', child: Text('Gain')),
+                  DropdownMenuItem(value: 'trend', child: Text('Trend')),
+                  DropdownMenuItem(value: 'sideways', child: Text('Sideways')),
+                  DropdownMenuItem(value: 'volume', child: Text('Volume')),
+                ],
+                onChanged: (v) {
+                  if (v != null) vm.changeSort(v, _timeframe);
+                },
+              ),
             ],
           ),
         ),
         Expanded(
           child: GridView.builder(
+            controller: _scrollController,
             padding: const EdgeInsets.all(8),
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: _columns,
@@ -158,8 +192,11 @@ class OverviewWidgetState extends State<OverviewWidget> {
               mainAxisSpacing: 8,
               childAspectRatio: 2.5,
             ),
-            itemCount: state.items.length,
+            itemCount: state.items.length + (state.hasMore ? 1 : 0),
             itemBuilder: (context, index) {
+              if (index >= state.items.length) {
+                return const Center(child: CircularProgressIndicator());
+              }
               final item = state.items[index];
               return GestureDetector(
                 onTap: () => _onItemTapped(item),
@@ -170,6 +207,41 @@ class OverviewWidgetState extends State<OverviewWidget> {
         ),
       ],
     );
+  }
+}
+
+/// Dominant signal type derived from score breakdown.
+enum SignalType { trend, sideways, gain }
+
+/// Returns the dominant signal for an [OverviewItem].
+SignalType dominantSignal(OverviewItem item) {
+  final entries = {
+    SignalType.trend: item.trendScore,
+    SignalType.sideways: item.sidewaysScore,
+    SignalType.gain: item.gainScore,
+  };
+  return entries.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+}
+
+Color _signalColor(SignalType signal) {
+  switch (signal) {
+    case SignalType.trend:
+      return Colors.blue;
+    case SignalType.gain:
+      return Colors.green;
+    case SignalType.sideways:
+      return Colors.orange;
+  }
+}
+
+String _signalLabel(SignalType signal) {
+  switch (signal) {
+    case SignalType.trend:
+      return 'TREND';
+    case SignalType.gain:
+      return 'GAIN';
+    case SignalType.sideways:
+      return 'SIDEWAYS';
   }
 }
 
@@ -208,6 +280,12 @@ class _OverviewGridItem extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (_hasScores(item))
+                  Positioned(
+                    right: pad + 4,
+                    top: pad,
+                    child: _buildBadge(item, fontSize),
+                  ),
               ],
             );
           },
@@ -221,6 +299,32 @@ class _OverviewGridItem extends StatelessWidget {
     return CustomPaint(
       painter: SparklineRenderer(points),
       size: Size.infinite,
+    );
+  }
+
+  bool _hasScores(OverviewItem item) {
+    return item.trendScore != 0 ||
+        item.sidewaysScore != 0 ||
+        item.gainScore != 0;
+  }
+
+  Widget _buildBadge(OverviewItem item, double fontSize) {
+    final signal = dominantSignal(item);
+    final badgeFontSize = (fontSize * 0.7).clamp(7.0, 12.0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: _signalColor(signal).withAlpha((0.8 * 255).round()),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        _signalLabel(signal),
+        style: TextStyle(
+          fontSize: badgeFontSize,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
     );
   }
 }

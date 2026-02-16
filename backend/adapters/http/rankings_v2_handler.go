@@ -27,6 +27,7 @@ type rankingsV2Response struct {
 	PageSize   int                      `json:"pageSize"`
 	TotalItems int                      `json:"totalItems"`
 	TotalPages int                      `json:"totalPages"`
+	Precision  int                      `json:"precision"`
 	Results    []rankedResultV2Response `json:"results"`
 }
 
@@ -35,6 +36,7 @@ type rankedResultV2Response struct {
 	TotalScore float64            `json:"totalScore"`
 	Scores     map[string]float64 `json:"scores"`
 	Volume     float64            `json:"volume"`
+	Sparkline  []float64          `json:"sparkline"`
 }
 
 func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +100,13 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			TotalScore: r.TotalScore,
 			Scores:     r.Scores,
 			Volume:     r.Volume,
+			Sparkline:  r.Sparkline,
 		})
+	}
+
+	precision := 0
+	if len(results) > 0 && len(results[0].Sparkline) > 0 {
+		precision = len(results[0].Sparkline)
 	}
 
 	resp := rankingsV2Response{
@@ -108,6 +116,7 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		PageSize:   pageSize,
 		TotalItems: totalItems,
 		TotalPages: totalPages,
+		Precision:  precision,
 		Results:    respResults,
 	}
 

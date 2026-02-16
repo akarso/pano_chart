@@ -2,11 +2,19 @@
 class OverviewItem {
   final String symbol;
   final double totalScore;
+  final double trendScore;
+  final double sidewaysScore;
+  final double gainScore;
+  final double volume;
   final List<double> sparkline;
 
   const OverviewItem({
     required this.symbol,
     this.totalScore = 0.0,
+    this.trendScore = 0.0,
+    this.sidewaysScore = 0.0,
+    this.gainScore = 0.0,
+    this.volume = 0.0,
     this.sparkline = const [],
   });
 }

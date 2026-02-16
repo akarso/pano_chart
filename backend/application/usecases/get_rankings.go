@@ -55,6 +55,7 @@ type RankedResult struct {
 	TotalScore float64
 	Scores     map[string]float64
 	Volume     float64
+	Sparkline  []float64
 }
 
 // GetRankings computes full ranked results for the universe.
@@ -65,6 +66,7 @@ type GetRankings struct {
 	ranker     RankSymbols
 	volumes    VolumeProvider
 	candleRepo ports.CandleRepositoryPort
+	precision  int
 
 	exchangeInfoURL string
 	tickerURL       string
@@ -77,12 +79,17 @@ func NewGetRankings(
 	volumes VolumeProvider,
 	candleRepo ports.CandleRepositoryPort,
 	exchangeInfoURL, tickerURL string,
+	precision int,
 ) *GetRankings {
+	if precision <= 0 {
+		precision = 30
+	}
 	return &GetRankings{
 		universe:        universe,
 		ranker:          ranker,
 		volumes:         volumes,
 		candleRepo:      candleRepo,
+		precision:       precision,
 		exchangeInfoURL: exchangeInfoURL,
 		tickerURL:       tickerURL,
 	}
@@ -121,15 +128,28 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 		return nil, fmt.Errorf("ranking failed: %w", err)
 	}
 
-	// 5. Build results with volume annotation
+	// 5. Build results with volume annotation and sparkline
 	results := make([]RankedResult, 0, len(ranked))
 	for _, r := range ranked {
 		vol := volMap[r.Symbol.String()]
+
+		// Fetch sparkline candles
+		var sparkline []float64
+		spSeries, spErr := g.candleRepo.GetLastNCandles(r.Symbol, req.Timeframe, g.precision)
+		if spErr == nil {
+			all := spSeries.All()
+			sparkline = make([]float64, len(all))
+			for k, c := range all {
+				sparkline[k] = c.Close()
+			}
+		}
+
 		results = append(results, RankedResult{
 			Symbol:     r.Symbol,
 			TotalScore: r.TotalScore,
 			Scores:     r.Scores,
 			Volume:     vol,
+			Sparkline:  sparkline,
 		})
 	}
 

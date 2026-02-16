@@ -75,12 +75,18 @@ void main() {
       return http.Response(
         jsonEncode({
           'timeframe': '1h',
-          'count': 1,
+          'sort': 'total',
+          'page': 1,
+          'pageSize': 30,
+          'totalItems': 1,
+          'totalPages': 1,
           'precision': 30,
           'results': [
             {
               'symbol': 'BTCUSDT',
               'totalScore': 2.75,
+              'scores': {'trend': 1.0, 'sideways': 0.5, 'gain': 1.25},
+              'volume': 100.0,
               'sparkline': [42000.0, 42100.0],
             },
           ],
@@ -96,11 +102,11 @@ void main() {
 
     expect(vm, isA<OverviewViewModel>());
 
-    // Exercise the full chain: vm → GetOverviewImpl → HttpOverviewApi → fake
+    // Exercise the full chain: vm → GetRankingsImpl → HttpRankingsApi → fake
     await vm.loadInitial('1h');
 
     expect(captured, isNotNull);
-    expect(captured!.url.path, '/api/overview');
+    expect(captured!.url.path, '/api/rankings');
     expect(vm.state.items.length, 1);
     expect(vm.state.items[0].symbol, 'BTCUSDT');
   });

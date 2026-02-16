@@ -1,13 +1,13 @@
 package rankings
 
 import (
-"context"
-"encoding/json"
-"fmt"
-"time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
 
-"pano_chart/backend/application/usecases"
-"pano_chart/backend/domain"
+	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/domain"
 )
 
 // RedisClient abstracts Redis operations needed by the cache decorator.
@@ -78,6 +78,7 @@ type cachedRankedResult struct {
 	TotalScore float64            `json:"totalScore"`
 	Scores     map[string]float64 `json:"scores"`
 	Volume     float64            `json:"volume"`
+	Sparkline  []float64          `json:"sparkline"`
 }
 
 func toCached(results []usecases.RankedResult) []cachedRankedResult {
@@ -88,6 +89,7 @@ func toCached(results []usecases.RankedResult) []cachedRankedResult {
 			TotalScore: r.TotalScore,
 			Scores:     r.Scores,
 			Volume:     r.Volume,
+			Sparkline:  r.Sparkline,
 		}
 	}
 	return out
@@ -105,6 +107,7 @@ func fromCached(items []cachedRankedResult) ([]usecases.RankedResult, error) {
 			TotalScore: c.TotalScore,
 			Scores:     c.Scores,
 			Volume:     c.Volume,
+			Sparkline:  c.Sparkline,
 		}
 	}
 	return out, nil

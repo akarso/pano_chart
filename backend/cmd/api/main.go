@@ -55,7 +55,7 @@ func main() {
 
 	// --- Dynamic Binance Universe and Volume Providers with Redis caching ---
 	binanceHTTP := http.DefaultClient
-	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, 50)
+	universe := symbol_universe.NewBinanceExchangeInfoUniverse(binanceHTTP, 153)
 	cachedUniverse := symbol_universe.NewRedisCachedSymbolUniverse(
 		universe, redisClient, 30*time.Minute, "symbol_universe:exchange_info",
 	)
@@ -157,6 +157,7 @@ func main() {
 		candleRepo,
 		exchangeInfoURL,
 		tickerURL,
+		sparklinePrecision,
 	)
 
 	// --- Rankings cache TTL ---
