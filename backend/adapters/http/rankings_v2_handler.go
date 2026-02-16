@@ -55,6 +55,9 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// --- Parse sort (optional, default "total", unknown → "total") ---
 	sortMode := usecases.ParseSortMode(r.URL.Query().Get("sort"))
 
+	// --- Parse sidewaysAlgo (optional, empty = use default) ---
+	sidewaysAlgo := usecases.ParseSidewaysAlgo(r.URL.Query().Get("sidewaysAlgo"))
+
 	// --- Parse page (optional, default 1, clamp >=1) ---
 	page := ParsePositiveIntOrDefault(r.URL.Query().Get("page"), 1)
 
@@ -66,8 +69,9 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// --- Execute use case ---
 	req := usecases.GetRankingsRequest{
-		Timeframe: tf,
-		Sort:      sortMode,
+		Timeframe:    tf,
+		Sort:         sortMode,
+		SidewaysAlgo: sidewaysAlgo,
 	}
 	results, err := h.useCase.Execute(r.Context(), req)
 	if err != nil {

@@ -91,7 +91,7 @@ Sort:      usecases.SortByTotal,
 }
 _, _ = cache.Execute(context.Background(), req)
 
-key := "rankings:1h:total"
+key := "rankings:1h:total:default"
 if _, ok := fr.store[key]; !ok {
 t.Errorf("expected value to be stored in redis at key %q", key)
 }
@@ -137,7 +137,7 @@ Sort:      usecases.SortByGain,
 }
 _, _ = cache.Execute(context.Background(), reqGain)
 
-keyGain := "rankings:4h:gain"
+keyGain := "rankings:4h:gain:default"
 if _, ok := fr.store[keyGain]; !ok {
 t.Errorf("expected cache key %q, but not found", keyGain)
 }
@@ -148,9 +148,39 @@ Sort:      usecases.SortByVolume,
 }
 _, _ = cache.Execute(context.Background(), reqVol)
 
-keyVol := "rankings:4h:volume"
+keyVol := "rankings:4h:volume:default"
 if _, ok := fr.store[keyVol]; !ok {
 t.Errorf("expected cache key %q, but not found", keyVol)
+}
+}
+
+func TestCacheKeyIncludesSidewaysAlgo(t *testing.T) {
+fr := &fakeRedis{store: map[string]string{}}
+uc := &fakeRankingsUC{result: sampleResults()}
+cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings")
+
+reqV2 := usecases.GetRankingsRequest{
+Timeframe:    domain.NewTimeframeUnsafe("1h"),
+Sort:         usecases.SortByTotal,
+SidewaysAlgo: usecases.SidewaysAlgoV2,
+}
+_, _ = cache.Execute(context.Background(), reqV2)
+
+keyV2 := "rankings:1h:total:v2"
+if _, ok := fr.store[keyV2]; !ok {
+t.Errorf("expected cache key %q, but not found", keyV2)
+}
+
+// Default algo request should produce a different key
+reqDefault := usecases.GetRankingsRequest{
+Timeframe: domain.NewTimeframeUnsafe("1h"),
+Sort:      usecases.SortByTotal,
+}
+_, _ = cache.Execute(context.Background(), reqDefault)
+
+keyDefault := "rankings:1h:total:default"
+if _, ok := fr.store[keyDefault]; !ok {
+t.Errorf("expected cache key %q, but not found", keyDefault)
 }
 }
 
@@ -188,7 +218,7 @@ _, err := cache.Execute(context.Background(), req)
 if err == nil {
 t.Fatal("expected error from next, got nil")
 }
-if _, ok := fr.store["rankings:1h:total"]; ok {
+if _, ok := fr.store["rankings:1h:total:default"]; ok {
 t.Error("should not cache when next returns an error")
 }
 }
@@ -209,7 +239,7 @@ t.Fatalf("unexpected error: %v", err)
 if len(results) != 0 {
 t.Errorf("expected 0 results, got %d", len(results))
 }
-key := "rankings:1d:total"
+key := "rankings:1d:total:default"
 if _, ok := fr.store[key]; !ok {
 t.Errorf("empty results should still be cached")
 }
@@ -251,7 +281,7 @@ if r0.Volume != 1000000 {
 t.Errorf("expected volume 1000000, got %f", r0.Volume)
 }
 
-key := "rankings:1h:total"
+key := "rankings:1h:total:default"
 raw := fr.store[key]
 var items []cachedRankedResult
 if err := json.Unmarshal([]byte(raw), &items); err != nil {

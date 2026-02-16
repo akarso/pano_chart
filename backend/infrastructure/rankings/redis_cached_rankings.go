@@ -69,7 +69,11 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 }
 
 func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
-	return fmt.Sprintf("%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort))
+	algo := string(req.SidewaysAlgo)
+	if algo == "" {
+		algo = "default"
+	}
+	return fmt.Sprintf("%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo)
 }
 
 // cachedRankedResult is the JSON-serialisable representation of RankedResult.

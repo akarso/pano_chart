@@ -64,9 +64,24 @@ func main() {
 		volumeProvider, redisClient, 2*time.Minute, "binance:24h_volume",
 	)
 
+	// --- Sideways algorithm selection ---
+	sidewaysAlgo := usecases.SidewaysAlgoMode(os.Getenv("SIDEWAYS_ALGO"))
+	if sidewaysAlgo == "" {
+		sidewaysAlgo = usecases.SidewaysAlgoV1 // default
+	}
+	var sidewaysCalc scoring.SymbolScoreCalculator
+	switch sidewaysAlgo {
+	case usecases.SidewaysAlgoV2:
+		sidewaysCalc = &scoring.SidewaysV2ScoreCalculator{}
+	default:
+		sidewaysAlgo = usecases.SidewaysAlgoV1
+		sidewaysCalc = &scoring.SidewaysConsistencyScoreCalculator{}
+	}
+	fmt.Printf("[main] Sideways algorithm: %s\n", sidewaysAlgo)
+
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
-		{Calculator: &scoring.SidewaysConsistencyScoreCalculator{}, Weight: 1.0},
+		{Calculator: sidewaysCalc, Weight: 1.0},
 		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
 		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
 	}
@@ -158,6 +173,8 @@ func main() {
 		exchangeInfoURL,
 		tickerURL,
 		sparklinePrecision,
+		sidewaysAlgo,
+		weights,
 	)
 
 	// --- Rankings cache TTL ---
