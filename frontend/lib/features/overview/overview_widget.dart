@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../candles/application/get_candle_series.dart';
@@ -52,8 +53,15 @@ class OverviewWidgetState extends State<OverviewWidget> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >=
-        _scrollController.position.maxScrollExtent - _scrollThreshold) {
+    _checkAndLoadMore();
+  }
+
+  /// Checks if scroll position is near the bottom (or content doesn't fill
+  /// the viewport) and triggers loading the next page if needed.
+  void _checkAndLoadMore() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.pixels >= pos.maxScrollExtent - _scrollThreshold) {
       if (!vm.state.isLoading && vm.state.hasMore) {
         vm.loadNext(_timeframe);
       }
@@ -136,6 +144,7 @@ class OverviewWidgetState extends State<OverviewWidget> {
 
     return Column(
       children: [
+        const SizedBox(height: 20),
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -148,7 +157,12 @@ class OverviewWidgetState extends State<OverviewWidget> {
                 items: const [1, 2, 3]
                     .map((c) => DropdownMenuItem(value: c, child: Text('$c')))
                     .toList(),
-                onChanged: (v) => setState(() => _columns = v ?? 2),
+                onChanged: (v) {
+                  setState(() => _columns = v ?? 2);
+                  SchedulerBinding.instance.addPostFrameCallback((_) {
+                    _checkAndLoadMore();
+                  });
+                },
               ),
               const SizedBox(width: 24),
               const Text('Timeframe:'),

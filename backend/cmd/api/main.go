@@ -44,12 +44,35 @@ func main() {
 	}
 	fmt.Printf("[main] Sparkline precision: %d\n", sparklinePrecision)
 
+	// --- Parse ranking worker count ---
+	rankingWorkers := 12 // default
+	if wStr := os.Getenv("RANKING_WORKERS"); wStr != "" {
+		if w, err := strconv.Atoi(wStr); err == nil && w > 0 {
+			if w > 64 {
+				w = 64 // clamp to sane max
+			}
+			rankingWorkers = w
+		}
+	}
+	fmt.Printf("[main] Ranking workers: %d\n", rankingWorkers)
+
+	// --- HTTP client with connection pooling for Binance API ---
+	binanceTransport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	binanceClient := &http.Client{
+		Transport: binanceTransport,
+		Timeout:   10 * time.Second,
+	}
+
 	// --- Redis client wiring ---
 	redisClient := symbol_universe.NewGoRedisClient(redisAddr)
 	redisAdapter := infra.NewRedisMinimalAdapter(redisClient)
 
 	// --- CandleRepository with Redis caching ---
-	baseRepo := infra.NewFreeTierCandleRepository(binanceBase, nil)
+	baseRepo := infra.NewFreeTierCandleRepository(binanceBase, binanceClient)
 	cacheTTL := 5 * time.Minute
 	candleRepo := infra.NewRedisCandleRepository(redisAdapter, baseRepo, cacheTTL)
 
@@ -175,6 +198,7 @@ func main() {
 		sparklinePrecision,
 		sidewaysAlgo,
 		weights,
+		rankingWorkers,
 	)
 
 	// --- Rankings cache TTL ---

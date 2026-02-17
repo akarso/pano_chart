@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"sort"
 
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
+
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
@@ -82,13 +85,14 @@ type RankedResult struct {
 // It fetches universe, volumes, candle series for each symbol, scores them,
 // and sorts by the requested mode.
 type GetRankings struct {
-	universe       SymbolUniverseProvider
-	ranker         RankSymbols
-	volumes        VolumeProvider
-	candleRepo     ports.CandleRepositoryPort
-	precision      int
-	defaultAlgo    SidewaysAlgoMode
-	weights        []ScoreWeight
+	universe    SymbolUniverseProvider
+	ranker      RankSymbols
+	volumes     VolumeProvider
+	candleRepo  ports.CandleRepositoryPort
+	precision   int
+	defaultAlgo SidewaysAlgoMode
+	weights     []ScoreWeight
+	workerLimit int64
 
 	exchangeInfoURL string
 	tickerURL       string
@@ -104,12 +108,17 @@ func NewGetRankings(
 	precision int,
 	defaultAlgo SidewaysAlgoMode,
 	weights []ScoreWeight,
+	workerLimit int,
 ) *GetRankings {
 	if precision <= 0 {
 		precision = 30
 	}
 	if defaultAlgo == "" {
 		defaultAlgo = SidewaysAlgoV1
+	}
+	wl := int64(workerLimit)
+	if wl <= 0 {
+		wl = 12
 	}
 	return &GetRankings{
 		universe:        universe,
@@ -119,6 +128,7 @@ func NewGetRankings(
 		precision:       precision,
 		defaultAlgo:     defaultAlgo,
 		weights:         weights,
+		workerLimit:     wl,
 		exchangeInfoURL: exchangeInfoURL,
 		tickerURL:       tickerURL,
 	}
@@ -141,49 +151,84 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 		return nil, fmt.Errorf("volume fetch failed: %w", err)
 	}
 
-	// 3. Build candle series for all symbols using GetLastNCandles
-	//    (GetSeries with zero times produces invalid Binance URLs)
-	series := make(map[domain.Symbol]domain.CandleSeries)
-	for _, sym := range symbols {
-		cs, err := g.candleRepo.GetLastNCandles(sym, req.Timeframe, g.precision)
-		if err != nil {
-			continue // skip symbols with fetch errors
-		}
-		series[sym] = cs
-	}
-
-	// 4. Score all symbols using the ranker (optionally with algo override)
+	// 3. Fetch candles + score each symbol in a bounded worker pool.
+	//    Each worker fetches candles and scores the symbol independently.
+	//    Results are written by index — no mutex needed for the slice.
 	ranker := g.rankerForAlgo(req.SidewaysAlgo)
-	ranked, err := ranker.Rank(series)
-	if err != nil {
-		return nil, fmt.Errorf("ranking failed: %w", err)
+	type fetchResult struct {
+		symbol    domain.Symbol
+		series    domain.CandleSeries
+		ranked    RankedSymbol
+		hasSeries bool
 	}
 
-	// 5. Build results with volume annotation and sparkline (reuse series from step 3)
-	results := make([]RankedResult, 0, len(ranked))
-	for _, r := range ranked {
-		vol := volMap[r.Symbol.String()]
+	sem := semaphore.NewWeighted(g.workerLimit)
+	grp, gCtx := errgroup.WithContext(ctx)
+
+	fetchResults := make([]fetchResult, len(symbols))
+	for i, sym := range symbols {
+		i, sym := i, sym
+
+		if err := sem.Acquire(gCtx, 1); err != nil {
+			break // context cancelled
+		}
+
+		grp.Go(func() error {
+			defer sem.Release(1)
+
+			cs, err := g.candleRepo.GetLastNCandles(sym, req.Timeframe, g.precision)
+			if err != nil {
+				return nil // skip symbols with fetch errors (partial failure tolerance)
+			}
+
+			// Score inline — avoids building a full map and re-iterating.
+			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
+			ranked, err := ranker.Rank(singleSeries)
+			if err != nil || len(ranked) == 0 {
+				return nil // skip on scoring error
+			}
+
+			fetchResults[i] = fetchResult{
+				symbol:    sym,
+				series:    cs,
+				ranked:    ranked[0],
+				hasSeries: true,
+			}
+			return nil
+		})
+	}
+
+	if err := grp.Wait(); err != nil {
+		return nil, fmt.Errorf("parallel fetch+score failed: %w", err)
+	}
+
+	// 4. Build results with volume annotation and sparkline.
+	//    Collect only successful results (partial failure tolerance).
+	results := make([]RankedResult, 0, len(symbols))
+	for _, fr := range fetchResults {
+		if !fr.hasSeries {
+			continue
+		}
+
+		vol := volMap[fr.symbol.String()]
 
 		// Extract sparkline from already-fetched series
-		var sparkline []float64
-		if cs, ok := series[r.Symbol]; ok {
-			all := cs.All()
-			sparkline = make([]float64, len(all))
-			for k, c := range all {
-				sparkline[k] = c.Close()
-			}
+		all := fr.series.All()
+		sparkline := make([]float64, len(all))
+		for k, c := range all {
+			sparkline[k] = c.Close()
 		}
 
 		results = append(results, RankedResult{
-			Symbol:     r.Symbol,
-			TotalScore: r.TotalScore,
-			Scores:     r.Scores,
+			Symbol:     fr.ranked.Symbol,
+			TotalScore: fr.ranked.TotalScore,
+			Scores:     fr.ranked.Scores,
 			Volume:     vol,
 			Sparkline:  sparkline,
 		})
 	}
 
-	// 6. Sort by requested mode (deterministic: metric desc, symbol asc)
+	// 5. Sort by requested mode (deterministic: metric desc, symbol asc)
 	sortResults(results, req.Sort)
 
 	return results, nil

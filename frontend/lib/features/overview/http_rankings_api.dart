@@ -24,7 +24,7 @@ class HttpRankingsApi implements RankingsApi {
     required int pageSize,
   }) async {
     final uri = Uri.parse(
-      '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize',
+      '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=v2',
     );
 
     final response = await client.get(uri);
