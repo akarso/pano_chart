@@ -20,6 +20,7 @@ class _FakeGetOverview extends GetOverview {
     required int page,
     required String sort,
     String? snapshot,
+    String sidewaysAlgo = 'v2',
   }) async {
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;
@@ -84,8 +85,8 @@ void main() {
     await tester.pumpWidget(_wrap(widget));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('BTCUSDT'), findsOneWidget);
-    expect(find.textContaining('ETHUSD'), findsOneWidget);
+    expect(find.textContaining('BTC'), findsOneWidget);
+    expect(find.textContaining('ETH'), findsOneWidget);
   });
 
   testWidgets('OverviewScreen_handlesEmptySparkline',

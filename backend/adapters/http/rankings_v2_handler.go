@@ -32,11 +32,18 @@ type rankingsV2Response struct {
 }
 
 type rankedResultV2Response struct {
-	Symbol     string             `json:"symbol"`
-	TotalScore float64            `json:"totalScore"`
-	Scores     map[string]float64 `json:"scores"`
-	Volume     float64            `json:"volume"`
-	Sparkline  []float64          `json:"sparkline"`
+	Symbol             string             `json:"symbol"`
+	TotalScore         float64            `json:"totalScore"`
+	Percentile         float64            `json:"percentile"`
+	Scores             map[string]float64 `json:"scores"`
+	Volume             float64            `json:"volume"`
+	Sparkline          []float64          `json:"sparkline"`
+	TrendPercentile    float64            `json:"trendPercentile"`
+	SidewaysPercentile float64            `json:"sidewaysPercentile"`
+	GainPercentile     float64            `json:"gainPercentile"`
+	MaxPercentile      float64            `json:"maxPercentile"`
+	DominantComponent  string             `json:"dominantComponent"`
+	BadgeComponent     string             `json:"badgeComponent"`
 }
 
 func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,11 +107,18 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	respResults := make([]rankedResultV2Response, 0, len(pageSlice))
 	for _, r := range pageSlice {
 		respResults = append(respResults, rankedResultV2Response{
-			Symbol:     r.Symbol.String(),
-			TotalScore: r.TotalScore,
-			Scores:     r.Scores,
-			Volume:     r.Volume,
-			Sparkline:  r.Sparkline,
+			Symbol:             r.Symbol.String(),
+			TotalScore:         r.TotalScore,
+			Percentile:         r.Percentile,
+			Scores:             r.Scores,
+			Volume:             r.Volume,
+			Sparkline:          r.Sparkline,
+			TrendPercentile:    r.TrendPercentile,
+			SidewaysPercentile: r.SidewaysPercentile,
+			GainPercentile:     r.GainPercentile,
+			MaxPercentile:      r.MaxPercentile,
+			DominantComponent:  r.DominantComponent,
+			BadgeComponent:     r.BadgeComponent,
 		})
 	}
 

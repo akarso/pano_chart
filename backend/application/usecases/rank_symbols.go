@@ -1,10 +1,10 @@
 package usecases
 
 import (
+	"fmt"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
 	"sort"
-	"fmt"
 )
 
 // RankSymbols ranks symbols based on configured scoring strategies.
@@ -36,7 +36,8 @@ func (r *DefaultRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) 
 	if len(series) == 0 {
 		return nil, nil
 	}
-	var result []RankedSymbol
+
+	result := make([]RankedSymbol, 0, len(series))
 	for symbol, candles := range series {
 		scores := make(map[string]float64)
 		total := 0.0
@@ -57,6 +58,7 @@ func (r *DefaultRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) 
 			TotalScore: total,
 		})
 	}
+
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].TotalScore == result[j].TotalScore {
 			return result[i].Symbol.String() < result[j].Symbol.String()

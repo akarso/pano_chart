@@ -78,22 +78,36 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 
 // cachedRankedResult is the JSON-serialisable representation of RankedResult.
 type cachedRankedResult struct {
-	Symbol     string             `json:"symbol"`
-	TotalScore float64            `json:"totalScore"`
-	Scores     map[string]float64 `json:"scores"`
-	Volume     float64            `json:"volume"`
-	Sparkline  []float64          `json:"sparkline"`
+	Symbol             string             `json:"symbol"`
+	TotalScore         float64            `json:"totalScore"`
+	Percentile         float64            `json:"percentile"`
+	Scores             map[string]float64 `json:"scores"`
+	Volume             float64            `json:"volume"`
+	Sparkline          []float64          `json:"sparkline"`
+	TrendPercentile    float64            `json:"trendPercentile"`
+	SidewaysPercentile float64            `json:"sidewaysPercentile"`
+	GainPercentile     float64            `json:"gainPercentile"`
+	MaxPercentile      float64            `json:"maxPercentile"`
+	DominantComponent  string             `json:"dominantComponent"`
+	BadgeComponent     string             `json:"badgeComponent"`
 }
 
 func toCached(results []usecases.RankedResult) []cachedRankedResult {
 	out := make([]cachedRankedResult, len(results))
 	for i, r := range results {
 		out[i] = cachedRankedResult{
-			Symbol:     r.Symbol.String(),
-			TotalScore: r.TotalScore,
-			Scores:     r.Scores,
-			Volume:     r.Volume,
-			Sparkline:  r.Sparkline,
+			Symbol:             r.Symbol.String(),
+			TotalScore:         r.TotalScore,
+			Percentile:         r.Percentile,
+			Scores:             r.Scores,
+			Volume:             r.Volume,
+			Sparkline:          r.Sparkline,
+			TrendPercentile:    r.TrendPercentile,
+			SidewaysPercentile: r.SidewaysPercentile,
+			GainPercentile:     r.GainPercentile,
+			MaxPercentile:      r.MaxPercentile,
+			DominantComponent:  r.DominantComponent,
+			BadgeComponent:     r.BadgeComponent,
 		}
 	}
 	return out
@@ -107,11 +121,18 @@ func fromCached(items []cachedRankedResult) ([]usecases.RankedResult, error) {
 			return nil, fmt.Errorf("invalid cached symbol %q: %w", c.Symbol, err)
 		}
 		out[i] = usecases.RankedResult{
-			Symbol:     sym,
-			TotalScore: c.TotalScore,
-			Scores:     c.Scores,
-			Volume:     c.Volume,
-			Sparkline:  c.Sparkline,
+			Symbol:             sym,
+			TotalScore:         c.TotalScore,
+			Percentile:         c.Percentile,
+			Scores:             c.Scores,
+			Volume:             c.Volume,
+			Sparkline:          c.Sparkline,
+			TrendPercentile:    c.TrendPercentile,
+			SidewaysPercentile: c.SidewaysPercentile,
+			GainPercentile:     c.GainPercentile,
+			MaxPercentile:      c.MaxPercentile,
+			DominantComponent:  c.DominantComponent,
+			BadgeComponent:     c.BadgeComponent,
 		}
 	}
 	return out, nil

@@ -23,5 +23,6 @@ abstract class GetOverview {
     required int page,
     required String sort,
     String? snapshot,
+    String sidewaysAlgo = 'v2',
   });
 }

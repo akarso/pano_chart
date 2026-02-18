@@ -35,6 +35,7 @@ class OverviewViewModel {
         timeframe: timeframe,
         page: 1,
         sort: _state.sort,
+        sidewaysAlgo: _state.sidewaysAlgo,
       );
 
       if (currentGen != _generation) return;
@@ -46,6 +47,37 @@ class OverviewViewModel {
           page: 1,
           hasMore: result.hasMore,
           snapshot: result.snapshot,
+        ),
+      );
+    } catch (e) {
+      if (currentGen != _generation) return;
+      _setState(_state.copyWith(isLoading: false, error: e.toString()));
+    }
+  }
+
+  /// Refreshes the current data without clearing existing items.
+  /// Used by pull-to-refresh so the grid stays visible during reload.
+  Future<void> refresh(String timeframe) async {
+    final currentGen = ++_generation;
+
+    try {
+      final result = await _getOverview(
+        timeframe: timeframe,
+        page: 1,
+        sort: _state.sort,
+        sidewaysAlgo: _state.sidewaysAlgo,
+      );
+
+      if (currentGen != _generation) return;
+
+      _setState(
+        _state.copyWith(
+          isLoading: false,
+          items: result.items,
+          page: 1,
+          hasMore: result.hasMore,
+          snapshot: result.snapshot,
+          error: null,
         ),
       );
     } catch (e) {
@@ -67,6 +99,7 @@ class OverviewViewModel {
         page: _state.page + 1,
         sort: _state.sort,
         snapshot: _state.snapshot,
+        sidewaysAlgo: _state.sidewaysAlgo,
       );
 
       if (currentGen != _generation) return;
@@ -90,7 +123,24 @@ class OverviewViewModel {
 
     _generation++;
 
-    _state = OverviewState.initial().copyWith(sort: newSort);
+    _state = OverviewState.initial().copyWith(
+      sort: newSort,
+      sidewaysAlgo: _state.sidewaysAlgo,
+    );
+    onChanged?.call();
+
+    loadInitial(timeframe);
+  }
+
+  void changeSidewaysAlgo(String algo, String timeframe) {
+    if (algo == _state.sidewaysAlgo) return;
+
+    _generation++;
+
+    _state = OverviewState.initial().copyWith(
+      sort: _state.sort,
+      sidewaysAlgo: algo,
+    );
     onChanged?.call();
 
     loadInitial(timeframe);

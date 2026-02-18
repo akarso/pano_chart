@@ -17,6 +17,7 @@ class GetOverviewImpl implements GetOverview {
     required int page,
     required String sort,
     String? snapshot,
+    String sidewaysAlgo = 'v2',
   }) async {
     final dto = await api.fetchOverview(
       timeframe: timeframe,

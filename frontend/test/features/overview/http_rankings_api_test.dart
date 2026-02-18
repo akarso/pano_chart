@@ -53,7 +53,7 @@ void main() {
             {
               'symbol': 'BTCUSDT',
               'totalScore': 2.75,
-              'scores': {'trend': 1.0, 'sideways': 0.5, 'gain': 1.25},
+              'scores': {'Trend Predictability': 1.0, 'Sideways Consistency': 0.5, 'Gain/Loss': 1.25},
               'volume': 5000.0,
               'sparkline': [42000.0, 42100.0],
             },

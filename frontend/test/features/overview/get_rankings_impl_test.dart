@@ -20,6 +20,7 @@ void main() {
           scores: RankingScoresDto(trend: 1.0, sideways: 0.5, gain: 1.25),
           volume: 5000.0,
           sparkline: [42000.0, 42100.0],
+          badgeComponent: 'trend',
         ),
         RankingItemDto(
           symbol: 'ETHUSDT',
@@ -27,6 +28,7 @@ void main() {
           scores: RankingScoresDto(trend: -0.5, sideways: 0.2, gain: -1.2),
           volume: 2000.0,
           sparkline: [3200.0],
+          badgeComponent: '',
         ),
       ],
     ));
@@ -42,9 +44,11 @@ void main() {
     expect(result.items[0].gainScore, 1.25);
     expect(result.items[0].volume, 5000.0);
     expect(result.items[0].sparkline, [42000.0, 42100.0]);
+    expect(result.items[0].badgeComponent, 'trend');
 
     expect(result.items[1].symbol, 'ETHUSDT');
     expect(result.items[1].trendScore, -0.5);
+    expect(result.items[1].badgeComponent, '');
   });
 
   test('GetRankingsImpl_hasMoreWhenPageLessThanTotalPages', () async {
@@ -121,6 +125,7 @@ class _FakeRankingsApi implements RankingsApi {
     required String sort,
     required int page,
     required int pageSize,
+    String sidewaysAlgo = 'v2',
   }) async {
     capturedTimeframe = timeframe;
     capturedSort = sort;

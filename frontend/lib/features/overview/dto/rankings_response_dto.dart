@@ -12,9 +12,9 @@ class RankingScoresDto {
 
   factory RankingScoresDto.fromJson(Map<String, dynamic> json) {
     return RankingScoresDto(
-      trend: (json['trend'] as num?)?.toDouble() ?? 0.0,
-      sideways: (json['sideways'] as num?)?.toDouble() ?? 0.0,
-      gain: (json['gain'] as num?)?.toDouble() ?? 0.0,
+      trend: (json['Trend Predictability'] as num?)?.toDouble() ?? 0.0,
+      sideways: (json['Sideways Consistency'] as num?)?.toDouble() ?? 0.0,
+      gain: (json['Gain/Loss'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
@@ -26,6 +26,7 @@ class RankingItemDto {
   final RankingScoresDto scores;
   final double volume;
   final List<double> sparkline;
+  final String badgeComponent;
 
   const RankingItemDto({
     required this.symbol,
@@ -33,6 +34,7 @@ class RankingItemDto {
     required this.scores,
     required this.volume,
     required this.sparkline,
+    required this.badgeComponent,
   });
 
   factory RankingItemDto.fromJson(Map<String, dynamic> json) {
@@ -46,6 +48,7 @@ class RankingItemDto {
               ?.map((e) => (e as num).toDouble())
               .toList() ??
           const [],
+      badgeComponent: json['badgeComponent'] as String? ?? '',
     );
   }
 }

@@ -15,14 +15,15 @@ void main() {
         {
           'symbol': 'BTCUSDT',
           'totalScore': 2.75,
-          'scores': {'trend': 1.0, 'sideways': 0.5, 'gain': 1.25},
+          'scores': {'Trend Predictability': 1.0, 'Sideways Consistency': 0.5, 'Gain/Loss': 1.25},
           'volume': 5000000.0,
           'sparkline': [42000.0, 42100.0, 41900.0],
+          'badgeComponent': 'trend',
         },
         {
           'symbol': 'ETHUSDT',
           'totalScore': -1.5,
-          'scores': {'trend': -0.5, 'sideways': 0.2, 'gain': -1.2},
+          'scores': {'Trend Predictability': -0.5, 'Sideways Consistency': 0.2, 'Gain/Loss': -1.2},
           'volume': 2000000.0,
           'sparkline': [3200.0, 3180.0],
         },
@@ -47,11 +48,13 @@ void main() {
     expect(dto.results[0].scores.gain, 1.25);
     expect(dto.results[0].volume, 5000000.0);
     expect(dto.results[0].sparkline, [42000.0, 42100.0, 41900.0]);
+    expect(dto.results[0].badgeComponent, 'trend');
 
     expect(dto.results[1].symbol, 'ETHUSDT');
     expect(dto.results[1].totalScore, -1.5);
     expect(dto.results[1].scores.trend, -0.5);
     expect(dto.results[1].sparkline, [3200.0, 3180.0]);
+    expect(dto.results[1].badgeComponent, '');
   });
 
   test('RankingItemDto_handlesMissingScoresAndSparkline', () {
@@ -70,6 +73,7 @@ void main() {
     expect(dto.scores.gain, 0.0);
     expect(dto.volume, 100.0);
     expect(dto.sparkline, isEmpty);
+    expect(dto.badgeComponent, '');
   });
 
   test('RankingsResponseDto_handlesEmptyResults', () {

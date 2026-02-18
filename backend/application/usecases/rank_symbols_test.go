@@ -10,7 +10,7 @@ type stubCalculator struct {
 	value float64
 }
 
-func (s *stubCalculator) Name() string                 { return s.name }
+func (s *stubCalculator) Name() string                               { return s.name }
 func (s *stubCalculator) Score(domain.CandleSeries) (float64, error) { return s.value, nil }
 
 func makeSymbol(name string) domain.Symbol {
@@ -38,6 +38,7 @@ func TestRankSymbols_SingleCalculatorUniformWeight(t *testing.T) {
 	if len(res) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(res))
 	}
+	// Raw score = 1.0 * weight 1.0 = 1.0
 	for _, r := range res {
 		if r.TotalScore != 1.0 {
 			t.Errorf("expected total score 1.0, got %v", r.TotalScore)
@@ -60,6 +61,7 @@ func TestRankSymbols_MultipleCalculatorsDifferentWeights(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// Total = 2.0*0.5 + 1.0*2.0 = 3.0
 	exp := 2.0*0.5 + 1.0*2.0
 	if res[0].TotalScore != exp {
 		t.Errorf("expected %v, got %v", exp, res[0].TotalScore)
@@ -78,8 +80,9 @@ func TestRankSymbols_ConflictingScores(t *testing.T) {
 		makeSymbol("A"): makeSeries(),
 	}
 	res, _ := ranker.Rank(series)
-	if res[0].TotalScore != 0 {
-		t.Errorf("expected 0, got %v", res[0].TotalScore)
+	// Total = 1.0*1.0 + (-1.0)*1.0 = 0.0
+	if res[0].TotalScore != 0.0 {
+		t.Errorf("expected 0.0, got %v", res[0].TotalScore)
 	}
 }
 

@@ -29,6 +29,7 @@ class _FakeGetOverview extends GetOverview {
     required int page,
     required String sort,
     String? snapshot,
+    String sidewaysAlgo = 'v2',
   }) async {
     // Capture the call index at invocation time (before any awaits).
     final callIdx = calls.length;
@@ -37,6 +38,7 @@ class _FakeGetOverview extends GetOverview {
       'page': page,
       'sort': sort,
       'snapshot': snapshot,
+      'sidewaysAlgo': sidewaysAlgo,
     });
 
     // If a gate was registered for this call index, wait on it.

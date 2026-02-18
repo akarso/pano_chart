@@ -7,6 +7,7 @@ class OverviewItem {
   final double gainScore;
   final double volume;
   final List<double> sparkline;
+  final String badgeComponent;
 
   const OverviewItem({
     required this.symbol,
@@ -16,6 +17,7 @@ class OverviewItem {
     this.gainScore = 0.0,
     this.volume = 0.0,
     this.sparkline = const [],
+    this.badgeComponent = '',
   });
 }
 
@@ -26,6 +28,7 @@ class OverviewState {
   final int page;
   final bool hasMore;
   final String sort;
+  final String sidewaysAlgo;
   final String? snapshot;
   final String? error;
 
@@ -35,6 +38,7 @@ class OverviewState {
     required this.page,
     required this.hasMore,
     required this.sort,
+    this.sidewaysAlgo = 'v2',
     required this.snapshot,
     required this.error,
   });
@@ -55,6 +59,7 @@ class OverviewState {
     int? page,
     bool? hasMore,
     String? sort,
+    String? sidewaysAlgo,
     String? snapshot,
     String? error,
   }) {
@@ -64,6 +69,7 @@ class OverviewState {
       page: page ?? this.page,
       hasMore: hasMore ?? this.hasMore,
       sort: sort ?? this.sort,
+      sidewaysAlgo: sidewaysAlgo ?? this.sidewaysAlgo,
       snapshot: snapshot ?? this.snapshot,
       error: error,
     );

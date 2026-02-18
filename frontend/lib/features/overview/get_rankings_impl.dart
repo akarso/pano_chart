@@ -17,12 +17,14 @@ class GetRankingsImpl implements GetOverview {
     required int page,
     required String sort,
     String? snapshot,
+    String sidewaysAlgo = 'v2',
   }) async {
     final dto = await api.fetchRankings(
       timeframe: timeframe,
       sort: sort,
       page: page,
       pageSize: pageSize,
+      sidewaysAlgo: sidewaysAlgo,
     );
 
     final items = dto.results
@@ -34,6 +36,7 @@ class GetRankingsImpl implements GetOverview {
               gainScore: e.scores.gain,
               volume: e.volume,
               sparkline: e.sparkline,
+              badgeComponent: e.badgeComponent,
             ))
         .toList();
 

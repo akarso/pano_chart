@@ -30,6 +30,7 @@ type rankingsResponse struct {
 type rankedSymbolResponse struct {
 	Symbol     string             `json:"symbol"`
 	TotalScore float64            `json:"totalScore"`
+	Percentile float64            `json:"percentile"`
 	Scores     map[string]float64 `json:"scores"`
 }
 

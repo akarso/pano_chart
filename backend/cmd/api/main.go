@@ -45,7 +45,7 @@ func main() {
 	fmt.Printf("[main] Sparkline precision: %d\n", sparklinePrecision)
 
 	// --- Parse ranking worker count ---
-	rankingWorkers := 12 // default
+	rankingWorkers := 20 // default
 	if wStr := os.Getenv("RANKING_WORKERS"); wStr != "" {
 		if w, err := strconv.Atoi(wStr); err == nil && w > 0 {
 			if w > 64 {
@@ -59,7 +59,7 @@ func main() {
 	// --- HTTP client with connection pooling for Binance API ---
 	binanceTransport := &http.Transport{
 		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
+		MaxIdleConnsPerHost: 50,
 		IdleConnTimeout:     90 * time.Second,
 	}
 	binanceClient := &http.Client{

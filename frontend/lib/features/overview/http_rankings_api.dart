@@ -22,9 +22,10 @@ class HttpRankingsApi implements RankingsApi {
     required String sort,
     required int page,
     required int pageSize,
+    String sidewaysAlgo = 'v2',
   }) async {
     final uri = Uri.parse(
-      '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=v2',
+      '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=$sidewaysAlgo',
     );
 
     final response = await client.get(uri);
