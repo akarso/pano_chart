@@ -179,3 +179,187 @@ func TestSidewaysV2_NoisePenalty(t *testing.T) {
 		t.Errorf("score %v out of [0,1]", score)
 	}
 }
+
+// --- SidewaysV3 tests ---
+
+// makeOHLCSeries creates a CandleSeries with explicit open/high/low/close per candle.
+// Each element is [open, high, low, close].
+func makeOHLCSeries(ohlc [][4]float64) domain.CandleSeries {
+	sym := domain.NewSymbolUnsafe("TEST")
+	tf := domain.NewTimeframeUnsafe("1h")
+	candles := make([]domain.Candle, len(ohlc))
+	for i, v := range ohlc {
+		candles[i] = domain.NewCandleUnsafe(sym, tf,
+			time.Date(2024, 1, 1, i, 0, 0, 0, time.UTC),
+			v[0], v[1], v[2], v[3], 1)
+	}
+	series, _ := domain.NewCandleSeries(sym, tf, candles)
+	return series
+}
+
+// channelOHLC generates n candles oscillating between lo and hi with
+// distinct high/low wicks, creating a clean channel structure.
+func channelOHLC(n int, lo, hi float64) [][4]float64 {
+	mid := (lo + hi) / 2
+	ohlc := make([][4]float64, n)
+	for i := 0; i < n; i++ {
+		var close float64
+		switch i % 4 {
+		case 0:
+			close = hi // touch upper
+		case 2:
+			close = lo // touch lower
+		default:
+			close = mid
+		}
+		open := mid
+		high := close + (hi-lo)*0.02 // small wick above close
+		low := close - (hi-lo)*0.02  // small wick below close
+		// Ensure high >= all, low <= all
+		if high < open {
+			high = open + (hi-lo)*0.02
+		}
+		if low > open {
+			low = open - (hi-lo)*0.02
+		}
+		ohlc[i] = [4]float64{open, high, low, close}
+	}
+	return ohlc
+}
+
+func TestSidewaysV3_Name(t *testing.T) {
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	if calc.Name() != "Sideways Consistency" {
+		t.Errorf("expected 'Sideways Consistency', got %q", calc.Name())
+	}
+}
+
+func TestSidewaysV3_TooFewCandles(t *testing.T) {
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	series := makeSeries([]float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	_, err := calc.Score(series)
+	if err == nil {
+		t.Fatal("expected error for <20 candles")
+	}
+}
+
+func TestSidewaysV3_FlatLine(t *testing.T) {
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	flat := make([]float64, 30)
+	for i := range flat {
+		flat[i] = 100
+	}
+	series := makeSeries(flat)
+	score, _ := calc.Score(series)
+	if score != 0 {
+		t.Errorf("expected 0 for flat line (H=0), got %v", score)
+	}
+}
+
+func TestSidewaysV3_CleanChannel(t *testing.T) {
+	// 40-candle oscillation between 97 and 103 around 100.
+	// Use a permissive config so range score doesn't dominate.
+	cfg := SidewaysV3Config{RMin: 0.01, RMax: 0.12}
+	calc := &SidewaysV3ScoreCalculator{Config: cfg}
+	// Build channel with period 4: hi, mid, lo, mid — so first and last
+	// candle close at the same value (both index 0%4=0 → hi), minimising drift.
+	// ohlc = ohlc[:len(ohlc)-1] // removed: value never used
+	// Actually use 40 candles starting and ending at mid:
+	ohlc := channelOHLC(42, 97, 103) // index 0→hi, 1→mid, ..., 41→mid
+	ohlc = ohlc[1:41]                // indices 1..40 → starts & ends at mid → zero drift
+	series := makeOHLCSeries(ohlc)
+	score, err := calc.Score(series)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if score < 0.3 {
+		t.Errorf("expected moderate-to-high score for clean channel, got %v", score)
+	}
+}
+
+func TestSidewaysV3_StrongTrend(t *testing.T) {
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	// Steady uptrend: 100 → 130, drift >> channel height
+	prices := make([]float64, 30)
+	for i := range prices {
+		prices[i] = 100 + float64(i)
+	}
+	series := makeSeries(prices)
+	score, _ := calc.Score(series)
+	if score > 0.1 {
+		t.Errorf("expected near-zero for strong trend, got %v", score)
+	}
+}
+
+func TestSidewaysV3_Breakout(t *testing.T) {
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	// Flat at 100 then break to 120
+	prices := make([]float64, 30)
+	for i := 0; i < 20; i++ {
+		prices[i] = 100
+	}
+	for i := 20; i < 30; i++ {
+		prices[i] = 100 + float64(i-20)*2
+	}
+	series := makeSeries(prices)
+	score, _ := calc.Score(series)
+	if score > 0.2 {
+		t.Errorf("expected low for breakout, got %v", score)
+	}
+}
+
+func TestSidewaysV3_ScoreRange(t *testing.T) {
+	cfg := SidewaysV3Config{RMin: 0.005, RMax: 0.15}
+	calc := &SidewaysV3ScoreCalculator{Config: cfg}
+	cases := [][][4]float64{
+		channelOHLC(30, 95, 105),
+		channelOHLC(40, 98, 102),
+		channelOHLC(30, 90, 110),
+	}
+	for i, ohlc := range cases {
+		series := makeOHLCSeries(ohlc)
+		score, err := calc.Score(series)
+		if err != nil {
+			t.Fatalf("case %d: unexpected error: %v", i, err)
+		}
+		if score < 0 || score > 1 {
+			t.Errorf("case %d: score %v out of [0,1]", i, score)
+		}
+	}
+}
+
+func TestSidewaysV3_MicroCompressionScoresLow(t *testing.T) {
+	// Very tight range: 99.99–100.01 → R ≈ 0.0002, below any RMin
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	prices := make([]float64, 30)
+	for i := range prices {
+		if i%2 == 0 {
+			prices[i] = 100.01
+		} else {
+			prices[i] = 99.99
+		}
+	}
+	series := makeSeries(prices)
+	score, _ := calc.Score(series)
+	if score > 0.05 {
+		t.Errorf("expected near-zero for micro compression, got %v", score)
+	}
+}
+
+func TestSidewaysV3_WideVolatileScoresLow(t *testing.T) {
+	// Very wide swings: 50–150 → R = 100/100 = 1.0, way above RMax
+	calc := &SidewaysV3ScoreCalculator{Config: DefaultSidewaysV3Config("1h")}
+	prices := make([]float64, 30)
+	for i := range prices {
+		if i%2 == 0 {
+			prices[i] = 150
+		} else {
+			prices[i] = 50
+		}
+	}
+	series := makeSeries(prices)
+	score, _ := calc.Score(series)
+	if score > 0.05 {
+		t.Errorf("expected near-zero for wide volatility, got %v", score)
+	}
+}

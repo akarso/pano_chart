@@ -11,13 +11,22 @@ dependencies:
     sdk: flutter
   http: ^0.13.0
   flutter_svg: ^2.0.9
+  shared_preferences: ^2.5.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.1 
 
 flutter:
   uses-material-design: true
   assets:
     - assets/
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon.png"
+  adaptive_icon_foreground: "assets/icon.png"
+  adaptive_icon_background: "#00e6c0"

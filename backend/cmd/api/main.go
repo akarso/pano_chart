@@ -96,6 +96,10 @@ func main() {
 	switch sidewaysAlgo {
 	case usecases.SidewaysAlgoV2:
 		sidewaysCalc = &scoring.SidewaysV2ScoreCalculator{}
+	case usecases.SidewaysAlgoV3:
+		sidewaysCalc = &scoring.SidewaysV3ScoreCalculator{
+			Config: scoring.DefaultSidewaysV3Config("1h"),
+		}
 	default:
 		sidewaysAlgo = usecases.SidewaysAlgoV1
 		sidewaysCalc = &scoring.SidewaysConsistencyScoreCalculator{}

@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
+import '../../infrastructure/preferences_service.dart';
 import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
 import '../detail/detail_screen.dart';
@@ -17,11 +18,13 @@ import 'overview_view_model.dart';
 class OverviewWidget extends StatefulWidget {
   final OverviewViewModel viewModel;
   final GetCandleSeries getCandleSeries;
+  final PreferencesService? prefs;
 
   const OverviewWidget({
     Key? key,
     required this.viewModel,
     required this.getCandleSeries,
+    this.prefs,
   }) : super(key: key);
 
   @override
@@ -37,8 +40,10 @@ class OverviewWidgetState extends State<OverviewWidget>
   final ScrollController _scrollController = ScrollController();
   int _columns = 2;
   String _timeframe = '1h';
-  String _sidewaysAlgo = 'v2';
+  String _sidewaysAlgo = 'v1';
   bool _normalizeSparklines = true;
+  bool _showFavourites = false;
+  Set<String> _favourites = {};
 
   /// Which overlay panel is open (none by default).
   _OverlayKind _overlay = _OverlayKind.none;
@@ -46,10 +51,35 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Threshold in pixels from bottom to trigger loading more items.
   static const double _scrollThreshold = 200.0;
 
+  PreferencesService? get _prefs => widget.prefs;
+
   @override
   void initState() {
     super.initState();
     vm = widget.viewModel;
+
+    // Attach prefs to view model for offline cache
+    vm.attachPrefs(_prefs);
+
+    // Restore persisted settings.
+    final p = _prefs;
+    if (p != null) {
+      _columns = p.columns;
+      _timeframe = p.timeframe;
+      _sidewaysAlgo = p.sidewaysAlgo;
+      _normalizeSparklines = p.normalizeSparklines;
+      _favourites = p.favourites;
+
+      // Also sync sort + sidewaysAlgo into the view model state so the
+      // first loadInitial uses the persisted values.
+      if (p.sort != vm.state.sort) {
+        vm.changeSortSilent(p.sort);
+      }
+      if (p.sidewaysAlgo != vm.state.sidewaysAlgo) {
+        vm.changeSidewaysAlgoSilent(p.sidewaysAlgo);
+      }
+    }
+
     vm.onChanged = () {
       setState(() {});
       // After new items are rendered, check if we still need more to fill the viewport.
@@ -159,12 +189,13 @@ class OverviewWidgetState extends State<OverviewWidget>
       final series = await widget.getCandleSeries.execute(input);
       if (!mounted) return;
       Navigator.of(context).pop();
-      Navigator.of(context).push(
+      final result = await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => DetailScreen(
             symbol: AppSymbol(item.symbol),
             timeframe: Timeframe(detailTf),
             series: series,
+            isFavourite: _favourites.contains(item.symbol),
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -176,6 +207,17 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         ),
       );
+      // Update favourites from detail screen result.
+      if (result != null && mounted) {
+        setState(() {
+          if (result) {
+            _favourites.add(item.symbol);
+          } else {
+            _favourites.remove(item.symbol);
+          }
+          _prefs?.favourites = _favourites;
+        });
+      }
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -217,29 +259,23 @@ class OverviewWidgetState extends State<OverviewWidget>
 
     return SafeArea(
       bottom: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          border: Border(top: BorderSide(color: Color(0xFF444444), width: 3)),
-        ),
-        child: Column(
-          children: [
-            _buildNavBar(),
-            Expanded(
-              child: Stack(
-                children: [
-                  _buildBody(state),
-                  if (_overlay != _OverlayKind.none)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: 0,
-                      child: _buildOverlayPanel(state),
-                    ),
-                ],
-              ),
+      child: Column(
+        children: [
+          // Nav bar + overlay unit — bottom border moves with rollout
+          Container(
+            decoration: const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Colors.grey, width: 1)),
             ),
-          ],
-        ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildNavBar(),
+                _buildOverlayPanel(state),
+              ],
+            ),
+          ),
+          Expanded(child: _buildBody(state)),
+        ],
       ),
     );
   }
@@ -256,25 +292,56 @@ class OverviewWidgetState extends State<OverviewWidget>
           end: Alignment.bottomCenter,
           colors: [Colors.black, Color(0xFF333333)],
         ),
-        border: Border(bottom: BorderSide(color: Colors.grey, width: 1)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          // Logo / branding
-          const Padding(
-            padding: EdgeInsets.only(left: 4),
-            child: Text(
-              'Pano Charts',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-                letterSpacing: 0.5,
-              ),
+          // Logo + branding
+          Padding(
+            padding: const EdgeInsets.only(left: 0, right: 8),
+            child: Row(
+              children: [
+                Container(
+                  margin: const EdgeInsets.only(right: 15),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Image.asset(
+                      'assets/icon.png',
+                      width: 26,
+                      height: 26,
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Pano Charts',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF00e6c0),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ],
             ),
           ),
           const Spacer(),
+          // Favourites toggle
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() => _showFavourites = !_showFavourites),
+            child: SizedBox(
+              width: 44,
+              height: 44,
+              child: Center(
+                child: Icon(
+                  _showFavourites ? Icons.star : Icons.star_border,
+                  color: _showFavourites ? Colors.amber : Colors.white,
+                  size: 22,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           // Settings icon
           _NavBarIcon(
             isActive: _overlay == _OverlayKind.settings,
@@ -298,19 +365,24 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   Widget _buildOverlayPanel(OverviewState state) {
     return AnimatedSize(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOut,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
       alignment: Alignment.topCenter,
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A2A2A).withAlpha((0.9 * 255).round()),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: _overlay == _OverlayKind.settings
-            ? _buildSettingsOverlay(state)
-            : _buildMenuOverlay(),
-      ),
+      clipBehavior: Clip.hardEdge,
+      child: _overlay != _OverlayKind.none
+          ? Container(
+              key: ValueKey(_overlay),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFF333333).withAlpha((0.9 * 255).round()),
+              ),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: _overlay == _OverlayKind.settings
+                  ? _buildSettingsOverlay(state)
+                  : _buildMenuOverlay(),
+            )
+          : const SizedBox.shrink(),
     );
   }
 
@@ -340,6 +412,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                       .toList(),
                   onChanged: (v) {
                     setState(() => _columns = v ?? 2);
+                    _prefs?.columns = _columns;
                     SchedulerBinding.instance.addPostFrameCallback((_) {
                       _checkAndLoadMore();
                     });
@@ -354,6 +427,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                       .toList(),
                   onChanged: (v) {
                     setState(() => _timeframe = v ?? '1h');
+                    _prefs?.timeframe = _timeframe;
                     vm.loadInitial(_timeframe);
                   },
                 ), ctrlFontSize),
@@ -369,7 +443,10 @@ class OverviewWidgetState extends State<OverviewWidget>
                     DropdownMenuItem(value: 'volume', child: Text('Volume')),
                   ],
                   onChanged: (v) {
-                    if (v != null) vm.changeSort(v, _timeframe);
+                    if (v != null) {
+                      _prefs?.sort = v;
+                      vm.changeSort(v, _timeframe);
+                    }
                   },
                 ), ctrlFontSize),
               ],
@@ -387,14 +464,20 @@ class OverviewWidgetState extends State<OverviewWidget>
                   width: 24,
                   child: Checkbox(
                     value: _normalizeSparklines,
-                    onChanged: (v) => setState(() => _normalizeSparklines = v ?? true),
+                    onChanged: (v) {
+                      setState(() => _normalizeSparklines = v ?? true);
+                      _prefs?.normalizeSparklines = _normalizeSparklines;
+                    },
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
                 const SizedBox(width: 6),
                 GestureDetector(
-                  onTap: () => setState(() => _normalizeSparklines = !_normalizeSparklines),
+                  onTap: () {
+                    setState(() => _normalizeSparklines = !_normalizeSparklines);
+                    _prefs?.normalizeSparklines = _normalizeSparklines;
+                  },
                   child: Text(
                     'Normalize sparklines',
                     style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
@@ -408,10 +491,12 @@ class OverviewWidgetState extends State<OverviewWidget>
                   items: const [
                     DropdownMenuItem(value: 'v1', child: Text('Algo 1')),
                     DropdownMenuItem(value: 'v2', child: Text('Algo 2')),
+                    DropdownMenuItem(value: 'v3', child: Text('Algo 3')),
                   ],
                   onChanged: (v) {
                     if (v != null) {
                       setState(() => _sidewaysAlgo = v);
+                      _prefs?.sidewaysAlgo = v;
                       vm.changeSidewaysAlgo(v, _timeframe);
                     }
                   },
@@ -497,6 +582,21 @@ class OverviewWidgetState extends State<OverviewWidget>
       return Center(child: Text(state.error!));
     }
 
+    final allItems = state.items;
+    final visibleItems = _showFavourites
+        ? allItems.where((i) => _favourites.contains(i.symbol)).toList()
+        : allItems;
+
+    if (_showFavourites && visibleItems.isEmpty) {
+      return const Center(
+        child: Text(
+          'No favourites yet.\nTap ★ on any detail screen to add.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.white38, fontSize: 14),
+        ),
+      );
+    }
+
     final spacing = _columns == 3 ? 4.0 : 8.0;
     return RefreshIndicator(
       onRefresh: _onRefresh,
@@ -510,12 +610,13 @@ class OverviewWidgetState extends State<OverviewWidget>
           mainAxisSpacing: spacing,
           childAspectRatio: 2.5,
         ),
-        itemCount: state.items.length + (state.hasMore ? 1 : 0),
+        itemCount: visibleItems.length +
+            (!_showFavourites && state.hasMore ? 1 : 0),
         itemBuilder: (context, index) {
-          if (index >= state.items.length) {
+          if (index >= visibleItems.length) {
             return const Center(child: CircularProgressIndicator());
           }
-          final item = state.items[index];
+          final item = visibleItems[index];
           return GestureDetector(
             onTap: () => _onItemTapped(item),
             child: _OverviewGridItem(
@@ -523,6 +624,7 @@ class OverviewWidgetState extends State<OverviewWidget>
               columns: _columns,
               normalize: _normalizeSparklines,
               globalMaxPct: _globalMaxPctChange(state),
+              isFavourite: _favourites.contains(item.symbol),
             ),
           );
         },
@@ -547,10 +649,11 @@ class _NavBarIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: SizedBox(
-        width: 32,
-        height: 32,
+        width: 44,
+        height: 44,
         child: Center(
           child: isActive
               ? const Icon(Icons.close, color: Colors.white, size: 22)
@@ -623,12 +726,14 @@ class _OverviewGridItem extends StatelessWidget {
   final int columns;
   final bool normalize;
   final double globalMaxPct;
+  final bool isFavourite;
 
   const _OverviewGridItem({
     required this.item,
     required this.columns,
     required this.normalize,
     required this.globalMaxPct,
+    this.isFavourite = false,
   });
 
   @override
@@ -672,6 +777,16 @@ class _OverviewGridItem extends StatelessWidget {
                     right: pad + 4,
                     top: pad,
                     child: _buildBadge(item, fontSize),
+                  ),
+                if (isFavourite)
+                  Positioned(
+                    left: pad + 4,
+                    bottom: pad,
+                    child: Icon(
+                      Icons.star,
+                      color: Colors.amber.withAlpha((0.8 * 255).round()),
+                      size: (fontSize * 0.8).clamp(10.0, 16.0),
+                    ),
                   ),
               ],
             );

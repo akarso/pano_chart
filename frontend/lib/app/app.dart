@@ -13,7 +13,14 @@ class App extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Pano Chart',
-      home: home != null ? Scaffold(body: home) : null,
+      home: home != null
+          ? Scaffold(
+              body: home,
+              backgroundColor: Colors.black,
+              extendBody: true,
+              extendBodyBehindAppBar: true,
+            )
+          : null,
       onGenerateRoute: home == null ? _placeholderRoute : null,
       themeMode: ThemeMode.dark,
       darkTheme: ThemeData.dark(useMaterial3: true),

@@ -38,7 +38,7 @@ class OverviewState {
     required this.page,
     required this.hasMore,
     required this.sort,
-    this.sidewaysAlgo = 'v2',
+    this.sidewaysAlgo = 'v1',
     required this.snapshot,
     required this.error,
   });

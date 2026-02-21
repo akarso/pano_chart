@@ -17,7 +17,7 @@ class GetRankingsImpl implements GetOverview {
     required int page,
     required String sort,
     String? snapshot,
-    String sidewaysAlgo = 'v2',
+    String sidewaysAlgo = 'v1',
   }) async {
     final dto = await api.fetchRankings(
       timeframe: timeframe,

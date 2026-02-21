@@ -2,6 +2,8 @@ import 'dart:ui' show VoidCallback;
 
 import 'get_overview.dart';
 import 'overview_state.dart';
+import '../../infrastructure/preferences_service.dart';
+import 'dart:convert';
 
 /// OverviewViewModel owns asynchronous state and pagination-ready logic.
 ///
@@ -24,6 +26,12 @@ class OverviewViewModel {
 
   OverviewViewModel(this._getOverview);
 
+  PreferencesService? _prefs;
+
+  void attachPrefs(PreferencesService? prefs) {
+    _prefs = prefs;
+  }
+
   Future<void> loadInitial(String timeframe) async {
     final currentGen = ++_generation;
 
@@ -40,6 +48,28 @@ class OverviewViewModel {
 
       if (currentGen != _generation) return;
 
+      // Save to cache if prefs available
+      if (_prefs != null) {
+        // Store a minimal cache: items, hasMore, snapshot
+        final cache = {
+          'items': result.items.map((e) => {
+            'symbol': e.symbol,
+            'totalScore': e.totalScore,
+            'trendScore': e.trendScore,
+            'sidewaysScore': e.sidewaysScore,
+            'gainScore': e.gainScore,
+            'volume': e.volume,
+            'sparkline': e.sparkline,
+            'badgeComponent': e.badgeComponent,
+          }).toList(),
+          'hasMore': result.hasMore,
+          'snapshot': result.snapshot,
+          'sort': _state.sort,
+          'sidewaysAlgo': _state.sidewaysAlgo,
+        };
+        _prefs!.setRankingsCache(timeframe, jsonEncode(cache));
+      }
+
       _setState(
         _state.copyWith(
           isLoading: false,
@@ -51,6 +81,39 @@ class OverviewViewModel {
       );
     } catch (e) {
       if (currentGen != _generation) return;
+
+      // Try to load from cache if prefs available
+      if (_prefs != null) {
+        final cacheStr = _prefs!.getRankingsCache(timeframe);
+        if (cacheStr != null) {
+          try {
+            final cache = jsonDecode(cacheStr) as Map<String, dynamic>;
+            final items = (cache['items'] as List)
+                .map((e) => OverviewItem(
+                      symbol: e['symbol'] as String,
+                      totalScore: (e['totalScore'] as num).toDouble(),
+                      trendScore: (e['trendScore'] as num).toDouble(),
+                      sidewaysScore: (e['sidewaysScore'] as num).toDouble(),
+                      gainScore: (e['gainScore'] as num).toDouble(),
+                      volume: (e['volume'] as num).toDouble(),
+                      sparkline: (e['sparkline'] as List).map((v) => (v as num).toDouble()).toList(),
+                      badgeComponent: e['badgeComponent'] as String? ?? '',
+                    ))
+                .toList();
+            _setState(_state.copyWith(
+              isLoading: false,
+              items: items,
+              page: 1,
+              hasMore: cache['hasMore'] as bool? ?? false,
+              snapshot: cache['snapshot'] as String?,
+              error: 'Offline — showing cached data',
+            ));
+            return;
+          } catch (_) {
+            // Ignore cache parse errors, fall through to error
+          }
+        }
+      }
       _setState(_state.copyWith(isLoading: false, error: e.toString()));
     }
   }
@@ -132,6 +195,12 @@ class OverviewViewModel {
     loadInitial(timeframe);
   }
 
+  /// Updates sort without triggering a reload — used during init to sync
+  /// persisted preferences before the first [loadInitial].
+  void changeSortSilent(String newSort) {
+    _state = _state.copyWith(sort: newSort);
+  }
+
   void changeSidewaysAlgo(String algo, String timeframe) {
     if (algo == _state.sidewaysAlgo) return;
 
@@ -144,6 +213,12 @@ class OverviewViewModel {
     onChanged?.call();
 
     loadInitial(timeframe);
+  }
+
+  /// Updates sideways algo without triggering a reload — used during init
+  /// to sync persisted preferences before the first [loadInitial].
+  void changeSidewaysAlgoSilent(String algo) {
+    _state = _state.copyWith(sidewaysAlgo: algo);
   }
 
   void _setState(OverviewState newState) {

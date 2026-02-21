@@ -13,6 +13,7 @@ class DetailScreen extends StatefulWidget {
   final Timeframe timeframe;
   final CandleSeriesResponse series;
   final DetailContext? detailContext;
+  final bool isFavourite;
 
   const DetailScreen({
     Key? key,
@@ -20,6 +21,7 @@ class DetailScreen extends StatefulWidget {
     required this.timeframe,
     required this.series,
     this.detailContext,
+    this.isFavourite = false,
   }) : super(key: key);
 
   @override
@@ -27,7 +29,13 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> {
-  bool isFavourite = false;
+  late bool isFavourite;
+
+  @override
+  void initState() {
+    super.initState();
+    isFavourite = widget.isFavourite;
+  }
 
   // ---- helpers ----
 
@@ -88,9 +96,15 @@ class _DetailScreenState extends State<DetailScreen> {
       percentChange = ((last - first) / first) * 100;
     }
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
+    return WillPopScope(
+      onWillPop: () async {
+        Navigator.of(context).pop(isFavourite);
+        return false;
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
         leading: IconButton(
@@ -132,7 +146,7 @@ class _DetailScreenState extends State<DetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.close, color: Colors.white),
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () => Navigator.of(context).maybePop(isFavourite),
             tooltip: 'Close',
           ),
         ],
@@ -198,6 +212,7 @@ class _DetailScreenState extends State<DetailScreen> {
             ],
           ],
         ),
+      ),
       ),
     );
   }
