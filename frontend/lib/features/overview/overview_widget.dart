@@ -297,31 +297,41 @@ class OverviewWidgetState extends State<OverviewWidget>
       child: Row(
         children: [
           // Logo + branding
-          Padding(
-            padding: const EdgeInsets.only(left: 0, right: 8),
-            child: Row(
-              children: [
-                Container(
-                  margin: const EdgeInsets.only(right: 15),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: Image.asset(
-                      'assets/icon.png',
-                      width: 26,
-                      height: 26,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (_showFavourites) {
+                setState(() => _showFavourites = false);
+              }
+              // Optionally scroll to top
+              _scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(left: 0, right: 8),
+              child: Row(
+                children: [
+                  Container(
+                    margin: const EdgeInsets.only(right: 15),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: Image.asset(
+                        'assets/icon.png',
+                        width: 26,
+                        height: 26,
+                      ),
                     ),
                   ),
-                ),
-                const Text(
-                  'Pano Charts',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF00e6c0),
-                    letterSpacing: 0.5,
+                  const Text(
+                    'Pano Charts',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF00e6c0),
+                      letterSpacing: 0.5,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           const Spacer(),
@@ -492,6 +502,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     DropdownMenuItem(value: 'v1', child: Text('Algo 1')),
                     DropdownMenuItem(value: 'v2', child: Text('Algo 2')),
                     DropdownMenuItem(value: 'v3', child: Text('Algo 3')),
+                    DropdownMenuItem(value: 'v4', child: Text('Algo 4 (v1+drift penalty)')),
                   ],
                   onChanged: (v) {
                     if (v != null) {

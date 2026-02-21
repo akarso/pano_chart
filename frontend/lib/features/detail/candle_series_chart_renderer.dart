@@ -15,19 +15,22 @@ class CandleSeriesChartRenderer implements SeriesChartRenderer {
     BuildContext context, {
     required CandleSeriesResponse series,
     required SeriesViewMode viewMode,
+    double? candleWidth,
   }) {
     assert(viewMode == SeriesViewMode.candles,
         'CandleSeriesChartRenderer only supports SeriesViewMode.candles');
+    final width = candleWidth != null ? series.candles.length * candleWidth : null;
     return CustomPaint(
-      painter: CandleChartPainter(series),
-      size: Size.infinite,
+      painter: CandleChartPainter(series, candleWidth: candleWidth),
+      size: width != null ? Size(width, double.infinity) : Size.infinite,
     );
   }
 }
 
 class CandleChartPainter extends CustomPainter {
   final CandleSeriesResponse series;
-  CandleChartPainter(this.series) : super(repaint: null);
+  final double? candleWidth;
+  CandleChartPainter(this.series, {this.candleWidth}) : super(repaint: null);
 
   static const int _gridLines = 5;
   static const double _priceScaleWidth = 48.0;
@@ -70,12 +73,12 @@ class CandleChartPainter extends CustomPainter {
     }
 
     // ── Candles ──
-    final candleWidth = chartWidth / candles.length;
-    final wickWidth = (candleWidth * 0.08).clamp(1.0, 2.5);
+    final double candleW = candleWidth ?? (chartWidth / candles.length);
+    final wickWidth = (candleW * 0.08).clamp(1.0, 2.5);
 
     for (var i = 0; i < candles.length; i++) {
       final c = candles[i];
-      final x = i * candleWidth + candleWidth / 2;
+      final x = i * candleW + candleW / 2;
       final openY = pad + chartHeight * (1 - (c.open - min) / range);
       final closeY = pad + chartHeight * (1 - (c.close - min) / range);
       final highY = pad + chartHeight * (1 - (c.high - min) / range);
@@ -96,8 +99,8 @@ class CandleChartPainter extends CustomPainter {
       final bodyPaint = Paint()
         ..color = color
         ..style = PaintingStyle.fill;
-      final left = x - candleWidth * 0.35;
-      final right = x + candleWidth * 0.35;
+      final left = x - candleW * 0.35;
+      final right = x + candleW * 0.35;
       final top = up ? closeY : openY;
       final bottom = up ? openY : closeY;
       final bodyHeight = (bottom - top).abs();

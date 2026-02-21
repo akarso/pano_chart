@@ -166,21 +166,79 @@ class _DetailScreenState extends State<DetailScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            AspectRatio(
-              aspectRatio: 1.8,
-              child: Card(
-                color: Colors.grey[900],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: CandleSeriesChartRenderer().build(
-                    context,
-                    series: series,
-                    viewMode: SeriesViewMode.candles,
-                  ),
-                ),
+            SizedBox(
+              height: 260,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final candleCount = series.candles.length;
+                  const double candleWidth = 14; // px per candle
+                  final chartWidth = (candleCount * candleWidth).clamp(constraints.maxWidth, 9999.0);
+                  return Stack(
+                    children: [
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Card(
+                          color: Colors.grey[900],
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: SizedBox(
+                              width: chartWidth,
+                              height: 220,
+                              child: CandleSeriesChartRenderer().build(
+                                context,
+                                series: series,
+                                viewMode: SeriesViewMode.candles,
+                                candleWidth: candleWidth,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Scroll cue overlay (fade left/right)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                width: 24,
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                    colors: [Colors.black54, Colors.transparent],
+                                  ),
+                                ),
+                                child: const Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Icon(Icons.arrow_back_ios, size: 14, color: Colors.white38),
+                                ),
+                              ),
+                              Container(
+                                width: 24,
+                                decoration: const BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.centerRight,
+                                    end: Alignment.centerLeft,
+                                    colors: [Colors.black54, Colors.transparent],
+                                  ),
+                                ),
+                                child: const Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
             if (percentChange != null) ...[
