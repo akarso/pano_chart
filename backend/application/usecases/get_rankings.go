@@ -434,10 +434,7 @@ func sortResults(results []RankedResult, mode SortMode) {
 		vi := sortValue(results[i], mode)
 		vj := sortValue(results[j], mode)
 		if vi != vj {
-			return vi > vj // descending by metric
-		}
-		if results[i].Volume != results[j].Volume {
-			return results[i].Volume > results[j].Volume // descending by volume
+			return vi > vj // descending by metric (full precision)
 		}
 		return results[i].Symbol.String() < results[j].Symbol.String() // ascending alphabetical
 	})

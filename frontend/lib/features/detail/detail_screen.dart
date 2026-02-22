@@ -4,7 +4,9 @@ import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import 'candle_series_chart_renderer.dart';
 import '../../domain/series_view_mode.dart';
+import '../overview/line_series_chart_renderer.dart';
 import 'detail_context.dart';
+import 'sticky_price_labels.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -29,6 +31,7 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> {
+    SeriesViewMode _viewMode = SeriesViewMode.candles;
   late bool isFavourite;
 
   @override
@@ -102,145 +105,191 @@ class _DetailScreenState extends State<DetailScreen> {
         return false;
       },
       child: Scaffold(
-        backgroundColor: Colors.black,
+        backgroundColor: const Color.fromARGB(255, 0, 0, 0),
         extendBodyBehindAppBar: true,
         appBar: AppBar(
-        backgroundColor: Colors.black,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(
-            isFavourite ? Icons.star : Icons.star_border,
-            color: isFavourite ? Colors.amber : Colors.white54,
-          ),
-          onPressed: () => setState(() => isFavourite = !isFavourite),
-          tooltip: isFavourite ? 'Unfavourite' : 'Favourite',
-        ),
-        title: Row(
-          children: [
-            Text(
-              widget.symbol.value,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 20,
-              ),
+          backgroundColor: Colors.black,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(
+              isFavourite ? Icons.star : Icons.star_border,
+              color: isFavourite ? Colors.amber : Colors.white54,
             ),
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: Colors.white.withAlpha(30),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                widget.timeframe.value,
+            onPressed: () => setState(() => isFavourite = !isFavourite),
+            tooltip: isFavourite ? 'Unfavourite' : 'Favourite',
+          ),
+          title: Row(
+            children: [
+              Text(
+                widget.symbol.value,
                 style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 20,
                 ),
               ),
+              const SizedBox(width: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white.withAlpha(30),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  widget.timeframe.value,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              // Chart view toggle
+              ToggleButtons(
+                isSelected: [
+                  _viewMode == SeriesViewMode.candles,
+                  _viewMode == SeriesViewMode.line,
+                ],
+                borderRadius: BorderRadius.circular(8),
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+                onPressed: (idx) {
+                  setState(() {
+                    _viewMode = idx == 0 ? SeriesViewMode.candles : SeriesViewMode.line;
+                  });
+                },
+                children: const [
+                  Icon(Icons.candlestick_chart, color: Colors.white),
+                  Icon(Icons.show_chart, color: Colors.white),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white),
+              onPressed: () => Navigator.of(context).maybePop(isFavourite),
+              tooltip: 'Close',
             ),
-            const Spacer(),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.close, color: Colors.white),
-            onPressed: () => Navigator.of(context).maybePop(isFavourite),
-            tooltip: 'Close',
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (ctx != null) _buildHeaderBlock(ctx, percentChange),
-            if (ctx != null) const SizedBox(height: 12),
-            Text(
-              _timeRangeLabel(),
-              style: const TextStyle(
-                color: Colors.white38,
-                fontSize: 12,
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (ctx != null) _buildHeaderBlock(ctx, percentChange),
+              if (ctx != null) const SizedBox(height: 12),
+              Text(
+                _timeRangeLabel(),
+                style: const TextStyle(
+                  color: Colors.white38,
+                  fontSize: 12,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            SizedBox(
-              height: 260,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final candleCount = series.candles.length;
-                  const double candleWidth = 14; // px per candle
-                  final chartWidth = (candleCount * candleWidth).clamp(constraints.maxWidth, 9999.0);
-                  return Stack(
-                    children: [
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Card(
-                          color: Colors.grey[900],
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: SizedBox(
-                              width: chartWidth,
-                              height: 220,
-                              child: CandleSeriesChartRenderer().build(
-                                context,
-                                series: series,
-                                viewMode: SeriesViewMode.candles,
-                                candleWidth: candleWidth,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Scroll cue overlay (fade left/right)
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(                  
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: SizedBox(
+                  height: 260,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final candleCount = series.candles.length;
+                      const double candleWidth = 14; // px per candle
+                      final chartWidth = (candleCount * candleWidth).clamp(constraints.maxWidth, 9999.0);
+                      // Overlay price labels on the right, sticky and high z-index
+                      return Stack(
+                        children: [
+                          Stack(
                             children: [
-                              Container(
-                                width: 24,
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.centerLeft,
-                                    end: Alignment.centerRight,
-                                    colors: [Colors.black54, Colors.transparent],
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      physics: const BouncingScrollPhysics(),
+                                      child: Card(
+                                        color: Colors.grey[900],
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(12),
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: SizedBox(
+                                            width: chartWidth,
+                                            height: 220,
+                                            child: _viewMode == SeriesViewMode.candles
+                                                ? CandleSeriesChartRenderer().build(
+                                                    context,
+                                                    series: series,
+                                                    viewMode: SeriesViewMode.candles,
+                                                    candleWidth: candleWidth,
+                                                  )
+                                                : LineSeriesChartRenderer().build(
+                                                    context,
+                                                    series: series,
+                                                    viewMode: SeriesViewMode.line,
+                                                  ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                ),
-                                child: const Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Icon(Icons.arrow_back_ios, size: 14, color: Colors.white38),
-                                ),
+                                ],
                               ),
-                              Container(
-                                width: 24,
-                                decoration: const BoxDecoration(
-                                  gradient: LinearGradient(
-                                    begin: Alignment.centerRight,
-                                    end: Alignment.centerLeft,
-                                    colors: [Colors.black54, Colors.transparent],
-                                  ),
-                                ),
-                                child: const Align(
-                                  alignment: Alignment.centerRight,
-                                  child: Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
+                              // Sticky price labels overlay (full width, higher z-index)
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: StickyPriceLabels(series: series),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                      ),
-                    ],
-                  );
-                },
+                          // Scroll cue overlay (fade left/right)
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Container(
+                                    width: 24,
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.centerLeft,
+                                        end: Alignment.centerRight,
+                                        colors: [Colors.black54, Colors.transparent],
+                                      ),
+                                    ),
+                                    child: const Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Icon(Icons.arrow_back_ios, size: 14, color: Colors.white38),
+                                    ),
+                                  ),
+                                  Container(
+                                    width: 24,
+                                    decoration: const BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.centerRight,
+                                        end: Alignment.centerLeft,
+                                        colors: [Colors.black54, Colors.transparent],
+                                      ),
+                                    ),
+                                    child: const Align(
+                                      alignment: Alignment.centerRight,
+                                      child: Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
               ),
-            ),
             if (percentChange != null) ...[
               const SizedBox(height: 12),
               Row(

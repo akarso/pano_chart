@@ -49,7 +49,7 @@ class CandleChartPainter extends CustomPainter {
     final chartWidth = size.width - _priceScaleWidth;
     final chartHeight = size.height - 2 * pad;
 
-    // ── Horizontal grid lines + right price labels ──
+    // ── Horizontal grid lines only (no price labels) ──
     final gridPaint = Paint()
       ..color = Colors.white.withAlpha((_gridColor * 255).round())
       ..strokeWidth = 0.5;
@@ -57,19 +57,7 @@ class CandleChartPainter extends CustomPainter {
       final frac = i / _gridLines;
       final y = pad + chartHeight * frac;
       canvas.drawLine(Offset(0, y), Offset(chartWidth, y), gridPaint);
-      // Price label on right
-      final price = max - frac * range;
-      final tp = TextPainter(
-        text: TextSpan(
-          text: _formatPrice(price),
-          style: TextStyle(
-            color: Colors.white.withAlpha((0.45 * 255).round()),
-            fontSize: 9,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(chartWidth + 4, y - tp.height / 2));
+      // No price label here; handled by sticky overlay
     }
 
     // ── Candles ──
