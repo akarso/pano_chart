@@ -72,7 +72,7 @@ func main() {
 	redisAdapter := infra.NewRedisMinimalAdapter(redisClient)
 
 	// --- CandleRepository with Redis caching ---
-	baseRepo := infra.NewFreeTierCandleRepository(binanceBase, binanceClient)
+	baseRepo := infra.NewFreeTierCandleRepository(binanceBase, binanceClient, nil)
 	cacheTTL := 5 * time.Minute
 	candleRepo := infra.NewRedisCandleRepository(redisAdapter, baseRepo, cacheTTL)
 

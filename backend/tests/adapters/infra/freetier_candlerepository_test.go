@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"pano_chart/backend/application/ports"
 	infra "pano_chart/backend/adapters/infra"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 )
 
@@ -24,7 +24,7 @@ type sampleResponseItem struct {
 
 func TestFreeTierCandleRepository_ImplementsPort(t *testing.T) {
 	// compile-time check
-	var _ ports.CandleRepositoryPort = infra.NewFreeTierCandleRepository("", http.DefaultClient)
+	var _ ports.CandleRepositoryPort = infra.NewFreeTierCandleRepository("", http.DefaultClient, nil)
 	_ = t
 }
 
@@ -43,7 +43,7 @@ func TestFreeTierCandleRepository_MapsValidResponseToCandleSeries(t *testing.T) 
 	}))
 	defer server.Close()
 
-	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
 
 	sym := domain.NewSymbolUnsafe("BTCUSDT")
 	tf := domain.NewTimeframeUnsafe("1m")
@@ -73,7 +73,7 @@ func TestFreeTierCandleRepository_ReturnsErrorOnHTTPFailure(t *testing.T) {
 	}))
 	defer server.Close()
 
-	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
 
 	sym := domain.NewSymbolUnsafe("BTC")
 	tf := domain.NewTimeframeUnsafe("1m")
@@ -93,7 +93,7 @@ func TestFreeTierCandleRepository_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	}))
 	defer server.Close()
 
-	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
 
 	sym := domain.NewSymbolUnsafe("BTC")
 	tf := domain.NewTimeframeUnsafe("1m")
@@ -117,7 +117,7 @@ func TestFreeTierCandleRepository_GetSeries_MapsProviderResponse(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client())
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
 	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

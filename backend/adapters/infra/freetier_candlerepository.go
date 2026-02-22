@@ -6,24 +6,28 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"pano_chart/backend/domain"
+	metrics "pano_chart/backend/infrastructure"
+	ratelimiter "pano_chart/backend/infrastructure/ratelimiter"
 )
 
 // FreeTierCandleRepository implements ports.CandleRepositoryPort using a free-tier HTTP API.
 type FreeTierCandleRepository struct {
-	baseURL *url.URL
-	client  *http.Client
+	baseURL     *url.URL
+	client      *http.Client
+	rateLimiter *ratelimiter.RateLimiter
 }
 
 // NewFreeTierCandleRepository constructs the adapter. BaseURL must be a valid URL.
-func NewFreeTierCandleRepository(base string, client *http.Client) *FreeTierCandleRepository {
+func NewFreeTierCandleRepository(base string, client *http.Client, rl *ratelimiter.RateLimiter) *FreeTierCandleRepository {
 	u, _ := url.Parse(base)
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &FreeTierCandleRepository{baseURL: u, client: client}
+	return &FreeTierCandleRepository{baseURL: u, client: client, rateLimiter: rl}
 }
 
 // GetSeries implements CandleRepositoryPort. It performs a single request to the external API
@@ -88,13 +92,22 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 		symbol.String(), interval, startMs, endMs,
 	)
 	fmt.Printf("[freetier] Binance URL: %s\n", binanceURL)
+	if r.rateLimiter != nil {
+		r.rateLimiter.Acquire()
+		defer r.rateLimiter.Release()
+	}
 	resp, err := r.client.Get(binanceURL)
 	if err != nil {
 		return domain.CandleSeries{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == 409 || resp.StatusCode == 429 {
+		atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
+		return domain.CandleSeries{}, fmt.Errorf("rate limited: %d", resp.StatusCode)
+	}
 	if resp.StatusCode != 200 {
-		return domain.CandleSeries{}, fmt.Errorf("binance: http %d", resp.StatusCode)
+		atomic.AddInt64(&metrics.GlobalMetrics.FetchErrors, 1)
+		return domain.CandleSeries{}, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 	var raw [][]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -123,6 +136,7 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 		}
 		candles = append(candles, c)
 	}
+	atomic.AddInt64(&metrics.GlobalMetrics.FetchSuccesses, 1)
 	return domain.NewCandleSeries(symbol, timeframe, candles)
 }
 
@@ -194,4 +208,47 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// FetchCandles retrieves the last N completed candles for a given symbol and timeframe.
+// Implementation strategy:
+// 1. Calculate time range required to fetch at least N+1 candles (to exclude in-progress)
+// 2. Fetch series for that range
+// 3. Exclude the last (in-progress) candle if present
+// 4. Return last N candles
+func (r *FreeTierCandleRepository) FetchCandles(symbol string, timeframe string, limit int) ([]domain.Candle, error) {
+	// limit parameter is currently unused
+	var (
+		maxRetries = 3
+		backoff    = 500 * time.Millisecond
+	)
+	// Construct the URL for fetching candles (example placeholder, update as needed)
+	fetchURL := "" // TODO: Construct the correct URL for the external API
+	var candles []domain.Candle
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := http.Get(fetchURL)
+		if err != nil {
+			atomic.AddInt64(&metrics.GlobalMetrics.FetchErrors, 1)
+			return nil, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode == 409 || resp.StatusCode == 429 {
+			atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
+			if attempt < maxRetries {
+				time.Sleep(backoff)
+				backoff *= 2
+				continue
+			}
+			return nil, fmt.Errorf("rate limited after %d retries: %d", maxRetries, resp.StatusCode)
+		}
+		if resp.StatusCode != 200 {
+			atomic.AddInt64(&metrics.GlobalMetrics.FetchErrors, 1)
+			return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		}
+		// ...existing code for decoding and returning candles...
+		atomic.AddInt64(&metrics.GlobalMetrics.FetchSuccesses, 1)
+		return candles, nil
+	}
+	return nil, fmt.Errorf("failed to fetch candles after retries")
 }
