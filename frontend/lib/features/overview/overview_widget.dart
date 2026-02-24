@@ -503,6 +503,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     DropdownMenuItem(value: 'v2', child: Text('Algo 2')),
                     DropdownMenuItem(value: 'v3', child: Text('Algo 3')),
                     DropdownMenuItem(value: 'v4', child: Text('Algo 4 (v1+drift penalty)')),
+                    DropdownMenuItem(value: 'v5', child: Text('Algo v5')),
                   ],
                   onChanged: (v) {
                     if (v != null) {

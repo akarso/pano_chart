@@ -33,7 +33,7 @@ func (c *SidewaysV2ScoreCalculator) Score(series domain.CandleSeries) (float64, 
 
 	fs := flatnessScore(closes, rangePrice)
 	cts := channelTightnessScore(rangePrice, meanPrice)
-	brs := boundaryRespectScore(closes, rangePrice)
+	brs := boundaryRespectScoreV2(closes, rangePrice)
 	sns := slopeNeutralityScore(closes, rangePrice)
 
 	score := 0.35*fs + 0.25*brs + 0.20*sns + 0.20*cts
@@ -97,7 +97,7 @@ func channelTightnessScore(rangePrice, meanPrice float64) float64 {
 
 // boundaryRespectScore checks that price repeatedly touches both upper and lower bands.
 // upper_band = 90th percentile, lower_band = 10th percentile.
-func boundaryRespectScore(closes []float64, rangePrice float64) float64 {
+func boundaryRespectScoreV2(closes []float64, rangePrice float64) float64 {
 	n := len(closes)
 
 	sorted := make([]float64, n)

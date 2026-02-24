@@ -55,13 +55,14 @@ const (
 	SidewaysAlgoV2 SidewaysAlgoMode = "v2"
 	SidewaysAlgoV3 SidewaysAlgoMode = "v3"
 	SidewaysAlgoV4 SidewaysAlgoMode = "v4"
+	SidewaysAlgoV5 SidewaysAlgoMode = "v5"
 )
 
 // ParseSidewaysAlgo normalises a string to a valid SidewaysAlgoMode.
 // Empty string means "use the configured default".
 func ParseSidewaysAlgo(s string) SidewaysAlgoMode {
 	switch SidewaysAlgoMode(s) {
-	case SidewaysAlgoV1, SidewaysAlgoV2, SidewaysAlgoV3, SidewaysAlgoV4:
+	case SidewaysAlgoV1, SidewaysAlgoV2, SidewaysAlgoV3, SidewaysAlgoV4, SidewaysAlgoV5:
 		return SidewaysAlgoMode(s)
 	default:
 		return "" // use default
@@ -408,6 +409,10 @@ func sidewaysCalcFor(algo SidewaysAlgoMode) scoring.SymbolScoreCalculator {
 		}
 	case SidewaysAlgoV4:
 		return &scoring.SidewaysV4ScoreCalculator{}
+	case SidewaysAlgoV5:
+		return &scoring.SidewaysV5ScoreCalculator{
+			Config: scoring.DefaultSidewaysV5Config(),
+		}
 	default:
 		return &scoring.SidewaysConsistencyScoreCalculator{}
 	}
