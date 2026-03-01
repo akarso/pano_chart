@@ -23,22 +23,24 @@ type CompressionConfig struct {
 	CandleCount        int     // number of candles to analyse (tail window)
 }
 
-// DefaultCompressionConfig returns sensible defaults.
+// DefaultCompressionConfig returns sensible defaults, overridable via env vars.
 func DefaultCompressionConfig() CompressionConfig {
+	LoadEnv()
+
 	return CompressionConfig{
-		SwingLookback:      3,
-		ATRPeriod:          14,
-		MinStructuralRange: 0.005,
-		WidthWeight:        1.0,
-		VolWeight:          1.0,
-		ConvergenceWeight:  1.0,
-		TouchFactor:        0.5,
-		PressureThreshold:  0.2,
-		SmallRangePenalty:  0.3,
-		MaxExpectedSlope:   0.01,
-		MaxExpectedATRDrop: 0.005,
-		SlopeNormalization: 0.1,
-		CandleCount:        100,
+		SwingLookback:      EnvInt("COMPRESSION_SWING_LOOKBACK", 3),
+		ATRPeriod:          EnvInt("COMPRESSION_ATR_PERIOD", 14),
+		MinStructuralRange: EnvFloat("COMPRESSION_MIN_STRUCTURAL_RANGE", 0.005),
+		WidthWeight:        EnvFloat("COMPRESSION_WIDTH_WEIGHT", 1.0),
+		VolWeight:          EnvFloat("COMPRESSION_VOL_WEIGHT", 1.0),
+		ConvergenceWeight:  EnvFloat("COMPRESSION_CONVERGENCE_WEIGHT", 1.0),
+		TouchFactor:        EnvFloat("COMPRESSION_TOUCH_FACTOR", 0.5),
+		PressureThreshold:  EnvFloat("COMPRESSION_PRESSURE_THRESHOLD", 0.2),
+		SmallRangePenalty:  EnvFloat("COMPRESSION_SMALL_RANGE_PENALTY", 0.3),
+		MaxExpectedSlope:   EnvFloat("COMPRESSION_MAX_EXPECTED_SLOPE", 0.01),
+		MaxExpectedATRDrop: EnvFloat("COMPRESSION_MAX_EXPECTED_ATR_DROP", 0.005),
+		SlopeNormalization: EnvFloat("COMPRESSION_SLOPE_NORMALIZATION", 0.1),
+		CandleCount:        EnvInt("COMPRESSION_CANDLE_COUNT", 100),
 	}
 }
 

@@ -5,9 +5,6 @@ import (
 	"math"
 	"os"
 	"pano_chart/backend/domain"
-	"strconv"
-
-	"github.com/joho/godotenv"
 )
 
 // SidewaysV5ScoreCalculator implements SymbolScoreCalculator for v5
@@ -55,39 +52,19 @@ func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, 
 //	W3=1.0
 //	W4=1.0
 func DefaultSidewaysV5Config() SidewaysV5Config {
-	// Try to load .env from current directory (ignore error if not present)
-	_ = godotenv.Load()
-
-	// Helper to get int env with fallback
-	getInt := func(key string, def int) int {
-		if v, ok := os.LookupEnv(key); ok {
-			if i, err := strconv.Atoi(v); err == nil {
-				return i
-			}
-		}
-		return def
-	}
-	// Helper to get float env with fallback
-	getFloat := func(key string, def float64) float64 {
-		if v, ok := os.LookupEnv(key); ok {
-			if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f
-			}
-		}
-		return def
-	}
+	LoadEnv()
 
 	return SidewaysV5Config{
-		N:             getInt("N", 3),                     // Extrema window size
-		CandleCount:   getInt("CANDLE_COUNT", 110),        // Number of candles to analyze
-		IdealRangeMin: getFloat("IDEAL_RANGE_MIN", 0.005), // Min ideal volatility (fraction)
-		IdealRangeMax: getFloat("IDEAL_RANGE_MAX", 0.02),  // Max ideal volatility (fraction)
-		ATRMultiplier: getFloat("ATR_MULTIPLIER", 3.0),    // Spike detection multiplier
-		W1:            getFloat("W1", 1.0),                // Weight for CCS (channel structure)
-		W2:            getFloat("W2", 2.0),                // Weight for OQS (oscillation quality)
-		W3:            getFloat("W3", 1.0),                // Weight for DCS (drift control)
-		W4:            getFloat("W4", 1.0),                // Weight for VOS (volatility/oscillation)
-		ExtremaCount:  getInt("EXTREMA_COUNT", 8),         // Minimum number of extrema required
+		N:             EnvInt("SIDEWAYS_N", 3),
+		CandleCount:   EnvInt("SIDEWAYS_CANDLE_COUNT", 110),
+		IdealRangeMin: EnvFloat("SIDEWAYS_IDEAL_RANGE_MIN", 0.005),
+		IdealRangeMax: EnvFloat("SIDEWAYS_IDEAL_RANGE_MAX", 0.02),
+		ATRMultiplier: EnvFloat("SIDEWAYS_ATR_MULTIPLIER", 3.0),
+		W1:            EnvFloat("SIDEWAYS_W1", 1.0),
+		W2:            EnvFloat("SIDEWAYS_W2", 2.0),
+		W3:            EnvFloat("SIDEWAYS_W3", 1.0),
+		W4:            EnvFloat("SIDEWAYS_W4", 1.0),
+		ExtremaCount:  EnvInt("SIDEWAYS_EXTREMA_COUNT", 8),
 	}
 }
 
@@ -140,6 +117,15 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	}
 	// Filter: require at least cfg.ExtremaCount extrema
 	if len(extremaIdx) < cfg.ExtremaCount {
+		return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+	}
+
+	// --- 0b. Minimum range gate: reject micro-flat noise ---
+	// If the price range is far below the ideal minimum, the data is too flat
+	// to be structurally meaningful as sideways movement.
+	maxH, minL, meanP := extremesAndMean(candles)
+	rangeP := (maxH - minL) / (meanP + 1e-6)
+	if rangeP < cfg.IdealRangeMin*0.5 {
 		return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
 	}
 

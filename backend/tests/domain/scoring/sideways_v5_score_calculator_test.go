@@ -161,7 +161,7 @@ func TestSidewaysV5_MicroFlatNoiseRejected(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.3 {
 		t.Errorf("Micro-flat noise should be rejected, got %v", res.Score)
@@ -189,7 +189,7 @@ func TestSidewaysV5_HighVolatilityChaosRejected(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.3 {
 		t.Errorf("High-volatility chaos should be rejected, got %v", res.Score)

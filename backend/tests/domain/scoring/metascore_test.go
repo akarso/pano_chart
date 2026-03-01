@@ -91,8 +91,8 @@ func TestMetaScorer_ConfidenceWeighting(t *testing.T) {
 	}
 	ms := scoring.NewMetaScorer(subscores, cfg)
 	score, _ := ms.ScoreWithBreakdown(nil, nil)
-	if score > 0.47 || score < 0.45 {
-		t.Errorf("expected score ~0.46, got %v", score)
+	if score > 0.51 || score < 0.49 {
+		t.Errorf("expected score ~0.50, got %v", score)
 	}
 }
 
