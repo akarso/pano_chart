@@ -36,23 +36,20 @@ type rankedSymbolResponse struct {
 
 func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tfStr := r.URL.Query().Get("timeframe")
-	fmt.Printf("[rankings] Handler called, timeframe param: %s\n", tfStr)
 	if tfStr == "" {
-		fmt.Printf("[rankings] Missing timeframe param\n")
 		http.Error(w, `{"error":"missing timeframe"}`, http.StatusBadRequest)
 		return
 	}
 	tf, err := domain.NewTimeframe(tfStr)
 	if err != nil {
-		fmt.Printf("[rankings] Invalid timeframe: %s\n", tfStr)
+		http.Error(w, `{"error":"invalid timeframe"}`, http.StatusBadRequest)
 		http.Error(w, `{"error":"invalid timeframe"}`, http.StatusBadRequest)
 		return
 	}
-	limit := 30
+	limit := 110
 	if lstr := r.URL.Query().Get("limit"); lstr != "" {
 		l, err := strconv.Atoi(lstr)
 		if err != nil || l <= 0 {
-			fmt.Printf("[rankings] Invalid limit param: %s\n", lstr)
 			http.Error(w, `{"error":"invalid limit"}`, http.StatusBadRequest)
 			return
 		}
@@ -62,7 +59,6 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var series map[domain.Symbol]domain.CandleSeries
 	if h.TestSeries != nil {
 		series = h.TestSeries
-		fmt.Printf("[rankings] Using test stub series, count=%d\n", len(series))
 	} else {
 		// Dynamically fetch universe symbols for each request
 		universeProvider, ok := h.Ranker.(interface {
@@ -72,17 +68,14 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			syms, err := universeProvider.Universe().Symbols(r.Context(), h.ExchangeInfoURL, h.TickerURL)
 			if err != nil {
-				fmt.Printf("[rankings] Error fetching dynamic universe: %v\n", err)
 				http.Error(w, `{"error":"universe fetch error"}`, http.StatusBadGateway)
 				return
 			}
 			symbols = syms
 		} else {
-			fmt.Printf("[rankings] Ranker does not expose Universe provider, falling back to handler Symbols slice\n")
 			symbols = h.Symbols
 		}
 		series = make(map[domain.Symbol]domain.CandleSeries)
-		fmt.Printf("[rankings] Universe symbols: %d\n", len(symbols))
 		for i, sym := range symbols {
 			fmt.Printf("[rankings] [%d/%d] Fetching series for symbol=%s, timeframe=%s\n", i+1, len(symbols), sym.String(), tf.String())
 			cs, err := h.CandleRepo.GetSeries(sym, tf, time.Time{}, time.Time{}) // TODO: set real time range
@@ -103,7 +96,6 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("[rankings] Total series loaded: %d\n", len(series))
 	}
-	fmt.Printf("[rankings] Calling Ranker with series count: %d\n", len(series))
 	ranked, err := h.Ranker.Rank(series)
 	if err != nil {
 		fmt.Printf("[rankings] Error ranking: %v\n", err)

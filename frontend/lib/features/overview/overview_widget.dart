@@ -637,6 +637,7 @@ class OverviewWidgetState extends State<OverviewWidget>
               normalize: _normalizeSparklines,
               globalMaxPct: _globalMaxPctChange(state),
               isFavourite: _favourites.contains(item.symbol),
+              sort: state.sort,
             ),
           );
         },
@@ -739,6 +740,7 @@ class _OverviewGridItem extends StatelessWidget {
   final bool normalize;
   final double globalMaxPct;
   final bool isFavourite;
+  final String sort;
 
   const _OverviewGridItem({
     required this.item,
@@ -746,6 +748,7 @@ class _OverviewGridItem extends StatelessWidget {
     required this.normalize,
     required this.globalMaxPct,
     this.isFavourite = false,
+    required this.sort,
   });
 
   @override
@@ -800,12 +803,41 @@ class _OverviewGridItem extends StatelessWidget {
                       size: (fontSize * 0.8).clamp(10.0, 16.0),
                     ),
                   ),
+                // Sideways score or percentile display (bottom left, small font)
+                Positioned(
+                  left: pad + 4,
+                  bottom: pad,
+                  child: Text(
+                    _formatSidewaysScore(
+                      sort == 'sideways' ? item.sidewaysPercentile : item.sidewaysScore,
+                      isPercentile: sort == 'sideways',
+                    ),
+                    style: TextStyle(
+                      fontSize: (fontSize * 0.55).clamp(7.0, 11.0),
+                      color: Colors.white70,
+                      fontWeight: FontWeight.w400,
+                      backgroundColor: Colors.black.withAlpha((0.18 * 255).round()),
+                    ),
+                  ),
+                ),
               ],
             );
           },
         ),
       ),
     );
+  }
+
+  String _formatSidewaysScore(double score, {bool isPercentile = false}) {
+    if (isPercentile) {
+      // Percentile is 0..1, show as 0-100
+      final pct = (score * 100).clamp(0, 100);
+      return '${pct.toStringAsFixed(1)}%';
+    } else {
+      // Show 0.00 for very small values above zero
+      final rounded = score < 0.005 ? 0.0 : score;
+      return rounded.toStringAsFixed(2);
+    }
   }
 
   Widget _buildSparkline(List<double> points) {
@@ -820,11 +852,6 @@ class _OverviewGridItem extends StatelessWidget {
     );
   }
 
-  bool _hasScores(OverviewItem item) {
-    return item.trendScore != 0 ||
-        item.sidewaysScore != 0 ||
-        item.gainScore != 0;
-  }
 
   Widget _buildBadge(OverviewItem item, double fontSize) {
     final signal = _parseSignalType(item.badgeComponent);

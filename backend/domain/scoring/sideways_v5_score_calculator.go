@@ -1,8 +1,13 @@
 package scoring
 
 import (
+	"fmt"
 	"math"
+	"os"
 	"pano_chart/backend/domain"
+	"strconv"
+
+	"github.com/joho/godotenv"
 )
 
 // SidewaysV5ScoreCalculator implements SymbolScoreCalculator for v5
@@ -11,33 +16,78 @@ type SidewaysV5ScoreCalculator struct {
 }
 
 func (s *SidewaysV5ScoreCalculator) Name() string {
-	return "SidewaysAlgoV5"
+	return "Sideways Consistency"
 }
 
 func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, error) {
-	candles := make([]domain.Candle, series.Len())
-	for i := 0; i < series.Len(); i++ {
-		c, err := series.At(i)
+	count := s.Config.CandleCount
+	length := series.Len()
+	start := 0
+	if length > count {
+		start = length - count
+		length = count
+	}
+	candles := make([]domain.Candle, length)
+	for i := 0; i < length; i++ {
+		c, err := series.At(start + i)
 		if err != nil {
 			return 0, err
 		}
 		candles[i] = c
 	}
-	return DetectSidewaysV5(candles, s.Config).Score, nil
+	sc := DetectSidewaysV5(candles, s.Config).Score
+	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 1: %+v\n", sc)
+	return sc, nil
+	//return DetectSidewaysV5(candles, s.Config).Score, nil
 }
 
-// DefaultSidewaysV5Config returns the default config for v5
+// DefaultSidewaysV5Config returns the config for v5, loading from .env if present.
+// Each value can be overridden by an environment variable in .env or the process env.
+// Example .env:
+//
+//	N=3
+//	CANDLE_COUNT=110
+//	IDEAL_RANGE_MIN=0.005
+//	IDEAL_RANGE_MAX=0.02
+//	ATR_MULTIPLIER=3.0
+//	W1=1.0
+//	W2=2.0
+//	W3=1.0
+//	W4=1.0
 func DefaultSidewaysV5Config() SidewaysV5Config {
+	// Try to load .env from current directory (ignore error if not present)
+	_ = godotenv.Load()
+
+	// Helper to get int env with fallback
+	getInt := func(key string, def int) int {
+		if v, ok := os.LookupEnv(key); ok {
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+		return def
+	}
+	// Helper to get float env with fallback
+	getFloat := func(key string, def float64) float64 {
+		if v, ok := os.LookupEnv(key); ok {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				return f
+			}
+		}
+		return def
+	}
+
 	return SidewaysV5Config{
-		N:             3,
-		CandleCount:   110,
-		IdealRangeMin: 0.005,
-		IdealRangeMax: 0.02,
-		ATRMultiplier: 3.0,
-		W1:            1.3,
-		W2:            1.2,
-		W3:            1.0,
-		W4:            1.0,
+		N:             getInt("N", 3),                     // Extrema window size
+		CandleCount:   getInt("CANDLE_COUNT", 110),        // Number of candles to analyze
+		IdealRangeMin: getFloat("IDEAL_RANGE_MIN", 0.005), // Min ideal volatility (fraction)
+		IdealRangeMax: getFloat("IDEAL_RANGE_MAX", 0.02),  // Max ideal volatility (fraction)
+		ATRMultiplier: getFloat("ATR_MULTIPLIER", 3.0),    // Spike detection multiplier
+		W1:            getFloat("W1", 1.0),                // Weight for CCS (channel structure)
+		W2:            getFloat("W2", 2.0),                // Weight for OQS (oscillation quality)
+		W3:            getFloat("W3", 1.0),                // Weight for DCS (drift control)
+		W4:            getFloat("W4", 1.0),                // Weight for VOS (volatility/oscillation)
+		ExtremaCount:  getInt("EXTREMA_COUNT", 8),         // Minimum number of extrema required
 	}
 }
 
@@ -53,40 +103,56 @@ type SidewaysResult struct {
 // SidewaysV5Config holds all tunable parameters for Sideways v5
 // (weights, N, candleCount, ideal volatility band, ATR multiplier)
 type SidewaysV5Config struct {
-	N             int
-	CandleCount   int
-	IdealRangeMin float64
-	IdealRangeMax float64
-	ATRMultiplier float64
-	W1            float64
-	W2            float64
-	W3            float64
-	W4            float64
+	N             int     // Extrema window size
+	CandleCount   int     // Number of candles to analyze
+	IdealRangeMin float64 // Min ideal volatility (fraction)
+	IdealRangeMax float64 // Max ideal volatility (fraction)
+	ATRMultiplier float64 // Spike detection multiplier
+	W1            float64 // Weight for CCS (channel structure)
+	W2            float64 // Weight for OQS (oscillation quality)
+	W3            float64 // Weight for DCS (drift control)
+	W4            float64 // Weight for VOS (volatility/oscillation)
+	ExtremaCount  int     // Minimum number of extrema required
 }
 
 // DetectSidewaysV5 runs the structural equilibrium detector
 // Returns SidewaysResult
 func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysResult {
-	if len(candles) < cfg.CandleCount {
-		println("[SidewaysV5] Not enough candles: ", len(candles), " required:", cfg.CandleCount)
+	// --- 0. Moving average flatness filter ---
+	// ma := simpleMovingAverage(candles, 50) // window size 40, can be tuned
+	// relEps := 0.001 * mean(ma)             // 0.1% of mean MA value
+	// if !isMAFlat(ma, relEps) {
+	//  println("[SidewaysV5] MA not strictly flat (relEps=", relEps, "), skipping scoring.")
+	//  return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+	// }
+	// isMAFlat returns true if all MA values are within epsilon of the mean
+
+	// simpleMovingAverage computes SMA for candle closes with given window size
+
+	// --- 0. Initial extrema clustering filter ---
+	// Log config struct
+
+	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
+	// Gather all extrema values
+	extremaVals := make([]float64, len(extremaIdx))
+	for i, idx := range extremaIdx {
+		extremaVals[i] = (candles[idx].High() + candles[idx].Low()) / 2
+	}
+	// Filter: require at least cfg.ExtremaCount extrema
+	if len(extremaIdx) < cfg.ExtremaCount {
 		return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
 	}
 
-	println("[SidewaysV5] Running with ", len(candles), " candles, config.CandleCount=", cfg.CandleCount)
-
 	// --- 1. Detect local extrema ---
-	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
-	println("[SidewaysV5] Extrema count:", len(extremaIdx))
+	// (already done above)
 
 	// --- 2. Fit regression lines to all extrema ---
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	println("[SidewaysV5] ExtremaCandles:", len(extremaCandles))
 	upperSlope, upperIntercept := linearRegression(extremaCandles)
 	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
-	println("[SidewaysV5] upperSlope=", upperSlope, " lowerSlope=", lowerSlope)
 
 	// --- 3. Compute CCS ---
 	peaks := make([]domain.Candle, len(highsIdx))
@@ -105,21 +171,18 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
 	CCS := clamp((parallelScore+deviationScore+widthStabilityScore)/3, 0, 1)
-	println("[SidewaysV5] CCS=", CCS, " parallelScore=", parallelScore, " deviationScore=", deviationScore, " widthStabilityScore=", widthStabilityScore)
 
 	// --- 4. Compute OQS ---
 	altScore := alternationScore(extremaIdx)
 	evennessScoreVal := evennessScore(extremaIdx, candles)
-	brScore := boundaryRespectScoreV5(candles, extremaIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
+	brScore := boundaryRespectScoreV5(candles, highsIdx, lowsIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
 	OQS := clamp((altScore+evennessScoreVal+brScore)/3, 0, 1)
-	println("[SidewaysV5] OQS=", OQS, " altScore=", altScore, " evennessScore=", evennessScoreVal, " brScore=", brScore)
 
 	// --- 5. Compute DCS ---
 	fullSlope, _ := linearRegression(candles)
 	channelWidth := mean(widths)
 	normSlope := math.Abs(fullSlope) / (channelWidth + 1e-6)
 	DCS := 1 - clamp(normSlope, 0, 1)
-	println("[SidewaysV5] DCS=", DCS, " fullSlope=", fullSlope, " channelWidth=", channelWidth, " normSlope=", normSlope)
 
 	// --- 6. Compute VOS ---
 	maxHigh, minLow, meanPrice := extremesAndMean(candles)
@@ -128,11 +191,9 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// atrRatio := atr / (meanPrice + 1e-6) // unused
 	vosRaw := bellShapedScore(rangePercent, cfg.IdealRangeMin, cfg.IdealRangeMax)
 	VOS := clamp(vosRaw/0.33, 0, 1)
-	println("[SidewaysV5] VOS=", VOS, " vosRaw=", vosRaw, " rangePercent=", rangePercent, " atr=", atr)
 
 	// --- 7. Spike detection ---
 	spikeIdx, spikeDetected := detectSpike(candles, atr, cfg.ATRMultiplier)
-	println("[SidewaysV5] spikeDetected=", spikeDetected, " spikeIdx=", spikeIdx)
 
 	// --- 8. Recovery evaluation ---
 	SRM := 1.0
@@ -144,7 +205,6 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 		structurePre := min3(preCCS, preOQS, preDCS)
 		structurePost := min3(postCCS, postOQS, postDCS)
 		recoveryScore := math.Min(structurePre, structurePost)
-		println("[SidewaysV5] Recovery: structurePre=", structurePre, " structurePost=", structurePost, " recoveryScore=", recoveryScore)
 		if recoveryScore > 0.8 {
 			SRM = 0.9
 		} else if recoveryScore > 0.5 {
@@ -156,14 +216,17 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 		}
 	}
 
-	// --- 9. Final composition (HybridStructural) ---
-	structureCore := math.Pow(CCS, cfg.W1) * math.Pow(OQS, cfg.W2)
-	driftAdj := math.Pow(DCS, cfg.W3)
-	volAdj := math.Pow(VOS, cfg.W4)
-	baseScore := structureCore * driftAdj * volAdj
-	finalScore := baseScore * SRM
+	// --- 9. Final composition (Weighted Average) ---
+	fmt.Fprintf(os.Stderr, "[SidewaysV5] cfg:: %+v\n", cfg)
+	weightedSum := cfg.W1*CCS + cfg.W2*OQS + cfg.W3*DCS + cfg.W4*VOS
+	totalWeight := cfg.W1 + cfg.W2 + cfg.W3 + cfg.W4
+	avgScore := 0.0
+	fmt.Fprintf(os.Stderr, "[SidewaysV5] totalWeight: %+v\n", totalWeight)
+	if totalWeight > 0 {
+		avgScore = weightedSum / totalWeight
+	}
+	finalScore := avgScore * SRM
 	finalScore = clamp(finalScore, 0, 1)
-	println("[SidewaysV5] FINAL: finalScore=", finalScore, " structureCore=", structureCore, " driftAdj=", driftAdj, " volAdj=", volAdj, " SRM=", SRM)
 
 	return SidewaysResult{
 		Score: finalScore,
@@ -206,7 +269,6 @@ func detectExtrema(candles []domain.Candle, N int) (highs, lows, all []int) {
 		}
 	}
 	// Sanity check: print sequence of high/low types for all
-	println("[SidewaysV5] Extrema sequence:")
 	for _, idx := range all {
 		label := ""
 		if contains(highs, idx) {
@@ -215,7 +277,6 @@ func detectExtrema(candles []domain.Candle, N int) (highs, lows, all []int) {
 		if contains(lows, idx) {
 			label += "L"
 		}
-		println("  idx=", idx, " type=", label, " high=", candles[idx].High(), " low=", candles[idx].Low())
 	}
 	return highs, lows, all
 }
@@ -372,28 +433,40 @@ func evennessScore(extrema []int, candles []domain.Candle) float64 {
 		t1 := candles[extrema[i-1]].Timestamp()
 		t2 := candles[extrema[i]].Timestamp()
 		deltas[i-1] = float64(t2.Sub(t1).Seconds())
-		println("[evennessScore] idx1=", extrema[i-1], " idx2=", extrema[i], " t1=", t1.String(), " t2=", t2.String(), " delta=", deltas[i-1])
 	}
 	std := stddev(deltas)
-	meanDelta := mean(deltas)
-	println("[evennessScore] deltas=", deltas, " stddev=", std, " mean=", meanDelta)
+	//meanDelta := mean(deltas)
 	k := 5000.0
 	return math.Exp(-std / k)
 }
 
-func boundaryRespectScoreV5(candles []domain.Candle, extrema []int, us, ui, ls, li float64) float64 {
-	if len(extrema) == 0 {
+func boundaryRespectScoreV5(candles []domain.Candle, highsIdx, lowsIdx []int, us, ui, ls, li float64) float64 {
+	if len(highsIdx) == 0 && len(lowsIdx) == 0 {
 		return 1
 	}
-	var sum float64
-	for _, idx := range extrema {
-		y := (candles[idx].High() + candles[idx].Low()) / 2
+	var highSum float64
+	for _, idx := range highsIdx {
+		priceHigh := candles[idx].High()
 		upper := us*float64(idx) + ui
-		lower := ls*float64(idx) + li
-		dist := math.Min(math.Abs(y-upper), math.Abs(y-lower))
-		sum += dist
+		dist := math.Abs(priceHigh - upper)
+		highSum += dist
 	}
-	meanDist := sum / float64(len(extrema))
+	var lowSum float64
+	for _, idx := range lowsIdx {
+		priceLow := candles[idx].Low()
+		lower := ls*float64(idx) + li
+		dist := math.Abs(priceLow - lower)
+		lowSum += dist
+	}
+	meanHigh := 0.0
+	meanLow := 0.0
+	if len(highsIdx) > 0 {
+		meanHigh = highSum / float64(len(highsIdx))
+	}
+	if len(lowsIdx) > 0 {
+		meanLow = lowSum / float64(len(lowsIdx))
+	}
+	meanDist := (meanHigh + meanLow) / 2
 	k := 2.0 // scaling factor for exponential decay
 	return math.Exp(-meanDist / k)
 }
@@ -454,17 +527,14 @@ func detectSpike(candles []domain.Candle, atr, k float64) (int, bool) {
 
 func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, float64, float64) {
 	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
-	println("[SidewaysV5] Extrema count:", len(extremaIdx))
 
 	// --- 2. Fit regression lines to all extrema ---
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	println("[SidewaysV5] ExtremaCandles:", len(extremaCandles))
 	upperSlope, upperIntercept := linearRegression(extremaCandles)
 	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
-	println("[SidewaysV5] upperSlope=", upperSlope, " lowerSlope=", lowerSlope)
 
 	peaks := make([]domain.Candle, len(highsIdx))
 	for i, idx := range highsIdx {
@@ -484,9 +554,8 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 	CCS := clamp((parallelScore+deviationScore+widthStabilityScore)/3, 0, 1)
 	altScore := alternationScore(extremaIdx)
 	evennessScoreVal := evennessScore(extremaIdx, candles)
-	brScore := boundaryRespectScoreV5(candles, extremaIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
+	brScore := boundaryRespectScoreV5(candles, highsIdx, lowsIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
 	OQS := clamp((altScore+evennessScoreVal+brScore)/3, 0, 1)
-	println("[SidewaysV5] OQS=", OQS, " altScore=", altScore, " evennessScore=", evennessScoreVal, " brScore=", brScore)
 
 	fullSlope, _ := linearRegression(candles)
 	channelWidth := mean(widths)
@@ -494,6 +563,74 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 	DCS := 1 - clamp(normSlope, 0, 1)
 	return CCS, OQS, DCS
 }
+
+// Note to AI agents: The following helper functions (simpleMovingAverage, hasDistinctClusters, isMAFlat) were part of an initial idea to pre-filter for MA flatness and distinct clusters of extrema, but were found to be too strict and are currently not used in the main detection flow. They can be re-enabled or refined in the future if needed.
+// func simpleMovingAverage(candles []domain.Candle, window int) []float64 {
+// 	n := len(candles)
+// 	if n < window {
+// 		return nil
+// 	}
+// 	ma := make([]float64, n-window+1)
+// 	for i := 0; i <= n-window; i++ {
+// 		sum := 0.0
+// 		for j := 0; j < window; j++ {
+// 			sum += candles[i+j].Close()
+// 		}
+// 		ma[i] = sum / float64(window)
+// 	}
+// 	return ma
+// }
+
+// // hasDistinctClusters checks if extrema values form two distinct clusters (simple threshold-based method)
+// func hasDistinctClusters(vals []float64) bool {
+// 	if len(vals) < 4 {
+// 		return false // not enough points to form clusters
+// 	}
+// 	// Sort values
+// 	sorted := make([]float64, len(vals))
+// 	copy(sorted, vals)
+// 	// Simple insertion sort (small arrays)
+// 	for i := 1; i < len(sorted); i++ {
+// 		key := sorted[i]
+// 		j := i - 1
+// 		for j >= 0 && sorted[j] > key {
+// 			sorted[j+1] = sorted[j]
+// 			j--
+// 		}
+// 		sorted[j+1] = key
+// 	}
+// 	// Find largest gap between consecutive values
+// 	maxGap := 0.0
+// 	maxIdx := 0
+// 	for i := 1; i < len(sorted); i++ {
+// 		gap := sorted[i] - sorted[i-1]
+// 		if gap > maxGap {
+// 			maxGap = gap
+// 			maxIdx = i
+// 		}
+// 	}
+// 	// Heuristic: if the largest gap splits the data into two groups, and each group has at least 2 points, and the gap is at least 10% of the value range, call it two clusters
+// 	n1 := maxIdx
+// 	n2 := len(sorted) - maxIdx
+// 	valRange := sorted[len(sorted)-1] - sorted[0]
+// 	if n1 >= 2 && n2 >= 2 && maxGap > 0.1*valRange {
+// 		return true
+// 	}
+// 	return false
+// }
+
+// func isMAFlat(ma []float64, epsilon float64) bool {
+// 	if len(ma) == 0 {
+// 		return false
+// 	}
+// 	m := mean(ma)
+// 	for _, v := range ma {
+// 		if math.Abs(v-m) > epsilon {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
 
 func min3(a, b, c float64) float64 {
 	return math.Min(a, math.Min(b, c))
@@ -523,6 +660,7 @@ func (s SidewaysV5Subscore) Compute(data interface{}, cfg interface{}) SubscoreR
 		v5cfg = SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
 	}
 	res := DetectSidewaysV5(candles, v5cfg)
+	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 2: %+v\n", res.Score)
 	return SubscoreResult{
 		Value:      clamp(res.Score, 0, 1),
 		Confidence: 1.0,

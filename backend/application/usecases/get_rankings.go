@@ -111,9 +111,12 @@ type GetRankings struct {
 
 	exchangeInfoURL string
 	tickerURL       string
+
+	snapshotLogger ports.SnapshotLogger // optional; nil = no logging
 }
 
 // NewGetRankings constructs the use case.
+// snapshotLogger is optional — pass nil to disable evaluation logging.
 func NewGetRankings(
 	universe SymbolUniverseProvider,
 	ranker RankSymbols,
@@ -124,9 +127,10 @@ func NewGetRankings(
 	defaultAlgo SidewaysAlgoMode,
 	weights []ScoreWeight,
 	workerLimit int,
+	snapshotLogger ports.SnapshotLogger,
 ) *GetRankings {
 	if precision <= 0 {
-		precision = 30
+		precision = 110
 	}
 	if defaultAlgo == "" {
 		defaultAlgo = SidewaysAlgoV1
@@ -146,6 +150,7 @@ func NewGetRankings(
 		workerLimit:     wl,
 		exchangeInfoURL: exchangeInfoURL,
 		tickerURL:       tickerURL,
+		snapshotLogger:  snapshotLogger,
 	}
 }
 
@@ -209,6 +214,13 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 				ranked:    ranked[0],
 				hasSeries: true,
 			}
+
+			// Log evaluation snapshot (fire-and-forget, non-blocking).
+			if g.snapshotLogger != nil {
+				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
+				_ = g.snapshotLogger.Log(snap)
+			}
+
 			return nil
 		})
 	}

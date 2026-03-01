@@ -28,17 +28,23 @@ class GetRankingsImpl implements GetOverview {
     );
 
     final items = dto.results
-        .map((e) => OverviewItem(
-              symbol: e.symbol,
-              totalScore: e.totalScore,
-              trendScore: e.scores.trend,
-              sidewaysScore: e.scores.sideways,
-              gainScore: e.scores.gain,
-              volume: e.volume,
-              sparkline: e.sparkline,
-              badgeComponent: e.badgeComponent,
-            ))
-        .toList();
+      .map((e) => OverviewItem(
+          symbol: e.symbol,
+          totalScore: e.totalScore,
+          trendScore: e.scores.trend,
+          sidewaysScore: e.scores.sideways,
+          gainScore: e.scores.gain,
+          volume: e.volume,
+          sparkline: e.sparkline,
+          badgeComponent: e.badgeComponent,
+          sidewaysPercentile: e.sidewaysPercentile,
+        ))
+      .toList();
+
+    // Log each OverviewItem for debugging
+    for (final item in items) {
+      print('[OverviewItem] symbol: ${item.symbol}, totalScore: ${item.totalScore}, trend: ${item.trendScore}, sideways: ${item.sidewaysScore}, gain: ${item.gainScore}, volume: ${item.volume}, sidewaysPercentile: ${item.sidewaysPercentile}, badgeComponent: ${item.badgeComponent}');
+    }
 
     return OverviewResult(
       items: items,

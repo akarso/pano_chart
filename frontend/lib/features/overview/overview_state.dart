@@ -8,6 +8,7 @@ class OverviewItem {
   final double volume;
   final List<double> sparkline;
   final String badgeComponent;
+  final double sidewaysPercentile;
 
   const OverviewItem({
     required this.symbol,
@@ -18,6 +19,7 @@ class OverviewItem {
     this.volume = 0.0,
     this.sparkline = const [],
     this.badgeComponent = '',
+    this.sidewaysPercentile = 0.0,
   });
 }
 

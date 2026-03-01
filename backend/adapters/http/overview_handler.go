@@ -2,7 +2,6 @@ package http
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -30,9 +29,12 @@ type overviewResponse struct {
 
 // overviewSymbolDTO represents a single ranked symbol with sparkline.
 type overviewSymbolDTO struct {
-	Symbol     string    `json:"symbol"`
-	TotalScore float64   `json:"totalScore"`
-	Sparkline  []float64 `json:"sparkline"`
+	Symbol        string    `json:"symbol"`
+	TotalScore    float64   `json:"totalScore"`
+	SidewaysScore float64   `json:"sidewaysScore"`
+	TrendScore    float64   `json:"trendScore"`
+	GainScore     float64   `json:"gainScore"`
+	Sparkline     []float64 `json:"sparkline"`
 }
 
 // ServeHTTP implements http.Handler.
@@ -61,8 +63,6 @@ func (h *OverviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = l
 	}
 
-	fmt.Printf("[overview] Handler called: timeframe=%s, limit=%d\n", tfStr, limit)
-
 	// Execute use case
 	req := usecases.GetOverviewRequest{
 		Timeframe: tf,
@@ -71,7 +71,6 @@ func (h *OverviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	results, err := h.getOverviewUC.Execute(r.Context(), req)
 	if err != nil {
-		fmt.Printf("[overview] Error executing use case: %v\n", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -80,13 +79,14 @@ func (h *OverviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	dtoResults := make([]overviewSymbolDTO, len(results))
 	for i, result := range results {
 		dtoResults[i] = overviewSymbolDTO{
-			Symbol:     result.Symbol.String(),
-			TotalScore: result.TotalScore,
-			Sparkline:  result.Sparkline,
+			Symbol:        result.Symbol.String(),
+			TotalScore:    result.TotalScore,
+			SidewaysScore: result.SidewaysScore,
+			TrendScore:    result.TrendScore,
+			GainScore:     result.GainScore,
+			Sparkline:     result.Sparkline,
 		}
 	}
-
-	fmt.Printf("[overview] Entering slow step at line 92, tickers len=%d\n", len(dtoResults))
 
 	precision := 0
 	if len(results) > 0 {
@@ -100,14 +100,9 @@ func (h *OverviewHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Results:   dtoResults,
 	}
 
-	fmt.Printf("[overview] Exited line 92\n")
-
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		fmt.Printf("[overview] Error encoding response: %v\n", err)
 		http.Error(w, `{"error":"failed to encode response"}`, http.StatusInternalServerError)
 		return
 	}
-
-	fmt.Printf("[overview] Response sent: count=%d\n", resp.Count)
 }

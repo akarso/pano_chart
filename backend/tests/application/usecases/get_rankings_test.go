@@ -80,6 +80,7 @@ func TestGetRankings_PercentileComputation(t *testing.T) {
 		usecases.SidewaysAlgoV1,
 		weights,
 		4,
+		nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
@@ -137,7 +138,7 @@ func TestGetRankings_SingleSymbolPercentileIsOne(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, candleRepo,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
@@ -187,7 +188,7 @@ func TestGetRankings_PercentileInZeroOneRange(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, candleRepo,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{

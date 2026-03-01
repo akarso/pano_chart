@@ -1,0 +1,269 @@
+
+PR-031.md
+Sideways 4 – Structural Range Tradability (Swing-Based)
+Objective
+
+Replace heuristic channel logic (v2) with a structurally grounded, swing-based sideways detector optimized for:
+
+15m timeframe
+
+Medium-width tradable ranges
+
+Clear support/resistance ping-pong behavior
+
+No structural trend progression
+
+No micro-noise chop
+
+This version builds on v1 (SidewaysConsistencyScoreCalculator) and enhances it using explicit swing structure.
+
+1. Conceptual Definition
+
+We define a tradable sideways range as:
+
+Low net displacement (no drift)
+
+Repeated oscillation between upper and lower boundary
+
+Swings that travel most of the range
+
+Stable containment (clustered highs and lows)
+
+Alternating structure (no higher-high / lower-low progression)
+
+Medium relative width (not too tight, not too wide)
+
+This is NOT:
+
+Accumulation before breakout
+
+Compression triangle
+
+Volatility spike regime
+
+Micro chop
+
+2. Algorithm Overview
+
+We extend v1:
+
+baseScore = (1 - NDR) * RSS * ODS
+
+
+Then multiply by structural modifiers:
+
+score = baseScore
+        * SwingTravelEfficiency
+        * BoundaryClarity
+        * AlternationPurity
+        * WidthPreference
+
+
+All modifiers ∈ [0.6, 1.1] (soft influence, no hard killers).
+
+3. Required Inputs
+
+From existing implementation:
+
+Close prices (30 candles)
+
+Precomputed:
+
+Net Displacement Ratio (NDR)
+
+Range Stability Score (RSS)
+
+Oscillation Density Score (ODS)
+
+Local extrema list (already implemented in v1)
+
+4. New Structural Components
+4.1 Swing Travel Efficiency
+Purpose
+
+Eliminate micro-chop and weak oscillations.
+
+Logic
+
+For each swing pair:
+
+low → next high
+
+high → next low
+
+Compute:
+
+swingAmplitude = abs(high - low)
+
+
+Let:
+
+avgSwingAmplitude = mean(swingAmplitude)
+totalRange = maxPrice - minPrice
+travelRatio = avgSwingAmplitude / totalRange
+
+Scoring
+if travelRatio >= 0.7 → 1.1
+if 0.5 – 0.7 → 1.0
+if 0.3 – 0.5 → 0.85
+if < 0.3 → 0.7
+
+
+Rationale:
+Tradable ranges require near full-box travel.
+
+4.2 Boundary Clarity
+Purpose
+
+Reward clear support and resistance clustering.
+
+Logic
+
+Collect:
+
+swingHighs
+
+swingLows
+
+Compute:
+
+stdHigh = stddev(swingHighs)
+stdLow  = stddev(swingLows)
+normalizedHighSpread = stdHigh / totalRange
+normalizedLowSpread  = stdLow  / totalRange
+
+
+Low spread = tight boundary.
+
+Scoring
+boundaryScore = 1.0
+
+if normalizedHighSpread < 0.15 → +0.05
+if normalizedLowSpread  < 0.15 → +0.05
+
+if either > 0.35 → multiply by 0.85
+
+
+Cap at 1.1.
+
+4.3 Alternation Purity
+Purpose
+
+Eliminate structural trend leakage.
+
+Logic
+
+Traverse swing sequence:
+
+Detect:
+
+higher-high progression
+
+lower-low progression
+
+Count violations:
+
+progressionCount++
+
+
+Compute:
+
+progressionRatio = progressionCount / totalSwings
+
+Scoring
+if progressionRatio == 0 → 1.1
+if < 0.2 → 1.0
+if < 0.4 → 0.85
+else → 0.7
+
+
+Rationale:
+Proper range alternates highs and lows without structural drift.
+
+4.4 Width Preference (15m Optimized)
+Purpose
+
+Favor medium tradable width.
+
+Logic
+relativeWidth = totalRange / meanPrice
+
+
+Suggested 15m band:
+
+< 1% → too tight
+
+2–6% → ideal
+
+10% → too volatile
+
+Scoring
+if 0.02 ≤ width ≤ 0.06 → 1.1
+if 0.01 ≤ width < 0.02 → 0.9
+if 0.06 < width ≤ 0.10 → 0.9
+else → 0.7
+
+
+Soft only. No hard reject.
+
+5. Final Formula
+score = (1 - NDR)
+        * RSS
+        * ODS
+        * travelScore
+        * boundaryScore
+        * alternationScore
+        * widthScore
+
+
+Clamp final score to [0, 1].
+
+6. Backward Compatibility
+
+Keep v1 available as:
+
+sidewaysAlgo=v1
+
+Introduce:
+
+sidewaysAlgo=v4
+
+No breaking changes.
+
+7. Expected Behavioral Improvements
+
+v4 should:
+
+Stop ranking micro flatlines as top sideways
+
+Stop favoring narrow noise boxes
+
+Prioritize full-range oscillation structures
+
+Visually align better with “lazy 15m tradable range”
+
+Reduce sideways badge dominance
+
+8. Performance Considerations
+
+All new metrics:
+
+O(n) over swings
+
+No heavy regression
+
+No percentile band recomputation
+
+Negligible performance impact compared to candle fetching.
+
+9. Future Extensions (Optional)
+
+Not included in this PR:
+
+Regime classification: Range vs Compression
+
+Breakout readiness detection
+
+Timeframe-aware dynamic width bands
+
+Outlier wick filtering

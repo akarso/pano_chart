@@ -30,7 +30,7 @@ type GetOverview struct {
 // maxWorkers controls bounded concurrency when fetching candles.
 func NewGetOverview(ranker RankSymbols, candleRepo ports.CandleRepositoryPort, precision int, maxWorkers int) *GetOverview {
 	if precision <= 0 {
-		precision = 30 // fallback
+		precision = 110 // fallback
 	}
 	if maxWorkers <= 0 {
 		maxWorkers = 5
@@ -45,9 +45,12 @@ func NewGetOverview(ranker RankSymbols, candleRepo ports.CandleRepositoryPort, p
 
 // OverviewResult represents a ranked symbol with its sparkline data.
 type OverviewResult struct {
-	Symbol     domain.Symbol
-	TotalScore float64
-	Sparkline  []float64 // close prices, chronologically ordered
+	Symbol        domain.Symbol
+	TotalScore    float64
+	SidewaysScore float64
+	TrendScore    float64
+	GainScore     float64
+	Sparkline     []float64 // close prices, chronologically ordered
 }
 
 // GetOverviewRequest encapsulates the input parameters for the use case.
@@ -104,12 +107,26 @@ func (g *GetOverview) Execute(ctx context.Context, req GetOverviewRequest) ([]Ov
 			// Extract close prices in chronological order.
 			sparkline := extractClosePrices(series)
 
+			// Extract component scores if present
+			sideways := rs.Scores["Sideways Consistency"]
+			trend := rs.Scores["Trend Predictability"]
+			if trend == 0 {
+				trend = rs.Scores["TrendPredictability"]
+			}
+			gain := rs.Scores["Gain/Loss"]
+			if gain == 0 {
+				gain = rs.Scores["GainLoss"]
+			}
+
 			// Store result.
 			resultsMu.Lock()
 			results[i] = OverviewResult{
-				Symbol:     rs.Symbol,
-				TotalScore: rs.TotalScore,
-				Sparkline:  sparkline,
+				Symbol:        rs.Symbol,
+				TotalScore:    rs.TotalScore,
+				SidewaysScore: sideways,
+				TrendScore:    trend,
+				GainScore:     gain,
+				Sparkline:     sparkline,
 			}
 			successCount++
 			resultsMu.Unlock()

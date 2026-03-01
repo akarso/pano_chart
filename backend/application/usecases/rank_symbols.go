@@ -57,6 +57,7 @@ func (r *DefaultRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) 
 			Scores:     scores,
 			TotalScore: total,
 		})
+		fmt.Printf("[RankSymbols] Calculated scores for %s: %+v, total: %.4f\n", symbol.String(), scores, total)
 	}
 
 	sort.Slice(result, func(i, j int) bool {

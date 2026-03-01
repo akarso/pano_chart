@@ -62,7 +62,7 @@ func TestGetRankings_ComponentPercentiles(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, cr,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
@@ -162,7 +162,7 @@ func TestGetRankings_MaxPercentileAndDominantComponent(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, cr,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
@@ -267,7 +267,7 @@ func TestGetRankings_BadgeAssignment_TopNOnly(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, cr,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
@@ -341,7 +341,7 @@ func TestGetRankings_NoBadgesForSingleSymbol(t *testing.T) {
 	uc := usecases.NewGetRankings(
 		universe, ranker, volumes, cr,
 		"http://fake/exchangeInfo", "http://fake/ticker",
-		2, usecases.SidewaysAlgoV1, weights, 4,
+		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
 	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{

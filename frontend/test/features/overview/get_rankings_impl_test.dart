@@ -21,6 +21,7 @@ void main() {
           volume: 5000.0,
           sparkline: [42000.0, 42100.0],
           badgeComponent: 'trend',
+          sidewaysPercentile: 0.85,
         ),
         RankingItemDto(
           symbol: 'ETHUSDT',
@@ -29,6 +30,7 @@ void main() {
           volume: 2000.0,
           sparkline: [3200.0],
           badgeComponent: '',
+          sidewaysPercentile: 0.42,
         ),
       ],
     ));

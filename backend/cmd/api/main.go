@@ -14,9 +14,11 @@ import (
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/rankings"
+	"pano_chart/backend/infrastructure/snapshot"
 	"pano_chart/backend/infrastructure/symbol_universe"
 )
 
@@ -33,7 +35,7 @@ func main() {
 	}
 
 	// --- Parse sparkline precision at startup ---
-	sparklinePrecision := 30 // default
+	sparklinePrecision := 110 // default
 	if precStr := os.Getenv("OVERVIEW_SPARKLINE_PRECISION"); precStr != "" {
 		if prec, err := strconv.Atoi(precStr); err == nil && prec > 0 {
 			if prec > 200 {
@@ -42,7 +44,6 @@ func main() {
 			sparklinePrecision = prec
 		}
 	}
-	fmt.Printf("[main] Sparkline precision: %d\n", sparklinePrecision)
 
 	// --- Parse ranking worker count ---
 	rankingWorkers := 20 // default
@@ -54,7 +55,6 @@ func main() {
 			rankingWorkers = w
 		}
 	}
-	fmt.Printf("[main] Ranking workers: %d\n", rankingWorkers)
 
 	// --- HTTP client with connection pooling for Binance API ---
 	binanceTransport := &http.Transport{
@@ -104,7 +104,6 @@ func main() {
 		sidewaysAlgo = usecases.SidewaysAlgoV1
 		sidewaysCalc = &scoring.SidewaysConsistencyScoreCalculator{}
 	}
-	fmt.Printf("[main] Sideways algorithm: %s\n", sidewaysAlgo)
 
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
@@ -126,7 +125,6 @@ func main() {
 	)
 
 	// --- State snapshot before handler registration ---
-	fmt.Printf("[main] ==== STATE SNAPSHOT BEFORE HANDLER REGISTRATION ====\n")
 	ctx := context.Background()
 
 	// Test universe
@@ -165,10 +163,6 @@ func main() {
 	}
 
 	// Test ranker
-	fmt.Printf("[main] Ranker type: %T\n", rankUC)
-	fmt.Printf("[main] Ranker Universe provider: %v\n", rankUC.Universe())
-	fmt.Printf("[main] Ranker Volumes field: %v\n", rankUC.Volumes)
-	fmt.Printf("[main] ==== END STATE SNAPSHOT ====\n")
 
 	// --- Overview use case ---
 	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
@@ -186,10 +180,18 @@ func main() {
 			overviewCacheTTL = time.Duration(secs) * time.Second
 		}
 	}
-	fmt.Printf("[main] Overview cache TTL: %v\n", overviewCacheTTL)
 
 	// Wrap with Redis cache decorator
 	overviewUC := overview.NewRedisCachedOverview(getOverviewUC, redisClient, overviewCacheTTL, "overview")
+
+	// --- Evaluation snapshot logger (async, buffered) ---
+	snapshotLogger := snapshot.NewAsyncChannelLogger(1000, 50, 5*time.Second, func(batch []domain.EvaluationSnapshot) {
+		for _, s := range batch {
+			log.Printf("[snapshot] %s %s sideways=%.4f trend=%.4f price=%.2f atr=%.6f algo=%s",
+				s.Symbol, s.Timeframe, s.SidewaysScore, s.TrendScore, s.Price, s.ATR, s.AlgoVersion)
+		}
+	})
+	defer snapshotLogger.Stop()
 
 	// --- Rankings v2 use case ---
 	getRankingsUC := usecases.NewGetRankings(
@@ -203,6 +205,7 @@ func main() {
 		sidewaysAlgo,
 		weights,
 		rankingWorkers,
+		snapshotLogger,
 	)
 
 	// --- Rankings cache TTL ---
@@ -218,7 +221,6 @@ func main() {
 			rankingsCacheTTL = time.Duration(secs) * time.Second
 		}
 	}
-	fmt.Printf("[main] Rankings cache TTL: %v\n", rankingsCacheTTL)
 
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")

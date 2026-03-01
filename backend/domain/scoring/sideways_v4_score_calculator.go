@@ -10,7 +10,7 @@ import (
 type SidewaysV4ScoreCalculator struct{}
 
 func (c *SidewaysV4ScoreCalculator) Name() string {
-	return "Sideways Consistency v4"
+	return "Sideways Consistency"
 }
 
 func (c *SidewaysV4ScoreCalculator) Score(series domain.CandleSeries) (float64, error) {

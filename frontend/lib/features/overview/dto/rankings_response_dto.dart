@@ -27,6 +27,7 @@ class RankingItemDto {
   final double volume;
   final List<double> sparkline;
   final String badgeComponent;
+  final double sidewaysPercentile;
 
   const RankingItemDto({
     required this.symbol,
@@ -35,6 +36,7 @@ class RankingItemDto {
     required this.volume,
     required this.sparkline,
     required this.badgeComponent,
+    required this.sidewaysPercentile,
   });
 
   factory RankingItemDto.fromJson(Map<String, dynamic> json) {
@@ -49,6 +51,7 @@ class RankingItemDto {
               .toList() ??
           const [],
       badgeComponent: json['badgeComponent'] as String? ?? '',
+      sidewaysPercentile: (json['sidewaysPercentile'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }

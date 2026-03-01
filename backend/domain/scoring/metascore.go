@@ -1,6 +1,10 @@
 package scoring
 
-import "math"
+import (
+	"fmt"
+	"math"
+	"os"
+)
 
 // SubscoreResult represents a normalized subscore with optional confidence and metadata.
 type SubscoreResult struct {
@@ -89,6 +93,7 @@ func NewMetaScorer(subscores []Subscore, cfg MetaConfig) *MetaScorer {
 
 // ScoreWithBreakdown computes the metascore and returns breakdown.
 func (m *MetaScorer) ScoreWithBreakdown(data interface{}, profileCfg interface{}) (float64, map[string]SubscoreResult) {
+	fmt.Fprintln(os.Stderr, "ScoreWithBreakdown called")
 	results := make(map[string]SubscoreResult)
 	weights := make(map[string]float64)
 	var totalWeight float64
@@ -111,6 +116,12 @@ func (m *MetaScorer) ScoreWithBreakdown(data interface{}, profileCfg interface{}
 
 	var score float64
 	mode := m.config.Mode
+
+	// Logging mode and results
+	fmt.Fprintln(os.Stderr, "MetaScorer mode:", mode)
+	for name, res := range results {
+		fmt.Fprintln(os.Stderr, "Subscore", name, "= value:", res.Value, ", confidence:", res.Confidence)
+	}
 
 	switch mode {
 	case WeightedAdditive:

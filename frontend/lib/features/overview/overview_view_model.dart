@@ -1,4 +1,5 @@
 import 'dart:ui' show VoidCallback;
+import 'dart:developer';
 
 import 'get_overview.dart';
 import 'overview_state.dart';
@@ -15,6 +16,23 @@ import 'dart:convert';
 /// increments the counter; in-flight responses from a previous generation
 /// are silently discarded.
 class OverviewViewModel {
+    List<OverviewItem> _sortItems(List<OverviewItem> items, String sort) {
+      final sorted = List<OverviewItem>.from(items);
+      switch (sort) {
+        case 'sideways':
+          sorted.sort((a, b) => b.sidewaysPercentile.compareTo(a.sidewaysPercentile));
+          break;
+        case 'trend':
+          sorted.sort((a, b) => b.trendScore.compareTo(a.trendScore));
+          break;
+        case 'gain':
+          sorted.sort((a, b) => b.gainScore.compareTo(a.gainScore));
+          break;
+        default:
+          sorted.sort((a, b) => b.totalScore.compareTo(a.totalScore));
+      }
+      return sorted;
+    }
   OverviewState _state = OverviewState.initial();
   OverviewState get state => _state;
 
@@ -34,7 +52,7 @@ class OverviewViewModel {
 
   Future<void> loadInitial(String timeframe) async {
     final currentGen = ++_generation;
-
+    print('[OverviewViewModel] loadInitial: timeframe=$timeframe generation=$currentGen');
     _setState(
         _state.copyWith(isLoading: true, items: [], page: 0, error: null));
 
@@ -45,7 +63,24 @@ class OverviewViewModel {
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
       );
-
+        print("[OverviewViewModel] GetOverview result: {"
+          " hasMore: "+result.hasMore.toString()+
+          ", snapshot: ${result.snapshot}"
+          ", items.length: ${result.items.length}");
+        for (var i = 0; i < result.items.length; i++) {
+        final item = result.items[i];
+        print("  [item #$i] "
+          "symbol: ${item.symbol}, "
+          "totalScore: ${item.totalScore}, "
+          "trendScore: ${item.trendScore}, "
+          "sidewaysScore: ${item.sidewaysScore}, "
+          "sidewaysPercentile: ${item.sidewaysPercentile}, "
+          "gainScore: ${item.gainScore}, "
+          "volume: ${item.volume}, "
+          "badgeComponent: ${item.badgeComponent}, "
+          "sparkline: ${item.sparkline}");
+        }
+        print("[OverviewViewModel] End of GetOverview result");
       if (currentGen != _generation) return;
 
       // Save to cache if prefs available
@@ -70,10 +105,11 @@ class OverviewViewModel {
         _prefs!.setRankingsCache(timeframe, jsonEncode(cache));
       }
 
+      final sortedItems = _sortItems(result.items, _state.sort);
       _setState(
         _state.copyWith(
           isLoading: false,
-          items: result.items,
+          items: sortedItems,
           page: 1,
           hasMore: result.hasMore,
           snapshot: result.snapshot,
@@ -167,10 +203,12 @@ class OverviewViewModel {
 
       if (currentGen != _generation) return;
 
+      final merged = [..._state.items, ...result.items];
+      final sortedItems = _sortItems(merged, _state.sort);
       _setState(
         _state.copyWith(
           isLoading: false,
-          items: [..._state.items, ...result.items],
+          items: sortedItems,
           page: _state.page + 1,
           hasMore: result.hasMore,
         ),
