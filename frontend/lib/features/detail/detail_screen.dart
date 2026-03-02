@@ -1,17 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../candles/api/candle_response.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
-import 'candle_series_chart_renderer.dart';
-import '../../domain/series_view_mode.dart';
-import '../events/chart_event_overlay.dart';
 import '../events/event_filter.dart';
-import '../events/event_marker_builder.dart';
 import '../events/events_list_screen.dart';
 import '../events/events_view_model.dart';
-import '../overview/line_series_chart_renderer.dart';
+import 'chart/chart_config.dart';
+import 'chart/indicator_panel.dart';
+import 'chart/interactive_chart.dart';
 import 'detail_context.dart';
-import 'sticky_price_labels.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -38,14 +36,28 @@ class DetailScreen extends StatefulWidget {
 }
 
 class _DetailScreenState extends State<DetailScreen> {
-    SeriesViewMode _viewMode = SeriesViewMode.candles;
+  ChartIndicatorConfig _chartConfig = const ChartIndicatorConfig();
   late bool isFavourite;
 
   @override
   void initState() {
     super.initState();
     isFavourite = widget.isFavourite;
+    _loadChartConfig();
     _loadEvents();
+  }
+
+  Future<void> _loadChartConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _chartConfig = ChartIndicatorConfig.load(prefs);
+    });
+  }
+
+  Future<void> _saveChartConfig(ChartIndicatorConfig cfg) async {
+    setState(() => _chartConfig = cfg);
+    final prefs = await SharedPreferences.getInstance();
+    cfg.save(prefs);
   }
 
   void _loadEvents() {
@@ -112,9 +124,6 @@ class _DetailScreenState extends State<DetailScreen> {
         return 1;
     }
   }
-
-  bool get _shouldShowEvents =>
-      widget.eventsViewModel != null && widget.eventsViewModel!.state.showEvents;
 
   void _navigateToEventsList(String scrollToEventId) {
     final evm = widget.eventsViewModel;
@@ -190,23 +199,16 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
               const Spacer(),
-              // Chart view toggle
-              ToggleButtons(
-                isSelected: [
-                  _viewMode == SeriesViewMode.candles,
-                  _viewMode == SeriesViewMode.line,
-                ],
-                borderRadius: BorderRadius.circular(8),
+              // Indicator settings
+              IconButton(
+                icon: const Icon(Icons.tune, color: Colors.white70, size: 20),
+                padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
-                onPressed: (idx) {
-                  setState(() {
-                    _viewMode = idx == 0 ? SeriesViewMode.candles : SeriesViewMode.line;
-                  });
+                onPressed: () async {
+                  final result = await showIndicatorPanel(context, _chartConfig);
+                  if (result != null) _saveChartConfig(result);
                 },
-                children: const [
-                  Icon(Icons.candlestick_chart, color: Colors.white),
-                  Icon(Icons.show_chart, color: Colors.white),
-                ],
+                tooltip: 'Indicators',
               ),
             ],
           ),
@@ -233,125 +235,12 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Container(
-                decoration: BoxDecoration(                  
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SizedBox(
-                  height: 260,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final candleCount = series.candles.length;
-                      const double candleWidth = 14; // px per candle
-                      final chartWidth = (candleCount * candleWidth).clamp(constraints.maxWidth, 9999.0);
-                      // Overlay price labels on the right, sticky and high z-index
-                      return Stack(
-                        children: [
-                          Stack(
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: SingleChildScrollView(
-                                      scrollDirection: Axis.horizontal,
-                                      physics: const BouncingScrollPhysics(),
-                                      child: Card(
-                                        color: Colors.grey[900],
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(16),
-                                          child: SizedBox(
-                                            width: chartWidth,
-                                            height: 220,
-                                            child: Stack(
-                                              children: [
-                                                _viewMode == SeriesViewMode.candles
-                                                    ? CandleSeriesChartRenderer().build(
-                                                        context,
-                                                        series: series,
-                                                        viewMode: SeriesViewMode.candles,
-                                                        candleWidth: candleWidth,
-                                                      )
-                                                    : LineSeriesChartRenderer().build(
-                                                        context,
-                                                        series: series,
-                                                        viewMode: SeriesViewMode.line,
-                                                      ),
-                                                // Event badge overlay
-                                                if (_shouldShowEvents)
-                                                  Positioned.fill(
-                                                    child: ChartEventOverlay(
-                                                      markers: buildEventMarkers(
-                                                        series: series,
-                                                        events: widget.eventsViewModel?.state.filteredEvents ?? [],
-                                                        filterLevel: widget.eventsViewModel?.state.filterLevel ?? EventFilterLevel.highAndMedium,
-                                                        candleWidth: candleWidth,
-                                                      ),
-                                                      onNavigateToEvent: (eventId) => _navigateToEventsList(eventId),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              // Sticky price labels overlay (full width, higher z-index)
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  child: StickyPriceLabels(series: series),
-                                ),
-                              ),
-                            ],
-                          ),
-                          // Scroll cue overlay (fade left/right)
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Container(
-                                    width: 24,
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.centerLeft,
-                                        end: Alignment.centerRight,
-                                        colors: [Colors.black54, Colors.transparent],
-                                      ),
-                                    ),
-                                    child: const Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: Icon(Icons.arrow_back_ios, size: 14, color: Colors.white38),
-                                    ),
-                                  ),
-                                  Container(
-                                    width: 24,
-                                    decoration: const BoxDecoration(
-                                      gradient: LinearGradient(
-                                        begin: Alignment.centerRight,
-                                        end: Alignment.centerLeft,
-                                        colors: [Colors.black54, Colors.transparent],
-                                      ),
-                                    ),
-                                    child: const Align(
-                                      alignment: Alignment.centerRight,
-                                      child: Icon(Icons.arrow_forward_ios, size: 14, color: Colors.white38),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
+              InteractiveChart(
+                series: series,
+                config: _chartConfig,
+                onConfigChanged: _saveChartConfig,
+                eventsViewModel: widget.eventsViewModel,
+                onNavigateToEvent: _navigateToEventsList,
               ),
             // Event overlay controls
             if (widget.eventsViewModel != null) ...[
