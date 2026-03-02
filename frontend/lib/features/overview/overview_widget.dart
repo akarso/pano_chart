@@ -4,6 +4,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
+import '../bubble_map/bubble_map_screen.dart';
+import '../bubble_map/bubble_map_view_model.dart';
 import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
 import '../events/events_view_model.dart';
@@ -21,6 +23,7 @@ class OverviewWidget extends StatefulWidget {
   final GetCandleSeries getCandleSeries;
   final EventsViewModel? eventsViewModel;
   final PreferencesService? prefs;
+  final BubbleMapViewModel? bubbleMapViewModel;
 
   const OverviewWidget({
     Key? key,
@@ -28,6 +31,7 @@ class OverviewWidget extends StatefulWidget {
     required this.getCandleSeries,
     this.eventsViewModel,
     this.prefs,
+    this.bubbleMapViewModel,
   }) : super(key: key);
 
   @override
@@ -573,6 +577,31 @@ class OverviewWidgetState extends State<OverviewWidget>
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (widget.bubbleMapViewModel != null)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => BubbleMapScreen(
+                    viewModel: widget.bubbleMapViewModel!,
+                    getCandleSeries: widget.getCandleSeries,
+                    eventsViewModel: widget.eventsViewModel,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.bubble_chart, size: 18),
+            label: const Text('Bubble Map'),
+          ),
+        if (widget.bubbleMapViewModel != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: CustomPaint(
+              size: const Size(double.infinity, 1),
+              painter: _DottedLinePainter(color: const Color(0xFF666666)),
+            ),
+          ),
         TextButton.icon(
           onPressed: () => _showInfoDialog(
             title: 'About',

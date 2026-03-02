@@ -12,6 +12,7 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
   final overviewViewModel = root.createOverviewViewModel();
   final getCandleSeries = root.createGetCandleSeries();
   final eventsViewModel = root.createEventsViewModel();
+  final bubbleMapViewModel = root.createBubbleMapViewModel();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -19,6 +20,7 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
       getCandleSeries: getCandleSeries,
       eventsViewModel: eventsViewModel,
       prefs: prefs,
+      bubbleMapViewModel: bubbleMapViewModel,
     ),
   );
   return component.createApp();

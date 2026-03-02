@@ -1,5 +1,6 @@
 import 'package:http/http.dart' as http;
 
+import '../../features/bubble_map/bubble_map_view_model.dart';
 import '../../features/candles/application/get_candle_series.dart';
 import '../../features/candles/application/get_candle_series.dart' as impl;
 import '../../features/candles/infrastructure/http_candle_api.dart';
@@ -37,5 +38,12 @@ class CompositionRoot {
     final api = HttpEventsApi(client: httpClient, baseUrl: apiBaseUrl);
     final getEvents = GetEventsImpl(api);
     return EventsViewModel(getEvents);
+  }
+
+  /// Creates a wired BubbleMapViewModel backed by the rankings API.
+  BubbleMapViewModel createBubbleMapViewModel() {
+    final api = HttpRankingsApi(baseUrl: apiBaseUrl, client: httpClient);
+    final getRankings = GetRankingsImpl(api, pageSize: 50);
+    return BubbleMapViewModel(getRankings);
   }
 }
