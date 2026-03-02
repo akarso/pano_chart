@@ -9,6 +9,7 @@ import '../../events/events_view_model.dart';
 import 'axis_layer.dart';
 import 'candle_painter.dart';
 import 'chart_config.dart';
+import 'crosshair_overlay.dart';
 import 'indicators.dart';
 import 'oscillator_painter.dart';
 import 'volume_painter.dart';
@@ -60,6 +61,9 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ── limits ──
   static const double _minCandleWidth = 2.0;
   static const double _maxCandleWidth = 40.0;
+
+  // ── crosshair ──
+  CrosshairState? _crosshair;
 
   @override
   void initState() {
@@ -126,6 +130,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
     setState(() {
       if (d.pointerCount >= 2) {
         // Pinch-to-zoom — scale candleWidth around focal point.
+        // Also dismiss crosshair immediately.
+        _crosshair = null;
         final newWidth = (_prevScale! * d.scale)
             .clamp(_minCandleWidth, _maxCandleWidth);
 
@@ -195,6 +201,9 @@ class _InteractiveChartState extends State<InteractiveChart> {
             return GestureDetector(
               onScaleStart: _onScaleStart,
               onScaleUpdate: (d) => _onScaleUpdate(d, chartW),
+              onLongPressStart: (d) => _onCrosshairStart(d.localPosition, chartW, start, priceH),
+              onLongPressMoveUpdate: (d) => _onCrosshairUpdate(d.localPosition, chartW, start, priceH),
+              onLongPressEnd: (_) => _onCrosshairEnd(),
               child: Stack(
                 children: [
                   // ── Price chart layer ──
@@ -317,6 +326,32 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                   ),
 
+                  // ── Crosshair overlay ──
+                  if (_crosshair != null)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: chartW,
+                      height: priceH + volumeH + oscH,
+                      child: IgnorePointer(
+                        child: CrosshairOverlay(
+                          state: _crosshair!,
+                          symbol: widget.series.symbol,
+                          timeframe: widget.series.timeframe,
+                          priceHeight: priceH,
+                          volumeHeight: volumeH,
+                          oscillatorHeight: oscH,
+                          chartWidth: chartW,
+                          priceLo: _visiblePriceLo(start, end),
+                          priceHi: _visiblePriceHi(start, end),
+                          rsiPeriod: widget.config.showRsi ? widget.config.rsiPeriod : null,
+                          atrPeriod: widget.config.showAtr ? widget.config.atrPeriod : null,
+                          emaFastPeriod: widget.config.showEmaFast ? widget.config.emaFastPeriod : null,
+                          emaSlowPeriod: widget.config.showEmaSlow ? widget.config.emaSlowPeriod : null,
+                        ),
+                      ),
+                    ),
+
                   // ── Oscillator labels ──
                   if (_rsi != null)
                     Positioned(
@@ -377,5 +412,83 @@ class _InteractiveChartState extends State<InteractiveChart> {
       filterLevel: evm.state.filterLevel,
       candleWidth: _candleWidth,
     );
+  }
+
+  // ── Crosshair ──
+
+  void _onCrosshairStart(Offset local, double chartW, int visStart, double priceH) {
+    _updateCrosshair(local, chartW, visStart, priceH);
+  }
+
+  void _onCrosshairUpdate(Offset local, double chartW, int visStart, double priceH) {
+    _updateCrosshair(local, chartW, visStart, priceH);
+  }
+
+  void _onCrosshairEnd() {
+    setState(() => _crosshair = null);
+  }
+
+  void _updateCrosshair(Offset local, double chartW, int visStart, double priceH) {
+    final candles = widget.series.candles;
+    if (candles.isEmpty) return;
+
+    final pixOff = _scrollPixelOffset(chartW);
+    // Determine which candle the touch is nearest to.
+    final rawIdx = ((local.dx + pixOff) / _candleWidth).floor();
+    final absIdx = (visStart + rawIdx).clamp(0, candles.length - 1);
+
+    // Snap X to candle center.
+    final snappedX =
+        (absIdx - visStart) * _candleWidth + _candleWidth / 2 - pixOff;
+
+    final c = candles[absIdx];
+
+    double? emaF, emaS, rsiV, atrV;
+    if (_emaFast != null && absIdx < _emaFast!.length) emaF = _emaFast![absIdx];
+    if (_emaSlow != null && absIdx < _emaSlow!.length) emaS = _emaSlow![absIdx];
+    if (_rsi != null && absIdx < _rsi!.length) rsiV = _rsi![absIdx];
+    if (_atr != null && absIdx < _atr!.length) atrV = _atr![absIdx];
+
+    setState(() {
+      _crosshair = CrosshairState(
+        candleIndex: absIdx,
+        x: snappedX,
+        touchY: local.dy.clamp(0, priceH),
+        candle: c,
+        emaFast: emaF,
+        emaSlow: emaS,
+        rsi: rsiV,
+        atr: atrV,
+      );
+    });
+  }
+
+  // ── Visible price range (shared with crosshair Y-tag) ──
+
+  double _visiblePriceLo(int start, int end) {
+    double lo = double.infinity;
+    for (var i = start; i < end && i < widget.series.candles.length; i++) {
+      if (widget.series.candles[i].low < lo) lo = widget.series.candles[i].low;
+    }
+    _expandForCrosshair(_emaFast, start, end, (v) { if (v < lo) lo = v; });
+    _expandForCrosshair(_emaSlow, start, end, (v) { if (v < lo) lo = v; });
+    return lo;
+  }
+
+  double _visiblePriceHi(int start, int end) {
+    double hi = double.negativeInfinity;
+    for (var i = start; i < end && i < widget.series.candles.length; i++) {
+      if (widget.series.candles[i].high > hi) hi = widget.series.candles[i].high;
+    }
+    _expandForCrosshair(_emaFast, start, end, (v) { if (v > hi) hi = v; });
+    _expandForCrosshair(_emaSlow, start, end, (v) { if (v > hi) hi = v; });
+    return hi;
+  }
+
+  void _expandForCrosshair(List<double>? vals, int start, int end, void Function(double) apply) {
+    if (vals == null) return;
+    for (var i = start; i < end && i < vals.length; i++) {
+      if (!vals[i].isNaN) apply(vals[i]);
+    }
   }
 }
