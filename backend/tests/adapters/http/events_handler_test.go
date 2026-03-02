@@ -92,12 +92,26 @@ func TestEventsHandler_DefaultDateRange(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
+
+	// DateFrom defaults to yesterday
 	expectedFrom := now.AddDate(0, 0, -1).Truncate(24 * time.Hour)
 	actualFrom := uc.lastReq.DateFrom.Truncate(24 * time.Hour)
-
-	diff := expectedFrom.Sub(actualFrom)
-	if diff < -24*time.Hour || diff > 24*time.Hour {
+	diffFrom := expectedFrom.Sub(actualFrom)
+	if diffFrom < -24*time.Hour || diffFrom > 24*time.Hour {
 		t.Errorf("default DateFrom off by more than a day: got %v, expected ~%v", actualFrom, expectedFrom)
+	}
+
+	// DateTo defaults to tomorrow (+1 day)
+	expectedTo := now.AddDate(0, 0, 1).Truncate(24 * time.Hour)
+	actualTo := uc.lastReq.DateTo.Truncate(24 * time.Hour)
+	diffTo := expectedTo.Sub(actualTo)
+	if diffTo < -24*time.Hour || diffTo > 24*time.Hour {
+		t.Errorf("default DateTo off by more than a day: got %v, expected ~%v", actualTo, expectedTo)
+	}
+
+	// Country defaults to "United States"
+	if uc.lastReq.Country != "United States" {
+		t.Errorf("default country = %q, want %q", uc.lastReq.Country, "United States")
 	}
 }
 

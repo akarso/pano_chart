@@ -77,11 +77,13 @@ class EventsViewModel {
   }
 
   /// Loads events spanning [dateFrom] to [dateTo] (ISO date strings).
-  Future<void> load(String dateFrom, String dateTo) async {
+  ///
+  /// An optional [country] can be provided to filter server-side.
+  Future<void> load(String dateFrom, String dateTo, {String? country}) async {
     _setState(_state.copyWith(isLoading: true, error: null));
     try {
       final events = await _getEvents.execute(
-        GetEventsInput(dateFrom: dateFrom, dateTo: dateTo),
+        GetEventsInput(dateFrom: dateFrom, dateTo: dateTo, country: country),
       );
       _setState(_state.copyWith(isLoading: false, events: events));
     } catch (e) {

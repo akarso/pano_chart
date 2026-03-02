@@ -49,8 +49,8 @@ void main() {
           final dy = a.y - b.y;
           final dist = (dx * dx + dy * dy);
           final minDist = a.radius + b.radius;
-          // Allow 0.5px tolerance for floating point.
-          expect(dist, greaterThanOrEqualTo(minDist * minDist - 1.0),
+          // Allow 1px tolerance for floating point after viewport scaling.
+          expect(dist, greaterThanOrEqualTo(minDist * minDist - 2.0),
               reason:
                   '${a.token.symbol} overlaps ${b.token.symbol}');
         }
@@ -117,11 +117,67 @@ void main() {
           final dy = a.y - b.y;
           final dist = dx * dx + dy * dy;
           final minDist = a.radius + b.radius;
-          expect(dist, greaterThanOrEqualTo(minDist * minDist - 1.0),
+          // Allow 1px tolerance for floating point after viewport scaling.
+          expect(dist, greaterThanOrEqualTo(minDist * minDist - 2.0),
               reason:
                   '${a.token.symbol} overlaps ${b.token.symbol}');
         }
       }
+    });
+
+    test('all 50 bubbles fit inside the viewport', () {
+      final tokens = List.generate(
+          50, (i) => _token('T$i', volume: 1000.0 * (50 - i)));
+      final result = packer.pack(tokens, width: 400, height: 600);
+
+      for (final b in result) {
+        expect(b.x - b.radius, greaterThanOrEqualTo(-1.0),
+            reason: '${b.token.symbol} extends beyond left edge');
+        expect(b.x + b.radius, lessThanOrEqualTo(401.0),
+            reason: '${b.token.symbol} extends beyond right edge');
+        expect(b.y - b.radius, greaterThanOrEqualTo(-1.0),
+            reason: '${b.token.symbol} extends beyond top edge');
+        expect(b.y + b.radius, lessThanOrEqualTo(601.0),
+            reason: '${b.token.symbol} extends beyond bottom edge');
+      }
+    });
+
+    test('volume mode: colorValue is rank-normalised -10..+10', () {
+      final tokens = [
+        _token('LOW', volume: 10),
+        _token('MID', volume: 500),
+        _token('HIGH', volume: 100000),
+      ];
+      final result = packer.pack(tokens, width: 400, height: 400);
+
+      final low = result.firstWhere((b) => b.token.symbol == 'LOW');
+      final mid = result.firstWhere((b) => b.token.symbol == 'MID');
+      final high = result.firstWhere((b) => b.token.symbol == 'HIGH');
+
+      expect(low.colorValue, closeTo(-10.0, 0.01));
+      expect(mid.colorValue, closeTo(0.0, 0.01));
+      expect(high.colorValue, closeTo(10.0, 0.01));
+    });
+
+    test('change mode: colorValue equals priceChange', () {
+      final tokens = [
+        _token('A', priceChange: 5.0),
+        _token('B', priceChange: -3.0),
+      ];
+      final result =
+          packer.pack(tokens, width: 400, height: 400, sizeBy: 'change');
+
+      final a = result.firstWhere((b) => b.token.symbol == 'A');
+      final bBubble = result.firstWhere((b) => b.token.symbol == 'B');
+
+      expect(a.colorValue, closeTo(5.0, 0.01));
+      expect(bBubble.colorValue, closeTo(-3.0, 0.01));
+    });
+
+    test('single token in volume mode gets colorValue 0', () {
+      final tokens = [_token('SOLO', volume: 1000)];
+      final result = packer.pack(tokens, width: 400, height: 400);
+      expect(result.first.colorValue, closeTo(0.0, 0.01));
     });
   });
 }

@@ -11,9 +11,14 @@ class BubblePainter extends CustomPainter {
   /// Index of the currently highlighted (tapped) bubble, or -1.
   final int highlightIndex;
 
+  /// Optional per-bubble rotation angles in radians (physics mode).
+  /// When null or empty, no rotation is applied.
+  final List<double>? angles;
+
   BubblePainter({
     required this.bubbles,
     this.highlightIndex = -1,
+    this.angles,
   });
 
   // ---- colour helpers ----
@@ -61,9 +66,18 @@ class BubblePainter extends CustomPainter {
 
     for (var i = 0; i < bubbles.length; i++) {
       final b = bubbles[i];
+      final angle = (angles != null && i < angles!.length) ? angles![i] : 0.0;
+      final hasRotation = angle != 0.0;
 
-      // Fill
-      fillPaint.color = colorForChange(b.token.priceChange);
+      if (hasRotation) {
+        canvas.save();
+        canvas.translate(b.x, b.y);
+        canvas.rotate(angle);
+        canvas.translate(-b.x, -b.y);
+      }
+
+      // Fill — colour driven by pre-computed colorValue.
+      fillPaint.color = colorForChange(b.colorValue);
       canvas.drawCircle(Offset(b.x, b.y), b.radius, fillPaint);
 
       // Optional regime border
@@ -84,24 +98,27 @@ class BubblePainter extends CustomPainter {
 
       // Symbol label (strip USDT suffix for readability)
       _drawLabel(canvas, b);
+
+      if (hasRotation) {
+        canvas.restore();
+      }
     }
   }
 
   void _drawLabel(Canvas canvas, PackedBubble b) {
-    // Only draw label if the bubble is large enough.
-    if (b.radius < 20) return;
-
     var label = b.token.symbol;
     if (label.endsWith('USDT')) {
       label = label.substring(0, label.length - 4);
     }
 
-    // Price change line
-    final changeSign = b.token.priceChange >= 0 ? '+' : '';
-    final changeLine = '$changeSign${b.token.priceChange.toStringAsFixed(1)}%';
+    // Sub-label driven by colorValue (price change % or normalised volume).
+    final changeSign = b.colorValue >= 0 ? '+' : '';
+    final changeLine = '$changeSign${b.colorValue.toStringAsFixed(1)}%';
 
-    final labelSize = math.max(9.0, b.radius * 0.32);
-    final changeSize = math.max(7.0, b.radius * 0.24);
+    // Scale font to fit inside the bubble; allow very small sizes so every
+    // bubble gets a label.
+    final labelSize = math.max(5.0, b.radius * 0.34);
+    final changeSize = math.max(4.0, b.radius * 0.24);
 
     final labelSpan = TextSpan(
       text: label,
@@ -151,6 +168,7 @@ class BubblePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant BubblePainter oldDelegate) {
     return oldDelegate.bubbles != bubbles ||
-        oldDelegate.highlightIndex != highlightIndex;
+        oldDelegate.highlightIndex != highlightIndex ||
+        oldDelegate.angles != angles;
   }
 }

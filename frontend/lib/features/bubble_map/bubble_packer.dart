@@ -9,11 +9,18 @@ class PackedBubble {
   double y;
   final double radius;
 
+  /// Pre-computed value driving the red–grey–green colour scale.
+  ///
+  /// In price-change mode this equals [BubbleToken.priceChange].
+  /// In volume mode it is a rank-normalised value in [−10, +10].
+  final double colorValue;
+
   PackedBubble({
     required this.token,
     required this.x,
     required this.y,
     required this.radius,
+    this.colorValue = 0.0,
   });
 }
 
@@ -55,19 +62,54 @@ class BubblePacker {
     final cx = width / 2;
     final cy = height / 2;
 
+    // Pre-compute colour values.
+    final colorValues = _computeColorValues(tokens, sizeBy);
+
     for (final i in indices) {
       final r = radii[i];
       final pos = _findPosition(placed, r, cx, cy);
-      placed.add(PackedBubble(token: tokens[i], x: pos.x, y: pos.y, radius: r));
+      placed.add(PackedBubble(
+        token: tokens[i],
+        x: pos.x,
+        y: pos.y,
+        radius: r,
+        colorValue: colorValues[i],
+      ));
     }
 
-    // Re-centre the cluster.
-    _centre(placed, width, height);
+    // Scale and centre so every bubble fits inside the viewport.
+    _fitToViewport(placed, width, height);
 
     return placed;
   }
 
   // ---- internal helpers ----
+
+  /// Returns a colour-driving value per token.
+  ///
+  /// * `'change'` mode → raw [BubbleToken.priceChange].
+  /// * `'volume'` mode → rank-normalised to [−10, +10] so the lowest
+  ///   volume maps to red and the highest to green.
+  List<double> _computeColorValues(List<BubbleToken> tokens, String sizeBy) {
+    if (sizeBy != 'volume') {
+      return tokens.map((t) => t.priceChange).toList();
+    }
+
+    // Rank-based normalisation for volume.
+    final n = tokens.length;
+    if (n <= 1) return List.filled(n, 0.0);
+
+    // Build index list sorted by volume ascending.
+    final idx = List<int>.generate(n, (i) => i);
+    idx.sort((a, b) => tokens[a].volume.compareTo(tokens[b].volume));
+
+    final out = List<double>.filled(n, 0.0);
+    for (var rank = 0; rank < n; rank++) {
+      // Map rank 0..(n-1) to -10..+10.
+      out[idx[rank]] = -10.0 + 20.0 * rank / (n - 1);
+    }
+    return out;
+  }
 
   List<double> _computeRadii(
     List<BubbleToken> tokens,
@@ -86,8 +128,13 @@ class BubblePacker {
     final vMax = values.fold<double>(0.0, math.max);
     if (vMax == 0) return List.filled(tokens.length, minRadius);
 
+    // Normalise by both min and max so the full range 0..1 is used,
+    // preventing log-compressed volumes from bunching all radii together.
+    final vMin = values.fold<double>(double.infinity, math.min);
+    final range = vMax - vMin;
+
     return values.map((v) {
-      final t = v / vMax; // 0..1
+      final t = range > 0 ? (v - vMin) / range : 1.0; // 0..1
       return minRadius + (maxR - minRadius) * t;
     }).toList();
   }
@@ -125,11 +172,12 @@ class BubblePacker {
     return false;
   }
 
-  /// Shifts all bubbles so the bounding box is centred in
-  /// the [width]×[height] viewport.
-  void _centre(List<PackedBubble> bubbles, double width, double height) {
+  /// Uniformly scales and shifts all bubbles so the full cluster fits
+  /// inside the [width]×[height] viewport with a small margin.
+  void _fitToViewport(List<PackedBubble> bubbles, double width, double height) {
     if (bubbles.isEmpty) return;
 
+    // Compute bounding box of the cluster (including radii).
     var minX = double.infinity, maxX = double.negativeInfinity;
     var minY = double.infinity, maxY = double.negativeInfinity;
 
@@ -142,12 +190,39 @@ class BubblePacker {
 
     final clusterW = maxX - minX;
     final clusterH = maxY - minY;
-    final dx = (width - clusterW) / 2 - minX;
-    final dy = (height - clusterH) / 2 - minY;
+    if (clusterW <= 0 || clusterH <= 0) return;
+
+    // Leave a small margin so bubbles don't touch the edge.
+    const margin = 4.0;
+    final availW = width - margin * 2;
+    final availH = height - margin * 2;
+
+    final scale = math.min(availW / clusterW, availH / clusterH);
+
+    // Centre of the current cluster.
+    final cxOld = (minX + maxX) / 2;
+    final cyOld = (minY + maxY) / 2;
+    final cxNew = width / 2;
+    final cyNew = height / 2;
 
     for (final b in bubbles) {
-      b.x += dx;
-      b.y += dy;
+      b.x = cxNew + (b.x - cxOld) * scale;
+      b.y = cyNew + (b.y - cyOld) * scale;
+      // Radius is stored as final — need to create a new object.
+    }
+
+    // Scale radii by replacing list entries with scaled copies.
+    if (scale != 1.0) {
+      for (var i = 0; i < bubbles.length; i++) {
+        final b = bubbles[i];
+        bubbles[i] = PackedBubble(
+          token: b.token,
+          x: b.x,
+          y: b.y,
+          radius: b.radius * scale,
+          colorValue: b.colorValue,
+        );
+      }
     }
   }
 }

@@ -9,6 +9,7 @@ import '../bubble_map/bubble_map_view_model.dart';
 import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
 import '../events/events_view_model.dart';
+import '../events/macro_events_screen.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import 'overview_state.dart';
@@ -595,6 +596,29 @@ class OverviewWidgetState extends State<OverviewWidget>
             label: const Text('Bubble Map'),
           ),
         if (widget.bubbleMapViewModel != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: CustomPaint(
+              size: const Size(double.infinity, 1),
+              painter: _DottedLinePainter(color: const Color(0xFF666666)),
+            ),
+          ),
+        if (widget.eventsViewModel != null)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => MacroEventsScreen(
+                    viewModel: widget.eventsViewModel!,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.public, size: 18),
+            label: const Text('Macro Events'),
+          ),
+        if (widget.eventsViewModel != null)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: CustomPaint(

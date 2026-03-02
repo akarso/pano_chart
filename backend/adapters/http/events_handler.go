@@ -55,8 +55,8 @@ func (h *EventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		dateFrom = parsed
 	}
 
-	// Parse date_to (default: today + 7 days)
-	dateTo := now.AddDate(0, 0, 7)
+	// Parse date_to (default: today + 1 day)
+	dateTo := now.AddDate(0, 0, 1)
 	if raw := q.Get("date_to"); raw != "" {
 		parsed, err := time.Parse(dateLayout, raw)
 		if err != nil {
@@ -73,6 +73,9 @@ func (h *EventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	impact := q.Get("impact")
 	country := q.Get("country")
+	if country == "" {
+		country = "United States"
+	}
 
 	req := usecases.GetEventsRequest{
 		DateFrom: dateFrom,
