@@ -16,6 +16,7 @@ import (
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
+	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/rankings"
 	"pano_chart/backend/infrastructure/snapshot"
@@ -228,6 +229,18 @@ func main() {
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")
 
+	// --- Events use case ---
+	configPath := scoring.ConfigPath()
+	ffAPIKey, err := events.LoadFinanceFlowAPIKey(configPath)
+	if err != nil {
+		log.Printf("[main] WARNING: FinanceFlow API key not found: %v (events endpoint disabled)", err)
+	}
+	var eventsUC usecases.EventsUseCase
+	if ffAPIKey != "" {
+		ffClient := events.NewFinanceFlowClient(ffAPIKey, "", nil)
+		eventsUC = usecases.NewGetEvents(ffClient)
+	}
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -239,6 +252,10 @@ func main() {
 	mux.Handle("/api/rankings", adhttp.NewRankingsV2Handler(rankingsUC))
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
+	if eventsUC != nil {
+		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
+		log.Println("[main] /api/v1/events endpoint registered")
+	}
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},

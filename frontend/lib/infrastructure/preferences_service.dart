@@ -26,6 +26,8 @@ class PreferencesService {
   static const _keySortDirection = 'settings.sortDirection';
   static const _keyNormalize = 'settings.normalizeSparklines';
   static const _keyFavourites = 'favourites';
+  static const _keyShowEvents = 'settings.showEvents';
+  static const _keyEventFilter = 'settings.eventFilter';
 
   final SharedPreferences _prefs;
 
@@ -56,6 +58,15 @@ class PreferencesService {
 
   bool get normalizeSparklines => _prefs.getBool(_keyNormalize) ?? true;
   set normalizeSparklines(bool v) => _prefs.setBool(_keyNormalize, v);
+
+  // ---- event overlay settings ----
+
+  bool get showEvents => _prefs.getBool(_keyShowEvents) ?? true;
+  set showEvents(bool v) => _prefs.setBool(_keyShowEvents, v);
+
+  /// Persisted as 'highOnly', 'highAndMedium', or 'all'. Default: 'highAndMedium'.
+  String get eventFilter => _prefs.getString(_keyEventFilter) ?? 'highAndMedium';
+  set eventFilter(String v) => _prefs.setString(_keyEventFilter, v);
 
   // ---- favourites ----
 

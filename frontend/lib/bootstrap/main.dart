@@ -11,11 +11,13 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
   final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
   final overviewViewModel = root.createOverviewViewModel();
   final getCandleSeries = root.createGetCandleSeries();
+  final eventsViewModel = root.createEventsViewModel();
   final component = AppComponent(
     config,
     home: OverviewWidget(
       viewModel: overviewViewModel,
       getCandleSeries: getCandleSeries,
+      eventsViewModel: eventsViewModel,
       prefs: prefs,
     ),
   );

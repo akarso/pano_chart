@@ -4,6 +4,11 @@ import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import 'candle_series_chart_renderer.dart';
 import '../../domain/series_view_mode.dart';
+import '../events/chart_event_overlay.dart';
+import '../events/event_filter.dart';
+import '../events/event_marker_builder.dart';
+import '../events/events_list_screen.dart';
+import '../events/events_view_model.dart';
 import '../overview/line_series_chart_renderer.dart';
 import 'detail_context.dart';
 import 'sticky_price_labels.dart';
@@ -16,6 +21,7 @@ class DetailScreen extends StatefulWidget {
   final CandleSeriesResponse series;
   final DetailContext? detailContext;
   final bool isFavourite;
+  final EventsViewModel? eventsViewModel;
 
   const DetailScreen({
     Key? key,
@@ -24,6 +30,7 @@ class DetailScreen extends StatefulWidget {
     required this.series,
     this.detailContext,
     this.isFavourite = false,
+    this.eventsViewModel,
   }) : super(key: key);
 
   @override
@@ -38,6 +45,28 @@ class _DetailScreenState extends State<DetailScreen> {
   void initState() {
     super.initState();
     isFavourite = widget.isFavourite;
+    _loadEvents();
+  }
+
+  void _loadEvents() {
+    final evm = widget.eventsViewModel;
+    if (evm == null) return;
+    evm.onChanged = () {
+      if (mounted) setState(() {});
+    };
+    // Determine date range from the candle series
+    final candles = widget.series.candles;
+    if (candles.isEmpty) return;
+    final dateFrom = _isoDate(candles.first.timestamp);
+    final dateTo = _isoDate(candles.last.timestamp);
+    evm.load(dateFrom, dateTo);
+  }
+
+  String _isoDate(DateTime dt) {
+    final y = dt.year.toString().padLeft(4, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
   }
 
   // ---- helpers ----
@@ -82,6 +111,23 @@ class _DetailScreenState extends State<DetailScreen> {
       default:
         return 1;
     }
+  }
+
+  bool get _shouldShowEvents =>
+      widget.eventsViewModel != null && widget.eventsViewModel!.state.showEvents;
+
+  void _navigateToEventsList(String scrollToEventId) {
+    final evm = widget.eventsViewModel;
+    if (evm == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => EventsListScreen(
+          events: evm.state.events,
+          filterLevel: evm.state.filterLevel,
+          scrollToEventId: scrollToEventId,
+        ),
+      ),
+    );
   }
 
   // ---- build ----
@@ -219,18 +265,35 @@ class _DetailScreenState extends State<DetailScreen> {
                                           child: SizedBox(
                                             width: chartWidth,
                                             height: 220,
-                                            child: _viewMode == SeriesViewMode.candles
-                                                ? CandleSeriesChartRenderer().build(
-                                                    context,
-                                                    series: series,
-                                                    viewMode: SeriesViewMode.candles,
-                                                    candleWidth: candleWidth,
-                                                  )
-                                                : LineSeriesChartRenderer().build(
-                                                    context,
-                                                    series: series,
-                                                    viewMode: SeriesViewMode.line,
+                                            child: Stack(
+                                              children: [
+                                                _viewMode == SeriesViewMode.candles
+                                                    ? CandleSeriesChartRenderer().build(
+                                                        context,
+                                                        series: series,
+                                                        viewMode: SeriesViewMode.candles,
+                                                        candleWidth: candleWidth,
+                                                      )
+                                                    : LineSeriesChartRenderer().build(
+                                                        context,
+                                                        series: series,
+                                                        viewMode: SeriesViewMode.line,
+                                                      ),
+                                                // Event badge overlay
+                                                if (_shouldShowEvents)
+                                                  Positioned.fill(
+                                                    child: ChartEventOverlay(
+                                                      markers: buildEventMarkers(
+                                                        series: series,
+                                                        events: widget.eventsViewModel?.state.filteredEvents ?? [],
+                                                        filterLevel: widget.eventsViewModel?.state.filterLevel ?? EventFilterLevel.highAndMedium,
+                                                        candleWidth: candleWidth,
+                                                      ),
+                                                      onNavigateToEvent: (eventId) => _navigateToEventsList(eventId),
+                                                    ),
                                                   ),
+                                              ],
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -290,6 +353,11 @@ class _DetailScreenState extends State<DetailScreen> {
                   ),
                 ),
               ),
+            // Event overlay controls
+            if (widget.eventsViewModel != null) ...[
+              const SizedBox(height: 8),
+              _buildEventControls(),
+            ],
             if (percentChange != null) ...[
               const SizedBox(height: 12),
               Row(
@@ -321,6 +389,77 @@ class _DetailScreenState extends State<DetailScreen> {
         ),
       ),
       ),
+    );
+  }
+
+  Widget _buildEventControls() {
+    final evm = widget.eventsViewModel!;
+    return Row(
+      children: [
+        // Show/Hide toggle
+        GestureDetector(
+          onTap: () => evm.toggleShowEvents(),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                evm.state.showEvents ? Icons.visibility : Icons.visibility_off,
+                size: 16,
+                color: evm.state.showEvents ? Colors.white70 : Colors.white30,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Events',
+                style: TextStyle(
+                  color: evm.state.showEvents ? Colors.white70 : Colors.white30,
+                  fontSize: 11,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 16),
+        // Filter level chips
+        for (final level in EventFilterLevel.values) ...[
+          GestureDetector(
+            onTap: () => evm.setFilterLevel(level),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: evm.state.filterLevel == level
+                    ? Colors.white.withAlpha(25)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: evm.state.filterLevel == level
+                      ? Colors.white38
+                      : Colors.white12,
+                  width: 0.5,
+                ),
+              ),
+              child: Text(
+                level.label,
+                style: TextStyle(
+                  color: evm.state.filterLevel == level
+                      ? Colors.white70
+                      : Colors.white30,
+                  fontSize: 10,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+        ],
+        const Spacer(),
+        // "View all" link to events list
+        GestureDetector(
+          onTap: () => _navigateToEventsList(''),
+          child: const Text(
+            'View all',
+            style: TextStyle(color: Colors.white38, fontSize: 10),
+          ),
+        ),
+      ],
     );
   }
 

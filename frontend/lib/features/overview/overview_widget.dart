@@ -6,6 +6,7 @@ import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
 import '../candles/application/get_candle_series.dart';
 import '../candles/application/get_candle_series_input.dart';
+import '../events/events_view_model.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import 'overview_state.dart';
@@ -18,12 +19,14 @@ import 'overview_view_model.dart';
 class OverviewWidget extends StatefulWidget {
   final OverviewViewModel viewModel;
   final GetCandleSeries getCandleSeries;
+  final EventsViewModel? eventsViewModel;
   final PreferencesService? prefs;
 
   const OverviewWidget({
     Key? key,
     required this.viewModel,
     required this.getCandleSeries,
+    this.eventsViewModel,
     this.prefs,
   }) : super(key: key);
 
@@ -59,6 +62,9 @@ class OverviewWidgetState extends State<OverviewWidget>
 
     // Attach prefs to view model for offline cache
     vm.attachPrefs(_prefs);
+
+    // Attach prefs to events view model
+    widget.eventsViewModel?.attachPrefs(_prefs);
 
     // Restore persisted settings.
     final p = _prefs;
@@ -197,6 +203,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             timeframe: Timeframe(detailTf),
             series: series,
             isFavourite: _favourites.contains(item.symbol),
+            eventsViewModel: widget.eventsViewModel,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
