@@ -28,7 +28,7 @@ func TestSidewaysV5_StableSidewaysRanksHighest(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 6, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 6, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	// Assert: score is high, spikeDetected is false, components normalized
 	if res.Score < 0.7 {
@@ -75,7 +75,7 @@ func TestSidewaysV5_RecoveredSidewaysRanksSlightlyLower(t *testing.T) {
 		orig.Close(),
 		orig.Volume(),
 	)
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.95 {
 		t.Errorf("Recovered sideways should not exceed stable score, got %v", res.Score)
@@ -133,7 +133,7 @@ func TestSidewaysV5_BrokenStructureHeavilyPenalized(t *testing.T) {
 			orig.Volume(),
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.5 {
 		t.Errorf("Broken structure should be heavily penalized, got %v", res.Score)
@@ -161,7 +161,7 @@ func TestSidewaysV5_MicroFlatNoiseRejected(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.3 {
 		t.Errorf("Micro-flat noise should be rejected, got %v", res.Score)
@@ -189,7 +189,7 @@ func TestSidewaysV5_HighVolatilityChaosRejected(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0, ExtremaCount: 8}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	if res.Score > 0.3 {
 		t.Errorf("High-volatility chaos should be rejected, got %v", res.Score)
@@ -217,7 +217,7 @@ func TestSidewaysV5_ComponentsNormalizedAndOutput(t *testing.T) {
 			1000,
 		)
 	}
-	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+	cfg := scoring.SidewaysV5Config{N: 3, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
 	res := scoring.DetectSidewaysV5(candles, cfg)
 	for k, v := range res.Components {
 		if v < 0 || v > 1 {

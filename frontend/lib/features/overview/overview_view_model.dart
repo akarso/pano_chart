@@ -16,17 +16,33 @@ import 'dart:convert';
 /// increments the counter; in-flight responses from a previous generation
 /// are silently discarded.
 class OverviewViewModel {
-    List<OverviewItem> _sortItems(List<OverviewItem> items, String sort) {
+    List<OverviewItem> _sortItems(List<OverviewItem> items, String sort, {String direction = 'up'}) {
       final sorted = List<OverviewItem>.from(items);
+      final desc = direction != 'down'; // 'up' = descending by score
       switch (sort) {
         case 'sideways':
           sorted.sort((a, b) => b.sidewaysPercentile.compareTo(a.sidewaysPercentile));
           break;
         case 'trend':
-          sorted.sort((a, b) => b.trendScore.compareTo(a.trendScore));
+          sorted.sort((a, b) => desc
+              ? b.trendScore.compareTo(a.trendScore)
+              : a.trendScore.compareTo(b.trendScore));
           break;
         case 'gain':
           sorted.sort((a, b) => b.gainScore.compareTo(a.gainScore));
+          break;
+        case 'losers':
+          sorted.sort((a, b) => a.gainScore.compareTo(b.gainScore));
+          break;
+        case 'volume':
+          sorted.sort((a, b) => b.volume.compareTo(a.volume));
+          break;
+        case 'compression':
+        case 'breakout':
+          // Placeholder — no dedicated score field yet; use totalScore.
+          sorted.sort((a, b) => desc
+              ? b.totalScore.compareTo(a.totalScore)
+              : a.totalScore.compareTo(b.totalScore));
           break;
         default:
           sorted.sort((a, b) => b.totalScore.compareTo(a.totalScore));
@@ -105,7 +121,7 @@ class OverviewViewModel {
         _prefs!.setRankingsCache(timeframe, jsonEncode(cache));
       }
 
-      final sortedItems = _sortItems(result.items, _state.sort);
+      final sortedItems = _sortItems(result.items, _state.sort, direction: _state.sortDirection);
       _setState(
         _state.copyWith(
           isLoading: false,
@@ -204,7 +220,7 @@ class OverviewViewModel {
       if (currentGen != _generation) return;
 
       final merged = [..._state.items, ...result.items];
-      final sortedItems = _sortItems(merged, _state.sort);
+      final sortedItems = _sortItems(merged, _state.sort, direction: _state.sortDirection);
       _setState(
         _state.copyWith(
           isLoading: false,
@@ -227,6 +243,7 @@ class OverviewViewModel {
     _state = OverviewState.initial().copyWith(
       sort: newSort,
       sidewaysAlgo: _state.sidewaysAlgo,
+      sortDirection: _state.sortDirection,
     );
     onChanged?.call();
 
@@ -237,6 +254,19 @@ class OverviewViewModel {
   /// persisted preferences before the first [loadInitial].
   void changeSortSilent(String newSort) {
     _state = _state.copyWith(sort: newSort);
+  }
+
+  /// Changes the sort direction (up/down) and re-sorts locally.
+  void changeSortDirection(String direction, String timeframe) {
+    if (direction == _state.sortDirection) return;
+
+    final resorted = _sortItems(_state.items, _state.sort, direction: direction);
+    _setState(_state.copyWith(sortDirection: direction, items: resorted));
+  }
+
+  /// Updates sort direction without triggering a reload.
+  void changeSortDirectionSilent(String direction) {
+    _state = _state.copyWith(sortDirection: direction);
   }
 
   void changeSidewaysAlgo(String algo, String timeframe) {

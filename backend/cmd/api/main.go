@@ -23,6 +23,9 @@ import (
 )
 
 func main() {
+	// Load YAML configuration at startup
+	scoring.MustLoadConfig(scoring.ConfigPath())
+
 	addr := ":8080"
 	binanceBase := os.Getenv("PC_BINANCE_BASE_URL")
 	if binanceBase == "" {

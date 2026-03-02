@@ -423,7 +423,7 @@ func sidewaysCalcFor(algo SidewaysAlgoMode) scoring.SymbolScoreCalculator {
 		return &scoring.SidewaysV4ScoreCalculator{}
 	case SidewaysAlgoV5:
 		return &scoring.SidewaysV5ScoreCalculator{
-			Config: scoring.DefaultSidewaysV5Config(),
+			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
 		}
 	default:
 		return &scoring.SidewaysConsistencyScoreCalculator{}

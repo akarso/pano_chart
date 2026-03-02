@@ -70,7 +70,7 @@ void main() {
       expect(state.items, isEmpty);
       expect(state.page, 0);
       expect(state.hasMore, true);
-      expect(state.sort, 'total');
+      expect(state.sort, 'volume');
       expect(state.snapshot, isNull);
       expect(state.error, isNull);
     });
@@ -242,7 +242,7 @@ void main() {
       vm = OverviewViewModel(fakeGetOverview);
 
       await vm.loadInitial('1h');
-      expect(vm.state.sort, 'total');
+      expect(vm.state.sort, 'volume');
       expect(vm.state.items[0].symbol, 'BTCUSDT');
 
       // Wait for changeSort to complete its loadInitial
@@ -262,9 +262,9 @@ void main() {
 
       await vm.loadInitial('1h');
 
-      vm.changeSort('total', '1h');
+      vm.changeSort('volume', '1h');
 
-      // No additional call — sort was already 'total'
+      // No additional call — sort was already 'volume'
       expect(fakeGetOverview.calls.length, 1);
     });
 
@@ -279,7 +279,7 @@ void main() {
 
       expect(fakeGetOverview.calls[0]['timeframe'], '4h');
       expect(fakeGetOverview.calls[0]['page'], 1);
-      expect(fakeGetOverview.calls[0]['sort'], 'total');
+      expect(fakeGetOverview.calls[0]['sort'], 'volume');
     });
 
     test('loadNext passes snapshot to GetOverview', () async {

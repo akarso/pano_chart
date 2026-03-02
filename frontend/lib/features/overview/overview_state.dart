@@ -23,6 +23,9 @@ class OverviewItem {
   });
 }
 
+/// Sort options that support an up/down direction toggle.
+const kDirectionalSorts = {'compression', 'breakout', 'trend'};
+
 /// Immutable state object for the overview screen.
 class OverviewState {
   final bool isLoading;
@@ -31,6 +34,7 @@ class OverviewState {
   final bool hasMore;
   final String sort;
   final String sidewaysAlgo;
+  final String sortDirection; // 'up' or 'down'
   final String? snapshot;
   final String? error;
 
@@ -41,6 +45,7 @@ class OverviewState {
     required this.hasMore,
     required this.sort,
     this.sidewaysAlgo = 'v1',
+    this.sortDirection = 'up',
     required this.snapshot,
     required this.error,
   });
@@ -50,7 +55,7 @@ class OverviewState {
         items: [],
         page: 0,
         hasMore: true,
-        sort: 'total',
+        sort: 'volume',
         snapshot: null,
         error: null,
       );
@@ -62,6 +67,7 @@ class OverviewState {
     bool? hasMore,
     String? sort,
     String? sidewaysAlgo,
+    String? sortDirection,
     String? snapshot,
     String? error,
   }) {
@@ -72,6 +78,7 @@ class OverviewState {
       hasMore: hasMore ?? this.hasMore,
       sort: sort ?? this.sort,
       sidewaysAlgo: sidewaysAlgo ?? this.sidewaysAlgo,
+      sortDirection: sortDirection ?? this.sortDirection,
       snapshot: snapshot ?? this.snapshot,
       error: error,
     );

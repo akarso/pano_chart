@@ -23,6 +23,7 @@ class PreferencesService {
   static const _keyTimeframe = 'settings.timeframe';
   static const _keySort = 'settings.sort';
   static const _keySidewaysAlgo = 'settings.sidewaysAlgo';
+  static const _keySortDirection = 'settings.sortDirection';
   static const _keyNormalize = 'settings.normalizeSparklines';
   static const _keyFavourites = 'favourites';
 
@@ -44,11 +45,14 @@ class PreferencesService {
   String get timeframe => _prefs.getString(_keyTimeframe) ?? '1h';
   set timeframe(String v) => _prefs.setString(_keyTimeframe, v);
 
-  String get sort => _prefs.getString(_keySort) ?? 'total';
+  String get sort => _prefs.getString(_keySort) ?? 'volume';
   set sort(String v) => _prefs.setString(_keySort, v);
 
   String get sidewaysAlgo => _prefs.getString(_keySidewaysAlgo) ?? 'v1';
   set sidewaysAlgo(String v) => _prefs.setString(_keySidewaysAlgo, v);
+
+  String get sortDirection => _prefs.getString(_keySortDirection) ?? 'up';
+  set sortDirection(String v) => _prefs.setString(_keySortDirection, v);
 
   bool get normalizeSparklines => _prefs.getBool(_keyNormalize) ?? true;
   set normalizeSparklines(bool v) => _prefs.setBool(_keyNormalize, v);

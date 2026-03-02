@@ -1,0 +1,90 @@
+sideways:
+  extrema_window: 3
+  candle_count: 110
+  extrema_min_count: 8
+
+  atr:
+    period: 14
+    spike_multiplier: 3.0
+
+  ideal_atr_range:
+    # Total channel range expressed in ATR units
+    1m: 2.5
+    5m: 3.0
+    15m: 3.5
+    1h: 4.0
+    4h: 4.5
+    1d: 5.0
+
+  range_tolerance: 1.5   # Bell-curve width for optimal range scoring
+
+  weights:
+    channel_structure: 1.0     # CCS
+    oscillation_quality: 2.0   # OQS
+    drift_control: 1.0         # DCS
+    volatility_score: 1.0      # VOS
+
+
+compression:
+  swing_lookback: 3
+  candle_count: 100
+
+  atr:
+    period: 14
+
+  min_structural_range: 0.005   # Absolute minimum % range filter
+
+  width_weight: 1.0
+  volatility_weight: 1.0
+  convergence_weight: 1.0
+
+  touch_factor: 0.5
+  pressure_threshold: 0.2
+
+  normalization:
+    max_expected_slope: 0.01
+    max_expected_atr_drop: 0.005
+    slope_normalization: 0.1
+    
+
+breakout:
+  candle_count: 60            # Lookback window for structure reference
+
+  atr:
+    period: 14
+    expansion_norm: 0.01      # Normalization factor for ATR slope scoring
+
+  penetration:
+    atr_norm: 1.2             # ATR units required for full boundary violation score
+
+  conviction:
+    min_body_ratio: 0.6       # Candle body / total range minimum
+    body_weight: 1.0
+
+  volatility_weight: 1.0
+  boundary_weight: 1.5
+  conviction_weight: 1.2
+  volume_weight: 1.0
+
+  volume:
+    lookback: 30
+    zscore_norm: 2.0          # Z-score value mapped to full score
+    required: false           # If true, breakout invalid without volume expansion
+
+  compression_alignment:
+    enabled: true
+    threshold: 0.6            # Minimum compression score to apply boost
+    boost_factor: 1.5         # Multiplier applied when aligned
+
+  failure_detection:
+    reentry_lookback: 3       # Candles allowed to re-enter structure
+    penalty: 0.4              # Multiplier if breakout fails
+
+  dominance:
+    suppress_sideways_threshold: 0.7
+    sideways_suppression_factor: 0.3
+
+api_keys:
+  financeflow:
+    - name: "Finance flow APII"
+      key: "156db863c065ce2e67c57d91af2f6936585d16bb7dcf0bcee71227b63c85afeb"

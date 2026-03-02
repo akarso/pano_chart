@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+
 	"pano_chart/backend/domain"
 )
 
@@ -17,7 +18,16 @@ func (s *SidewaysV5ScoreCalculator) Name() string {
 }
 
 func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, error) {
-	count := s.Config.CandleCount
+	// Resolve per-timeframe IdealATRRange
+	cfg := s.Config
+	if len(cfg.IdealATRRangeMap) > 0 {
+		tf := string(series.Timeframe())
+		if ideal, ok := cfg.IdealATRRangeMap[tf]; ok {
+			cfg.IdealATRRange = ideal
+		}
+	}
+
+	count := cfg.CandleCount
 	length := series.Len()
 	start := 0
 	if length > count {
@@ -32,40 +42,16 @@ func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, 
 		}
 		candles[i] = c
 	}
-	sc := DetectSidewaysV5(candles, s.Config).Score
+	sc := DetectSidewaysV5(candles, cfg).Score
 	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 1: %+v\n", sc)
 	return sc, nil
-	//return DetectSidewaysV5(candles, s.Config).Score, nil
 }
 
-// DefaultSidewaysV5Config returns the config for v5, loading from .env if present.
-// Each value can be overridden by an environment variable in .env or the process env.
-// Example .env:
-//
-//	N=3
-//	CANDLE_COUNT=110
-//	IDEAL_RANGE_MIN=0.005
-//	IDEAL_RANGE_MAX=0.02
-//	ATR_MULTIPLIER=3.0
-//	W1=1.0
-//	W2=2.0
-//	W3=1.0
-//	W4=1.0
+// DefaultSidewaysV5Config returns the SidewaysV5Config from config.yaml
+// (or hardcoded defaults when config.yaml is not loaded, e.g. in tests).
+// The returned config uses the "1h" timeframe as default IdealATRRange.
 func DefaultSidewaysV5Config() SidewaysV5Config {
-	LoadEnv()
-
-	return SidewaysV5Config{
-		N:             EnvInt("SIDEWAYS_N", 3),
-		CandleCount:   EnvInt("SIDEWAYS_CANDLE_COUNT", 110),
-		IdealRangeMin: EnvFloat("SIDEWAYS_IDEAL_RANGE_MIN", 0.005),
-		IdealRangeMax: EnvFloat("SIDEWAYS_IDEAL_RANGE_MAX", 0.02),
-		ATRMultiplier: EnvFloat("SIDEWAYS_ATR_MULTIPLIER", 3.0),
-		W1:            EnvFloat("SIDEWAYS_W1", 1.0),
-		W2:            EnvFloat("SIDEWAYS_W2", 2.0),
-		W3:            EnvFloat("SIDEWAYS_W3", 1.0),
-		W4:            EnvFloat("SIDEWAYS_W4", 1.0),
-		ExtremaCount:  EnvInt("SIDEWAYS_EXTREMA_COUNT", 8),
-	}
+	return NewSidewaysV5ConfigForTimeframe("1h")
 }
 
 // SidewaysResult is the output struct for Sideways v5
@@ -80,16 +66,17 @@ type SidewaysResult struct {
 // SidewaysV5Config holds all tunable parameters for Sideways v5
 // (weights, N, candleCount, ideal volatility band, ATR multiplier)
 type SidewaysV5Config struct {
-	N             int     // Extrema window size
-	CandleCount   int     // Number of candles to analyze
-	IdealRangeMin float64 // Min ideal volatility (fraction)
-	IdealRangeMax float64 // Max ideal volatility (fraction)
-	ATRMultiplier float64 // Spike detection multiplier
-	W1            float64 // Weight for CCS (channel structure)
-	W2            float64 // Weight for OQS (oscillation quality)
-	W3            float64 // Weight for DCS (drift control)
-	W4            float64 // Weight for VOS (volatility/oscillation)
-	ExtremaCount  int     // Minimum number of extrema required
+	N                int                // Extrema window size
+	CandleCount      int                // Number of candles to analyze
+	IdealATRRange    float64            // Ideal price range in ATR units (resolved for a specific timeframe)
+	IdealATRRangeMap map[string]float64 // Per-timeframe overrides (e.g. "1h" -> 4.0)
+	RangeTolerance   float64            // Gaussian tolerance in ATR units (e.g. 1.5)
+	ATRMultiplier    float64            // Spike detection multiplier
+	W1               float64            // Weight for CCS (channel structure)
+	W2               float64            // Weight for OQS (oscillation quality)
+	W3               float64            // Weight for DCS (drift control)
+	W4               float64            // Weight for VOS (volatility/oscillation)
+	ExtremaCount     int                // Minimum number of extrema required
 }
 
 // DetectSidewaysV5 runs the structural equilibrium detector
@@ -110,23 +97,41 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// Log config struct
 
 	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
-	// Gather all extrema values
-	extremaVals := make([]float64, len(extremaIdx))
-	for i, idx := range extremaIdx {
-		extremaVals[i] = (candles[idx].High() + candles[idx].Low()) / 2
-	}
 	// Filter: require at least cfg.ExtremaCount extrema
 	if len(extremaIdx) < cfg.ExtremaCount {
 		return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
 	}
 
 	// --- 0b. Minimum range gate: reject micro-flat noise ---
-	// If the price range is far below the ideal minimum, the data is too flat
-	// to be structurally meaningful as sideways movement.
-	maxH, minL, meanP := extremesAndMean(candles)
-	rangeP := (maxH - minL) / (meanP + 1e-6)
-	if rangeP < cfg.IdealRangeMin*0.5 {
-		return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+	// If the range in ATR units is far below ideal, data is too flat.
+	// Hard floor at 1 ATR: if total range ≤ one bar's volatility, there's
+	// no oscillation. Also reject if range < 1/3 of ideal.
+	atrEarly := averageATR(candles)
+	if atrEarly > 0 {
+		maxH, minL, _ := extremesAndMean(candles)
+		rangeATR := (maxH - minL) / atrEarly
+		if rangeATR <= 1.0 || rangeATR < cfg.IdealATRRange/3.0 {
+			return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+		}
+	}
+
+	// --- 0c. Distinct-cluster gate: highs and lows must separate ---
+	// If extrema don't form two distinct bands (peaks vs troughs),
+	// the price action is noise — skip expensive trendline fitting.
+	// Only apply when we have enough highs AND lows to judge meaningfully.
+	if len(highsIdx) >= 2 && len(lowsIdx) >= 2 {
+		highVals := make([]float64, len(highsIdx))
+		for i, idx := range highsIdx {
+			highVals[i] = candles[idx].High()
+		}
+		lowVals := make([]float64, len(lowsIdx))
+		for i, idx := range lowsIdx {
+			lowVals[i] = candles[idx].Low()
+		}
+		allExtremaVals := append(highVals, lowVals...)
+		if !hasDistinctClusters(allExtremaVals) {
+			return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+		}
 	}
 
 	// --- 1. Detect local extrema ---
@@ -170,13 +175,15 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	normSlope := math.Abs(fullSlope) / (channelWidth + 1e-6)
 	DCS := 1 - clamp(normSlope, 0, 1)
 
-	// --- 6. Compute VOS ---
-	maxHigh, minLow, meanPrice := extremesAndMean(candles)
-	rangePercent := (maxHigh - minLow) / (meanPrice + 1e-6)
+	// --- 6. Compute VOS (ATR-based Gaussian) ---
+	maxHigh, minLow, _ := extremesAndMean(candles)
 	atr := averageATR(candles)
-	// atrRatio := atr / (meanPrice + 1e-6) // unused
-	vosRaw := bellShapedScore(rangePercent, cfg.IdealRangeMin, cfg.IdealRangeMax)
-	VOS := clamp(vosRaw/0.33, 0, 1)
+	VOS := 0.0
+	if atr > 0 && cfg.RangeTolerance > 0 {
+		rangeATRUnits := (maxHigh - minLow) / atr
+		z := (rangeATRUnits - cfg.IdealATRRange) / cfg.RangeTolerance
+		VOS = math.Exp(-z * z)
+	}
 
 	// --- 7. Spike detection ---
 	spikeIdx, spikeDetected := detectSpike(candles, atr, cfg.ATRMultiplier)
@@ -394,20 +401,20 @@ func mean(vals []float64) float64 {
 }
 
 func alternationScore(extrema []int) float64 {
-	return 1
-	// if len(extrema) < 2 {
-	// 	return 1
-	// }
-	// penalty := 0.0
-	// for i := 2; i < len(extrema); i++ {
-	// 	delta1 := extrema[i-1] - extrema[i-2]
-	// 	delta2 := extrema[i] - extrema[i-1]
-	// 	if (delta1 > 0 && delta2 > 0) || (delta1 < 0 && delta2 < 0) {
-	// 		penalty += 1
-	// 	}
-	// }
-	// k := 2.0 // scaling factor for exponential decay
-	// return math.Exp(-penalty / k)
+	//return 1
+	if len(extrema) < 2 {
+		return 1
+	}
+	penalty := 0.0
+	for i := 2; i < len(extrema); i++ {
+		delta1 := extrema[i-1] - extrema[i-2]
+		delta2 := extrema[i] - extrema[i-1]
+		if (delta1 > 0 && delta2 > 0) || (delta1 < 0 && delta2 < 0) {
+			penalty += 1
+		}
+	}
+	k := 2.0 // scaling factor for exponential decay
+	return math.Exp(-penalty / k)
 }
 
 func evennessScore(extrema []int, candles []domain.Candle) float64 {
@@ -492,16 +499,6 @@ func averageATR(candles []domain.Candle) float64 {
 	return sum / float64(len(candles)-1)
 }
 
-func bellShapedScore(val, idealMin, idealMax float64) float64 {
-	if val < idealMin {
-		return clamp((val/idealMin)*0.5, 0, 1)
-	}
-	if val > idealMax {
-		return clamp((idealMax/val)*0.5, 0, 1)
-	}
-	return 1.0
-}
-
 func detectSpike(candles []domain.Candle, atr, k float64) (int, bool) {
 	for i, c := range candles {
 		if (c.High()-c.Low()) > k*atr && atr > 0 {
@@ -567,43 +564,38 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 // 	return ma
 // }
 
-// // hasDistinctClusters checks if extrema values form two distinct clusters (simple threshold-based method)
-// func hasDistinctClusters(vals []float64) bool {
-// 	if len(vals) < 4 {
-// 		return false // not enough points to form clusters
-// 	}
-// 	// Sort values
-// 	sorted := make([]float64, len(vals))
-// 	copy(sorted, vals)
-// 	// Simple insertion sort (small arrays)
-// 	for i := 1; i < len(sorted); i++ {
-// 		key := sorted[i]
-// 		j := i - 1
-// 		for j >= 0 && sorted[j] > key {
-// 			sorted[j+1] = sorted[j]
-// 			j--
-// 		}
-// 		sorted[j+1] = key
-// 	}
-// 	// Find largest gap between consecutive values
-// 	maxGap := 0.0
-// 	maxIdx := 0
-// 	for i := 1; i < len(sorted); i++ {
-// 		gap := sorted[i] - sorted[i-1]
-// 		if gap > maxGap {
-// 			maxGap = gap
-// 			maxIdx = i
-// 		}
-// 	}
-// 	// Heuristic: if the largest gap splits the data into two groups, and each group has at least 2 points, and the gap is at least 10% of the value range, call it two clusters
-// 	n1 := maxIdx
-// 	n2 := len(sorted) - maxIdx
-// 	valRange := sorted[len(sorted)-1] - sorted[0]
-// 	if n1 >= 2 && n2 >= 2 && maxGap > 0.1*valRange {
-// 		return true
-// 	}
-// 	return false
-// }
+// hasDistinctClusters checks if extrema values form two distinct clusters (simple threshold-based method)
+func hasDistinctClusters(vals []float64) bool {
+	if len(vals) < 4 {
+		return false // not enough points to form clusters
+	}
+	// Sort values
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	// Simple insertion sort (small arrays)
+	for i := 1; i < len(sorted); i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] > key {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+	// Check ALL gaps: any gap that splits into two groups of ≥2 points
+	// with gap > 10% of range means we have distinct clusters.
+	// This is robust to single-point outliers (e.g. spikes).
+	valRange := sorted[len(sorted)-1] - sorted[0]
+	for i := 1; i < len(sorted); i++ {
+		gap := sorted[i] - sorted[i-1]
+		n1 := i
+		n2 := len(sorted) - i
+		if n1 >= 2 && n2 >= 2 && gap > 0.1*valRange {
+			return true
+		}
+	}
+	return false
+}
 
 // func isMAFlat(ma []float64, epsilon float64) bool {
 // 	if len(ma) == 0 {
@@ -643,7 +635,7 @@ func (s SidewaysV5Subscore) Compute(data interface{}, cfg interface{}) SubscoreR
 	}
 	v5cfg, ok := cfg.(SidewaysV5Config)
 	if !ok {
-		v5cfg = SidewaysV5Config{N: 3, CandleCount: 110, IdealRangeMin: 0.005, IdealRangeMax: 0.02, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+		v5cfg = NewSidewaysV5ConfigForTimeframe("1h")
 	}
 	res := DetectSidewaysV5(candles, v5cfg)
 	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 2: %+v\n", res.Score)

@@ -40,7 +40,6 @@ class OverviewWidgetState extends State<OverviewWidget>
   final ScrollController _scrollController = ScrollController();
   int _columns = 2;
   String _timeframe = '1h';
-  String _sidewaysAlgo = 'v1';
   bool _normalizeSparklines = true;
   bool _showFavourites = false;
   Set<String> _favourites = {};
@@ -66,17 +65,19 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (p != null) {
       _columns = p.columns;
       _timeframe = p.timeframe;
-      _sidewaysAlgo = p.sidewaysAlgo;
       _normalizeSparklines = p.normalizeSparklines;
       _favourites = p.favourites;
 
-      // Also sync sort + sidewaysAlgo into the view model state so the
-      // first loadInitial uses the persisted values.
+      // Sync sort, sidewaysAlgo, and sortDirection into the view model
+      // state so the first loadInitial uses the persisted values.
       if (p.sort != vm.state.sort) {
         vm.changeSortSilent(p.sort);
       }
       if (p.sidewaysAlgo != vm.state.sidewaysAlgo) {
         vm.changeSidewaysAlgoSilent(p.sidewaysAlgo);
+      }
+      if (p.sortDirection != vm.state.sortDirection) {
+        vm.changeSortDirectionSilent(p.sortDirection);
       }
     }
 
@@ -396,10 +397,26 @@ class OverviewWidgetState extends State<OverviewWidget>
     );
   }
 
+  /// Display label for a sort value.
+  static String _sortLabel(String sort) {
+    switch (sort) {
+      case 'sideways': return 'Sideways';
+      case 'compression': return 'Compression';
+      case 'breakout': return 'Breakout';
+      case 'trend': return 'Trend';
+      case 'gain': return 'Gainers';
+      case 'losers': return 'Losers';
+      case 'volume': return 'Volume';
+      default: return sort;
+    }
+  }
+
   Widget _buildSettingsOverlay(OverviewState state) {
     final screenWidth = MediaQuery.of(context).size.width;
     // Font size proportional to screen width (~3.5vw), floor 11, cap 16.
     final ctrlFontSize = (screenWidth * 0.035).clamp(11.0, 16.0);
+
+    final showDirection = kDirectionalSorts.contains(state.sort);
 
     return DefaultTextStyle.merge(
       style: TextStyle(fontSize: ctrlFontSize),
@@ -441,23 +458,32 @@ class OverviewWidgetState extends State<OverviewWidget>
                     vm.loadInitial(_timeframe);
                   },
                 ), ctrlFontSize),
-                _controlRow('Sort', DropdownButton<String>(
-                  value: state.sort,
-                  isDense: true,
-                  style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                  items: const [
-                    DropdownMenuItem(value: 'total', child: Text('Total')),
-                    DropdownMenuItem(value: 'gain', child: Text('Gain')),
-                    DropdownMenuItem(value: 'trend', child: Text('Trend')),
-                    DropdownMenuItem(value: 'sideways', child: Text('Sideways')),
-                    DropdownMenuItem(value: 'volume', child: Text('Volume')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) {
-                      _prefs?.sort = v;
-                      vm.changeSort(v, _timeframe);
-                    }
+                _controlRow('Sort', PopupMenuButton<String>(
+                  initialValue: state.sort,
+                  onSelected: (v) {
+                    _prefs?.sort = v;
+                    vm.changeSort(v, _timeframe);
                   },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(value: 'sideways', child: Text('Sideways')),
+                    PopupMenuItem(value: 'compression', child: Text('Compression')),
+                    PopupMenuItem(value: 'breakout', child: Text('Breakout')),
+                    PopupMenuItem(value: 'trend', child: Text('Trend')),
+                    const PopupMenuDivider(),
+                    PopupMenuItem(value: 'gain', child: Text('Gainers')),
+                    PopupMenuItem(value: 'losers', child: Text('Losers')),
+                    PopupMenuItem(value: 'volume', child: Text('Volume')),
+                  ],
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _sortLabel(state.sort),
+                        style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                      ),
+                      Icon(Icons.arrow_drop_down, color: Colors.white, size: ctrlFontSize + 4),
+                    ],
+                  ),
                 ), ctrlFontSize),
               ],
             ),
@@ -493,26 +519,29 @@ class OverviewWidgetState extends State<OverviewWidget>
                     style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
                   ),
                 ),
-                const SizedBox(width: 16),
-                _controlRow('Sideways', DropdownButton<String>(
-                  value: _sidewaysAlgo,
-                  isDense: true,
-                  style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                  items: const [
-                    DropdownMenuItem(value: 'v1', child: Text('Algo 1')),
-                    DropdownMenuItem(value: 'v2', child: Text('Algo 2')),
-                    DropdownMenuItem(value: 'v3', child: Text('Algo 3')),
-                    DropdownMenuItem(value: 'v4', child: Text('Algo 4 (v1+drift penalty)')),
-                    DropdownMenuItem(value: 'v5', child: Text('Algo v5')),
-                  ],
-                  onChanged: (v) {
-                    if (v != null) {
-                      setState(() => _sidewaysAlgo = v);
-                      _prefs?.sidewaysAlgo = v;
-                      vm.changeSidewaysAlgo(v, _timeframe);
-                    }
-                  },
-                ), ctrlFontSize),
+                if (showDirection) ...[
+                  const Spacer(),
+                  _controlRow('Direction', ToggleButtons(
+                    isSelected: [
+                      state.sortDirection == 'up',
+                      state.sortDirection == 'down',
+                    ],
+                    onPressed: (index) {
+                      final dir = index == 0 ? 'up' : 'down';
+                      _prefs?.sortDirection = dir;
+                      vm.changeSortDirection(dir, _timeframe);
+                    },
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 28),
+                    borderRadius: BorderRadius.circular(4),
+                    selectedColor: Colors.white,
+                    fillColor: Colors.white24,
+                    color: Colors.white54,
+                    children: const [
+                      Icon(Icons.arrow_upward, size: 16),
+                      Icon(Icons.arrow_downward, size: 16),
+                    ],
+                  ), ctrlFontSize),
+                ],
               ],
             ),
           ],
