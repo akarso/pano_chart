@@ -10,6 +10,8 @@ import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
 import 'detail_context.dart';
+import 'trade/trade_action_buttons.dart';
+import 'trade/trade_links.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -38,12 +40,14 @@ class DetailScreen extends StatefulWidget {
 class _DetailScreenState extends State<DetailScreen> {
   ChartIndicatorConfig _chartConfig = const ChartIndicatorConfig();
   late bool isFavourite;
+  Exchange _exchange = Exchange.binance;
 
   @override
   void initState() {
     super.initState();
     isFavourite = widget.isFavourite;
     _loadChartConfig();
+    _loadExchangePreference();
     _loadEvents();
   }
 
@@ -58,6 +62,20 @@ class _DetailScreenState extends State<DetailScreen> {
     setState(() => _chartConfig = cfg);
     final prefs = await SharedPreferences.getInstance();
     cfg.save(prefs);
+  }
+
+  Future<void> _loadExchangePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = prefs.getString('settings.preferredExchange') ?? 'binance';
+    setState(() {
+      _exchange = ExchangeLabel.fromKey(key);
+    });
+  }
+
+  Future<void> _saveExchange(Exchange ex) async {
+    setState(() => _exchange = ex);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('settings.preferredExchange', ex.key);
   }
 
   void _loadEvents() {
@@ -250,6 +268,13 @@ class _DetailScreenState extends State<DetailScreen> {
               const SizedBox(height: 8),
               _buildEventControls(),
             ],
+            const SizedBox(height: 12),
+            TradeActionButtons(
+              symbol: widget.symbol.value,
+              timeframe: widget.timeframe.value,
+              exchange: _exchange,
+              onExchangeChanged: _saveExchange,
+            ),
             if (percentChange != null) ...[
               const SizedBox(height: 12),
               Row(

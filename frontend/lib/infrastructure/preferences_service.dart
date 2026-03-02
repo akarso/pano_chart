@@ -28,6 +28,7 @@ class PreferencesService {
   static const _keyFavourites = 'favourites';
   static const _keyShowEvents = 'settings.showEvents';
   static const _keyEventFilter = 'settings.eventFilter';
+  static const _keyPreferredExchange = 'settings.preferredExchange';
 
   final SharedPreferences _prefs;
 
@@ -67,6 +68,12 @@ class PreferencesService {
   /// Persisted as 'highOnly', 'highAndMedium', or 'all'. Default: 'highAndMedium'.
   String get eventFilter => _prefs.getString(_keyEventFilter) ?? 'highAndMedium';
   set eventFilter(String v) => _prefs.setString(_keyEventFilter, v);
+
+  // ---- preferred exchange ----
+
+  /// Persisted exchange key: 'binance', 'mexc', or 'bybit'. Default: 'binance'.
+  String get preferredExchange => _prefs.getString(_keyPreferredExchange) ?? 'binance';
+  set preferredExchange(String v) => _prefs.setString(_keyPreferredExchange, v);
 
   // ---- favourites ----
 
