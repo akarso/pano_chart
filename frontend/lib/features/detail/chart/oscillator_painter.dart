@@ -16,6 +16,9 @@ class OscillatorPainter extends CustomPainter {
   static const Color _atrColor = Color(0xFF26A69A);
   static const Color _levelColor = Color(0x33FFFFFF);
 
+  /// Extra candles behind the viewport for smooth indicator entry.
+  static const int _indicatorPad = 60;
+
   OscillatorPainter({
     this.rsi,
     this.atr,
@@ -52,10 +55,10 @@ class OscillatorPainter extends CustomPainter {
       );
     }
 
-    // ── ATR line (auto-scaled) ──
+    // ── ATR line (full-data scale so it doesn't jump while scrolling) ──
     if (atr != null) {
       double lo = double.infinity, hi = double.negativeInfinity;
-      for (var i = startIndex; i < endIndex && i < atr!.length; i++) {
+      for (var i = 0; i < atr!.length; i++) {
         final v = atr![i];
         if (v.isNaN) continue;
         if (v < lo) lo = v;
@@ -87,7 +90,8 @@ class OscillatorPainter extends CustomPainter {
     final path = Path();
     bool started = false;
 
-    for (var i = start; i < end && i < values.length; i++) {
+    final loopStart = (start - _indicatorPad).clamp(0, values.length);
+    for (var i = loopStart; i < end && i < values.length; i++) {
       final v = values[i];
       if (v.isNaN) continue;
       final cx =

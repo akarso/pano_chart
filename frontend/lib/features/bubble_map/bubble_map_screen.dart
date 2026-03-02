@@ -342,11 +342,14 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
           ),
         ],
       ),
-      body: Column(
-        children: [
-          _buildLegend(state),
-          Expanded(child: _buildBody(state)),
-        ],
+      body: SafeArea(
+        top: false,
+        child: Column(
+          children: [
+            _buildLegend(state),
+            Expanded(child: _buildBody(state)),
+          ],
+        ),
       ),
     );
   }

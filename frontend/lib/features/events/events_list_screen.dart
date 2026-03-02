@@ -78,7 +78,10 @@ class _EventsListScreenState extends State<EventsListScreen> {
               child: Text('No events',
                   style: TextStyle(color: Colors.white54, fontSize: 14)))
           : ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: EdgeInsets.only(
+                left: 16, right: 16, top: 8,
+                bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
+              ),
               itemCount: filtered.length,
               separatorBuilder: (_, __) =>
                   Divider(color: Colors.white.withAlpha(25), height: 1),

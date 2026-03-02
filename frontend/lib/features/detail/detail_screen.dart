@@ -221,7 +221,10 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         body: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: EdgeInsets.only(
+            left: 16, right: 16, top: 8,
+            bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

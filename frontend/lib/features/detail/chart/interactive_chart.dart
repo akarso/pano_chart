@@ -49,6 +49,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
   double? _prevFocalX;
   double _prevScrollOffset = 0;
 
+  bool _didInitialScroll = false;
+
   // ── cached indicators ──
   List<double>? _emaFast;
   List<double>? _emaSlow;
@@ -172,7 +174,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
           child: LayoutBuilder(builder: (context, constraints) {
             final vw = constraints.maxWidth;
             // On first build, scroll to show last candles.
-            if (_scrollOffset == 0 && candles.length > 1) {
+            if (!_didInitialScroll) {
+              _didInitialScroll = true;
               final visibleCount = (vw / _candleWidth).floor();
               if (candles.length > visibleCount) {
                 _scrollOffset =

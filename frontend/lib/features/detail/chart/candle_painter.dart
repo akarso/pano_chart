@@ -22,6 +22,9 @@ class CandlePainter extends CustomPainter {
   static const Color downColor = Color(0xFFFF1744);
   static const double _padFrac = 0.06;
 
+  /// Extra candles behind the viewport for smooth indicator entry.
+  static const int _indicatorPad = 60;
+
   CandlePainter({
     required this.candles,
     required this.startIndex,
@@ -118,7 +121,8 @@ class CandlePainter extends CustomPainter {
     final topPoints = <Offset>[];
     final bottomPoints = <Offset>[];
 
-    for (var i = startIndex; i < endIndex && i < candles.length; i++) {
+    final loopStart = (startIndex - _indicatorPad).clamp(0, candles.length);
+    for (var i = loopStart; i < endIndex && i < candles.length; i++) {
       if (i >= fast.length || i >= slow.length) continue;
       final fv = fast[i];
       final sv = slow[i];
@@ -159,7 +163,8 @@ class CandlePainter extends CustomPainter {
       Canvas canvas, double Function(double) toY, List<double> values, Color color) {
     final path = Path();
     bool started = false;
-    for (var i = startIndex; i < endIndex && i < candles.length; i++) {
+    final loopStart = (startIndex - _indicatorPad).clamp(0, candles.length);
+    for (var i = loopStart; i < endIndex && i < candles.length; i++) {
       if (i >= values.length || values[i].isNaN) continue;
       final cx = (i - startIndex) * candleWidth + candleWidth / 2 - scrollPixelOffset;
       final y = toY(values[i]);

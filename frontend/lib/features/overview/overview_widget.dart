@@ -704,7 +704,10 @@ class OverviewWidgetState extends State<OverviewWidget>
       child: GridView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
         controller: _scrollController,
-        padding: const EdgeInsets.all(8),
+        padding: EdgeInsets.only(
+          left: 8, right: 8, top: 8,
+          bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
+        ),
         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: _columns,
           crossAxisSpacing: spacing,
