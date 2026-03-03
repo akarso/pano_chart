@@ -30,6 +30,10 @@ void main() {
     test('kChartCandles is 600', () {
       expect(kChartCandles, 600);
     });
+
+    test('kTimeframes contains the six supported timeframes', () {
+      expect(kTimeframes, ['1m', '5m', '15m', '1h', '4h', '1d']);
+    });
   });
 
   group('buildDetailChartInput', () {

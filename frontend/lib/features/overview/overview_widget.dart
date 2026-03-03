@@ -176,6 +176,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             initialVisibleCount: _sparklineCandles,
             isFavourite: _favourites.contains(item.symbol),
             eventsViewModel: widget.eventsViewModel,
+            getCandleSeries: widget.getCandleSeries,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -862,21 +863,24 @@ class _OverviewGridItem extends StatelessWidget {
                       size: (fontSize * 0.8).clamp(10.0, 16.0),
                     ),
                   ),
-                // Sideways score or percentile display (bottom left, small font)
+                // Price change label (bottom-left)
                 Positioned(
                   left: pad + 4,
                   bottom: pad,
-                  child: Text(
-                    _formatSidewaysScore(
-                      sort == 'sideways' ? item.sidewaysPercentile : item.sidewaysScore,
-                      isPercentile: sort == 'sideways',
-                    ),
-                    style: TextStyle(
-                      fontSize: (fontSize * 0.55).clamp(7.0, 11.0),
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w400,
-                      backgroundColor: Colors.black.withAlpha((0.18 * 255).round()),
-                    ),
+                  child: Builder(
+                    builder: (_) {
+                      final pct = _sparklinePriceChange(item.sparkline);
+                      final sign = pct >= 0 ? '+' : '';
+                      return Text(
+                        '$sign${pct.toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: (fontSize * 0.55).clamp(7.0, 11.0),
+                          color: pct >= 0 ? Colors.green : Colors.red,
+                          fontWeight: FontWeight.w600,
+                          backgroundColor: Colors.black.withAlpha((0.18 * 255).round()),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ],
@@ -887,16 +891,10 @@ class _OverviewGridItem extends StatelessWidget {
     );
   }
 
-  String _formatSidewaysScore(double score, {bool isPercentile = false}) {
-    if (isPercentile) {
-      // Percentile is 0..1, show as 0-100
-      final pct = (score * 100).clamp(0, 100);
-      return '${pct.toStringAsFixed(1)}%';
-    } else {
-      // Show 0.00 for very small values above zero
-      final rounded = score < 0.005 ? 0.0 : score;
-      return rounded.toStringAsFixed(2);
-    }
+  /// Compute the % price change from the first to last sparkline close.
+  double _sparklinePriceChange(List<double> sparkline) {
+    if (sparkline.length < 2 || sparkline.first == 0) return 0.0;
+    return ((sparkline.last - sparkline.first) / sparkline.first) * 100;
   }
 
   Widget _buildSparkline(List<double> points) {

@@ -227,6 +227,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             warmupCount: kIndicatorWarmup,
             initialVisibleCount: kSparklineCandles,
             eventsViewModel: widget.eventsViewModel,
+            getCandleSeries: widget.getCandleSeries,
             detailContext: DetailContext(
               rank: 0,
               totalScore: token.totalScore,

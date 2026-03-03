@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../candles/api/candle_response.dart';
+import '../candles/application/get_candle_series.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
@@ -10,6 +11,7 @@ import '../events/events_view_model.dart';
 import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
+import 'chart_navigation.dart';
 import 'detail_context.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
@@ -23,6 +25,9 @@ class DetailScreen extends StatefulWidget {
   final DetailContext? detailContext;
   final bool isFavourite;
   final EventsViewModel? eventsViewModel;
+
+  /// Service used to fetch candles when the user switches timeframe.
+  final GetCandleSeries? getCandleSeries;
 
   /// Leading candles used only for indicator warmup (not scrollable).
   final int warmupCount;
@@ -38,6 +43,7 @@ class DetailScreen extends StatefulWidget {
     this.detailContext,
     this.isFavourite = false,
     this.eventsViewModel,
+    this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
   }) : super(key: key);
@@ -53,14 +59,47 @@ class _DetailScreenState extends State<DetailScreen> {
   List<ExchangeConfig> _exchanges = kDefaultExchanges;
   CustomExchange? _customExchange;
 
+  // ---- mutable series / timeframe state ----
+  late String _timeframe;
+  late CandleSeriesResponse _series;
+  late int _warmupCount;
+  bool _isLoadingTf = false;
+
   @override
   void initState() {
     super.initState();
     isFavourite = widget.isFavourite;
+    _timeframe = widget.timeframe.value;
+    _series = widget.series;
+    _warmupCount = widget.warmupCount;
     _loadChartConfig();
     _loadExchangePreference();
     _loadExchangeConfigs();
     _loadEvents();
+  }
+
+  /// Fetch candles for [tf] and swap the active series.
+  Future<void> _switchTimeframe(String tf) async {
+    final svc = widget.getCandleSeries;
+    if (svc == null || tf == _timeframe) return;
+    setState(() => _isLoadingTf = true);
+    try {
+      final input = buildDetailChartInput(
+        symbol: widget.symbol.value,
+        timeframe: tf,
+      );
+      final result = await svc.execute(input);
+      if (!mounted) return;
+      setState(() {
+        _timeframe = tf;
+        _series = result;
+        _warmupCount = kIndicatorWarmup;
+        _isLoadingTf = false;
+      });
+      _loadEvents(); // reload events for new date range
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingTf = false);
+    }
   }
 
   Future<void> _loadChartConfig() async {
@@ -125,7 +164,7 @@ class _DetailScreenState extends State<DetailScreen> {
       if (mounted) setState(() {});
     };
     // Determine date range from the candle series
-    final candles = widget.series.candles;
+    final candles = _series.candles;
     if (candles.isEmpty) return;
     final dateFrom = _isoDate(candles.first.timestamp);
     final dateTo = _isoDate(candles.last.timestamp);
@@ -149,8 +188,8 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   String _timeRangeLabel() {
-    final count = widget.series.candles.length;
-    final tf = widget.timeframe.value;
+    final count = _series.candles.length;
+    final tf = _timeframe;
     final hours = _tfToHours(tf);
     final totalHours = count * hours;
     String approx;
@@ -201,7 +240,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final series = widget.series;
+    final series = _series;
     final candles = series.candles;
     final ctx = widget.detailContext;
 
@@ -248,13 +287,41 @@ class _DetailScreenState extends State<DetailScreen> {
                   color: Colors.white.withAlpha(30),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
-                  widget.timeframe.value,
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                  ),
-                ),
+                child: widget.getCandleSeries != null
+                    ? DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _timeframe,
+                          isDense: true,
+                          dropdownColor: const Color(0xFF1A1A2E),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                          ),
+                          icon: const Icon(
+                            Icons.arrow_drop_down,
+                            color: Colors.white54,
+                            size: 18,
+                          ),
+                          items: kTimeframes
+                              .map((tf) => DropdownMenuItem(
+                                    value: tf,
+                                    child: Text(tf),
+                                  ))
+                              .toList(),
+                          onChanged: _isLoadingTf
+                              ? null
+                              : (tf) {
+                                  if (tf != null) _switchTimeframe(tf);
+                                },
+                        ),
+                      )
+                    : Text(
+                        _timeframe,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 14,
+                        ),
+                      ),
               ),
               const Spacer(),
               // Indicator settings
@@ -296,13 +363,19 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              InteractiveChart(
+              if (_isLoadingTf)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else
+                InteractiveChart(
                 series: series,
                 config: _chartConfig,
                 onConfigChanged: _saveChartConfig,
                 eventsViewModel: widget.eventsViewModel,
                 onNavigateToEvent: _navigateToEventsList,
-                warmupCount: widget.warmupCount,
+                warmupCount: _warmupCount,
                 initialVisibleCount: widget.initialVisibleCount,
               ),
             // Event overlay controls
@@ -313,7 +386,7 @@ class _DetailScreenState extends State<DetailScreen> {
             const SizedBox(height: 12),
             TradeActionButtons(
               symbol: widget.symbol.value,
-              timeframe: widget.timeframe.value,
+              timeframe: _timeframe,
               preferredExchangeId: _preferredExchangeId,
               exchanges: _exchanges,
               customExchange: _customExchange,

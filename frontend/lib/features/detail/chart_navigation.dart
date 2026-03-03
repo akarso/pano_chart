@@ -16,6 +16,9 @@ const int kIndicatorWarmup = 50;
 /// Total *visible* chart candles (scrollable).
 const int kChartCandles = 600;
 
+/// Available timeframes for timeframe selectors.
+const List<String> kTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+
 /// Returns the [Duration] of a single candle for the given timeframe string.
 Duration candleDuration(String tf) {
   switch (tf) {
