@@ -19,6 +19,36 @@ const int kChartCandles = 600;
 /// Available timeframes for timeframe selectors.
 const List<String> kTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
 
+/// Returns the maximum forward projection window for future event display.
+///
+/// The window limits how far beyond the last candle the chart can extend
+/// to show scheduled future events, per timeframe.
+Duration maxProjectionWindow(String tf) {
+  switch (tf) {
+    case '1m':
+      return const Duration(hours: 4);
+    case '5m':
+      return const Duration(hours: 4);
+    case '15m':
+      return const Duration(hours: 6);
+    case '1h':
+      return const Duration(hours: 24);
+    case '4h':
+      return const Duration(hours: 48);
+    case '1d':
+      return const Duration(days: 3);
+    default:
+      return const Duration(hours: 24);
+  }
+}
+
+/// Returns the max number of candle-width slots for forward projection.
+int maxProjectionSlots(String tf) {
+  final window = maxProjectionWindow(tf);
+  final dur = candleDuration(tf);
+  return window.inMinutes ~/ dur.inMinutes;
+}
+
 /// Returns the [Duration] of a single candle for the given timeframe string.
 Duration candleDuration(String tf) {
   switch (tf) {

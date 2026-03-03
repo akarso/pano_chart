@@ -9,10 +9,14 @@ class EventMarker {
   final DateTime timestamp;
   final List<Event> events;
 
+  /// True when this marker represents a future event (beyond the last candle).
+  final bool isFuture;
+
   const EventMarker({
     required this.x,
     required this.timestamp,
     required this.events,
+    this.isFuture = false,
   });
 }
 
@@ -31,28 +35,64 @@ class EventOverlayPainter extends CustomPainter {
       if (marker.x < 0 || marker.x > size.width) continue;
 
       final color = _highestImpactColor(marker.events);
-      final paint = Paint()
-        ..color = color.withAlpha(60)
-        ..strokeWidth = 1.2;
 
-      canvas.drawLine(
-        Offset(marker.x, 0),
-        Offset(marker.x, size.height),
-        paint,
-      );
-
-      // If stacked (multiple events), draw a count badge at top
-      if (marker.events.length > 1) {
-        _drawCountBadge(
-            canvas, marker.x, marker.events.length, color, size);
+      if (marker.isFuture) {
+        _drawFutureMarker(canvas, marker, color, size);
       } else {
-        // Single event dot at top
-        canvas.drawCircle(
-          Offset(marker.x, 6),
-          3,
-          Paint()..color = color.withAlpha(180),
-        );
+        _drawPastMarker(canvas, marker, color, size);
       }
+    }
+  }
+
+  void _drawPastMarker(
+      Canvas canvas, EventMarker marker, Color color, Size size) {
+    final paint = Paint()
+      ..color = color.withAlpha(60)
+      ..strokeWidth = 1.2;
+
+    canvas.drawLine(
+      Offset(marker.x, 0),
+      Offset(marker.x, size.height),
+      paint,
+    );
+
+    if (marker.events.length > 1) {
+      _drawCountBadge(canvas, marker.x, marker.events.length, color, size);
+    } else {
+      canvas.drawCircle(
+        Offset(marker.x, 6),
+        3,
+        Paint()..color = color.withAlpha(180),
+      );
+    }
+  }
+
+  /// Future events: dashed line at 70% opacity, muted badge/dot.
+  void _drawFutureMarker(
+      Canvas canvas, EventMarker marker, Color color, Size size) {
+    final paint = Paint()
+      ..color = color.withAlpha(42) // ~60 * 0.7
+      ..strokeWidth = 1.2;
+
+    // Dashed vertical line
+    const dashLen = 4.0;
+    const gapLen = 3.0;
+    double y = 0;
+    while (y < size.height) {
+      final end = (y + dashLen).clamp(0.0, size.height);
+      canvas.drawLine(Offset(marker.x, y), Offset(marker.x, end), paint);
+      y += dashLen + gapLen;
+    }
+
+    if (marker.events.length > 1) {
+      _drawCountBadge(
+          canvas, marker.x, marker.events.length, color.withAlpha(160), size);
+    } else {
+      canvas.drawCircle(
+        Offset(marker.x, 6),
+        3,
+        Paint()..color = color.withAlpha(130),
+      );
     }
   }
 

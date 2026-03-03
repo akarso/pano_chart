@@ -281,6 +281,20 @@ class OverviewWidgetState extends State<OverviewWidget>
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
+          // Back arrow (visible only in favourites mode)
+          if (_showFavourites)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _showFavourites = false),
+              child: const SizedBox(
+                width: 36,
+                height: 44,
+                child: Center(
+                  child: Icon(Icons.arrow_back_ios_new,
+                      color: Colors.white, size: 18),
+                ),
+              ),
+            ),
           // Logo + branding
           GestureDetector(
             behavior: HitTestBehavior.opaque,

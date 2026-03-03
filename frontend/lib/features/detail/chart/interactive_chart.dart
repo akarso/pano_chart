@@ -6,6 +6,7 @@ import '../../events/chart_event_overlay.dart';
 import '../../events/chart_event_overlay_painter.dart';
 import '../../events/event_marker_builder.dart';
 import '../../events/events_view_model.dart';
+import '../chart_navigation.dart';
 import 'axis_layer.dart';
 import 'candle_painter.dart';
 import 'chart_config.dart';
@@ -146,13 +147,46 @@ class _InteractiveChartState extends State<InteractiveChart> {
       math.min(widget.warmupCount, widget.series.candles.length - 1);
 
   void _clampScroll(double viewportWidth) {
-    final maxScroll = widget.series.candles.length -
+    final maxScroll = (widget.series.candles.length + _futureSlots) -
         (viewportWidth / _candleWidth).floor();
     final minScroll = _effectiveWarmup.toDouble();
     _scrollOffset = _scrollOffset.clamp(
       minScroll,
       math.max(minScroll, maxScroll.toDouble()),
     );
+  }
+
+  /// Number of extra candle-width slots appended to the right for future
+  /// event projection. Zero when no future events exist.
+  int get _futureSlots {
+    final evm = widget.eventsViewModel;
+    if (evm == null || !evm.state.showEvents) return 0;
+    final candles = widget.series.candles;
+    if (candles.isEmpty) return 0;
+
+    final lastTs = candles.last.timestamp;
+    final tf = widget.series.timeframe;
+    final dur = candleDuration(tf);
+    final maxSlots = maxProjectionSlots(tf);
+    if (maxSlots <= 0 || dur.inMilliseconds <= 0) return 0;
+
+    final events = evm.state.filteredEvents;
+    final maxTs = lastTs.add(dur * maxSlots);
+
+    // Find the furthest future event within the projection window.
+    int furthestSlot = 0;
+    for (final e in events) {
+      if (!e.timestamp.isAfter(lastTs)) continue;
+      if (e.timestamp.isAfter(maxTs)) continue;
+      final diff = e.timestamp.difference(lastTs);
+      final slot =
+          (diff.inMilliseconds / dur.inMilliseconds).ceil();
+      if (slot > furthestSlot) furthestSlot = slot;
+    }
+
+    if (furthestSlot <= 0) return 0;
+    // Add a small right padding (10% extra or minimum 2 slots).
+    return furthestSlot + math.max(2, (furthestSlot * 0.1).ceil());
   }
 
   // ── gesture handling ──
@@ -528,26 +562,46 @@ class _InteractiveChartState extends State<InteractiveChart> {
     final evm = widget.eventsViewModel;
     if (evm == null) return [];
 
-    // Build markers for the VISIBLE portion only.
-    final visibleCandles = widget.series.candles.sublist(
-      _visibleStart(chartWidth),
-      math.min(_visibleEnd(chartWidth), widget.series.candles.length),
-    );
+    final candles = widget.series.candles;
+    final start = _visibleStart(chartWidth);
+    final end = math.min(_visibleEnd(chartWidth), candles.length);
+    final pixOff = _scrollPixelOffset(chartWidth);
+
+    // Build markers for the VISIBLE portion of existing candles.
+    final visibleCandles = candles.sublist(start, end);
     if (visibleCandles.isEmpty) return [];
 
-    // Create a temporary CandleSeriesResponse for the visible portion.
     final visibleSeries = CandleSeriesResponse(
       symbol: widget.series.symbol,
       timeframe: widget.series.timeframe,
       candles: visibleCandles,
     );
 
-    return buildEventMarkers(
+    final pastMarkers = buildEventMarkers(
       series: visibleSeries,
       events: evm.state.filteredEvents,
       filterLevel: evm.state.filterLevel,
       candleWidth: _candleWidth,
+      scrollPixelOffset: pixOff,
     );
+
+    // Build markers for future events (beyond last candle).
+    final tf = widget.series.timeframe;
+    final dur = candleDuration(tf);
+    final maxSlots = maxProjectionSlots(tf);
+    final futureMarkers = buildFutureEventMarkers(
+      lastCandleTimestamp: candles.last.timestamp,
+      totalCandleCount: candles.length,
+      events: evm.state.filteredEvents,
+      filterLevel: evm.state.filterLevel,
+      candleWidth: _candleWidth,
+      candleDuration: dur,
+      maxSlots: maxSlots,
+      visibleStartIndex: start,
+      scrollPixelOffset: pixOff,
+    );
+
+    return [...pastMarkers, ...futureMarkers];
   }
 
   // ── Crosshair ──
@@ -571,32 +625,58 @@ class _InteractiveChartState extends State<InteractiveChart> {
     final pixOff = _scrollPixelOffset(chartW);
     // Determine which candle the touch is nearest to.
     final rawIdx = ((local.dx + pixOff) / _candleWidth).floor();
-    final absIdx = (visStart + rawIdx).clamp(0, candles.length - 1);
+    final absIdx = visStart + rawIdx;
+
+    // Allow crosshair to extend into the future projection zone.
+    final fSlots = _futureSlots;
+    final maxIdx = candles.length - 1 + fSlots;
+    final clampedIdx = absIdx.clamp(0, maxIdx);
 
     // Snap X to candle center.
     final snappedX =
-        (absIdx - visStart) * _candleWidth + _candleWidth / 2 - pixOff;
+        (clampedIdx - visStart) * _candleWidth + _candleWidth / 2 - pixOff;
 
-    final c = candles[absIdx];
+    if (clampedIdx < candles.length) {
+      // Normal zone — existing candle.
+      final c = candles[clampedIdx];
 
-    double? emaF, emaS, rsiV, atrV;
-    if (_emaFast != null && absIdx < _emaFast!.length) emaF = _emaFast![absIdx];
-    if (_emaSlow != null && absIdx < _emaSlow!.length) emaS = _emaSlow![absIdx];
-    if (_rsi != null && absIdx < _rsi!.length) rsiV = _rsi![absIdx];
-    if (_atr != null && absIdx < _atr!.length) atrV = _atr![absIdx];
+      double? emaF, emaS, rsiV, atrV;
+      if (_emaFast != null && clampedIdx < _emaFast!.length) emaF = _emaFast![clampedIdx];
+      if (_emaSlow != null && clampedIdx < _emaSlow!.length) emaS = _emaSlow![clampedIdx];
+      if (_rsi != null && clampedIdx < _rsi!.length) rsiV = _rsi![clampedIdx];
+      if (_atr != null && clampedIdx < _atr!.length) atrV = _atr![clampedIdx];
 
-    setState(() {
-      _crosshair = CrosshairState(
-        candleIndex: absIdx,
-        x: snappedX,
-        touchY: local.dy.clamp(0, priceH),
-        candle: c,
-        emaFast: emaF,
-        emaSlow: emaS,
-        rsi: rsiV,
-        atr: atrV,
-      );
-    });
+      setState(() {
+        _crosshair = CrosshairState(
+          candleIndex: clampedIdx,
+          x: snappedX,
+          touchY: local.dy.clamp(0, priceH),
+          candle: c,
+          emaFast: emaF,
+          emaSlow: emaS,
+          rsi: rsiV,
+          atr: atrV,
+        );
+      });
+    } else {
+      // Future zone — beyond last candle. Show timestamp only.
+      final lastTs = candles.last.timestamp;
+      final tf = widget.series.timeframe;
+      final dur = candleDuration(tf);
+      final slotsAhead = clampedIdx - (candles.length - 1);
+      final futureTs = lastTs.add(dur * slotsAhead);
+
+      setState(() {
+        _crosshair = CrosshairState(
+          candleIndex: clampedIdx,
+          x: snappedX,
+          touchY: local.dy.clamp(0, priceH),
+          candle: candles.last, // placeholder
+          isFutureZone: true,
+          futureTimestamp: futureTs,
+        );
+      });
+    }
   }
 
   // ── Helpers (shared with crosshair, build, etc.) ──

@@ -167,7 +167,11 @@ class _DetailScreenState extends State<DetailScreen> {
     final candles = _series.candles;
     if (candles.isEmpty) return;
     final dateFrom = _isoDate(candles.first.timestamp);
-    final dateTo = _isoDate(candles.last.timestamp);
+    // Extend dateTo to cover the forward projection window so that
+    // future scheduled events are included in the feed.
+    final projectionEnd =
+        candles.last.timestamp.add(maxProjectionWindow(_timeframe));
+    final dateTo = _isoDate(projectionEnd);
     evm.load(dateFrom, dateTo);
   }
 

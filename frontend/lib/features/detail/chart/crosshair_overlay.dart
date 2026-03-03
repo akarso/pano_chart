@@ -5,6 +5,7 @@ import '../../candles/api/candle_response.dart';
 /// Immutable snapshot of crosshair state passed to the overlay.
 class CrosshairState {
   /// Snapped candle index (absolute, into the full candles list).
+  /// May exceed candles.length when in the future zone.
   final int candleIndex;
 
   /// Touch X in chart-local coords (already snapped to candle center).
@@ -13,7 +14,8 @@ class CrosshairState {
   /// Raw touch Y in chart-local coords (price panel).
   final double touchY;
 
-  /// The candle data.
+  /// The candle data. In future zone, this is the last real candle
+  /// (used as a placeholder; OHLC won't be displayed).
   final CandleDto candle;
 
   /// Indicator values at [candleIndex], or null/NaN.
@@ -21,6 +23,13 @@ class CrosshairState {
   final double? emaSlow;
   final double? rsi;
   final double? atr;
+
+  /// True when the crosshair is in the future projection zone
+  /// (beyond the last candle). Price/OHLC info is not shown.
+  final bool isFutureZone;
+
+  /// Projected timestamp for future zone crosshair, or null.
+  final DateTime? futureTimestamp;
 
   const CrosshairState({
     required this.candleIndex,
@@ -31,6 +40,8 @@ class CrosshairState {
     this.emaSlow,
     this.rsi,
     this.atr,
+    this.isFutureZone = false,
+    this.futureTimestamp,
   });
 }
 
@@ -95,9 +106,12 @@ class CrosshairOverlay extends StatelessWidget {
         ),
         child: Stack(children: [
           // ── Tooltip ──
-          _buildTooltip(context),
-          // ── Y-axis price tag ──
-          _buildYAxisTag(),
+          if (state.isFutureZone)
+            _buildFutureTooltip(context)
+          else
+            _buildTooltip(context),
+          // ── Y-axis price tag (hidden in future zone) ──
+          if (!state.isFutureZone) _buildYAxisTag(),
           // ── X-axis time tag ──
           _buildXAxisTag(),
         ]),
@@ -106,6 +120,65 @@ class CrosshairOverlay extends StatelessWidget {
   }
 
   // ── Tooltip ──
+
+  /// Minimal tooltip for the future zone — just timestamp, no OHLC.
+  Widget _buildFutureTooltip(BuildContext context) {
+    final ts = state.futureTimestamp ?? state.candle.timestamp;
+    final lines = <_TooltipLine>[
+      _TooltipLine(symbol, isBold: true),
+      _TooltipLine(_formatTimestamp(ts)),
+      _TooltipLine(''),
+      const _TooltipLine('Future zone', color: Color(0x88FFFFFF)),
+      const _TooltipLine('No price data'),
+    ];
+
+    const tooltipW = 150.0;
+    const lineH = 14.0;
+    final tooltipH = lines.length * lineH + 16;
+
+    double tx = state.x + 16;
+    if (tx + tooltipW > chartWidth) tx = state.x - tooltipW - 16;
+    tx = tx.clamp(4.0, chartWidth - tooltipW - 4);
+
+    final totalH = priceHeight + volumeHeight + oscillatorHeight;
+    double ty = state.touchY - tooltipH / 2;
+    ty = ty.clamp(4.0, totalH - tooltipH - 4);
+
+    return Positioned(
+      left: tx,
+      top: ty,
+      child: IgnorePointer(
+        child: Container(
+          width: tooltipW,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: const Color(0xE6121224),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0x44FFFFFF), width: 0.5),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final line in lines)
+                line.text.isEmpty
+                    ? const SizedBox(height: 4)
+                    : Text(
+                        line.text,
+                        style: TextStyle(
+                          color: line.color ?? Colors.white70,
+                          fontSize: 10,
+                          fontWeight:
+                              line.isBold ? FontWeight.w700 : FontWeight.normal,
+                          height: 1.35,
+                        ),
+                      ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _buildTooltip(BuildContext context) {
     final c = state.candle;
@@ -236,7 +309,10 @@ class CrosshairOverlay extends StatelessWidget {
 
   Widget _buildXAxisTag() {
     final totalH = priceHeight + volumeHeight + oscillatorHeight;
-    final label = _formatTimeShort(state.candle.timestamp);
+    final ts = state.isFutureZone
+        ? (state.futureTimestamp ?? state.candle.timestamp)
+        : state.candle.timestamp;
+    final label = _formatTimeShort(ts);
     return Positioned(
       left: (state.x - 30).clamp(0.0, chartWidth - 60),
       top: totalH - 2, // just below the oscillator / at the x-axis line
@@ -340,30 +416,36 @@ class _CrosshairPainter extends CustomPainter {
     );
 
     // ── Horizontal line (at touch Y, full width, only in price area) ──
-    final clampedY = state.touchY.clamp(0.0, priceHeight);
-    canvas.drawLine(
-      Offset(0, clampedY),
-      Offset(chartWidth, clampedY),
-      linePaint,
-    );
+    // Hidden in the future zone where there is no price reference.
+    if (!state.isFutureZone) {
+      final clampedY = state.touchY.clamp(0.0, priceHeight);
+      canvas.drawLine(
+        Offset(0, clampedY),
+        Offset(chartWidth, clampedY),
+        linePaint,
+      );
+    }
 
     // ── Volume highlight ──
     // Subtly brighten the volume bar under the selected candle.
-    final volTop = priceHeight;
-    final volBot = priceHeight + volumeHeight;
-    final halfCW = 6.0; // approximate half-candle visual width
-    canvas.drawRect(
-      Rect.fromLTRB(
-        state.x - halfCW,
-        volTop,
-        state.x + halfCW,
-        volBot,
-      ),
-      Paint()..color = const Color(0x18FFFFFF),
-    );
+    // Skipped in future zone where no volume bars exist.
+    if (!state.isFutureZone) {
+      final volTop = priceHeight;
+      final volBot = priceHeight + volumeHeight;
+      final halfCW = 6.0; // approximate half-candle visual width
+      canvas.drawRect(
+        Rect.fromLTRB(
+          state.x - halfCW,
+          volTop,
+          state.x + halfCW,
+          volBot,
+        ),
+        Paint()..color = const Color(0x18FFFFFF),
+      );
+    }
 
     // ── RSI / ATR dot markers on oscillator ──
-    if (oscillatorHeight > 0) {
+    if (oscillatorHeight > 0 && !state.isFutureZone) {
       final oscTop = priceHeight + volumeHeight;
       final oscH = oscillatorHeight;
 
