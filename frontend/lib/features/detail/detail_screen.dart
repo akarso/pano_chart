@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../candles/api/candle_response.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
+import '../../infrastructure/preferences_service.dart';
 import '../events/event_filter.dart';
 import '../events/events_list_screen.dart';
 import '../events/events_view_model.dart';
@@ -10,8 +11,8 @@ import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
 import 'detail_context.dart';
+import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
-import 'trade/trade_links.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -48,7 +49,9 @@ class DetailScreen extends StatefulWidget {
 class _DetailScreenState extends State<DetailScreen> {
   ChartIndicatorConfig _chartConfig = const ChartIndicatorConfig();
   late bool isFavourite;
-  Exchange _exchange = Exchange.binance;
+  String _preferredExchangeId = 'binance';
+  List<ExchangeConfig> _exchanges = kDefaultExchanges;
+  CustomExchange? _customExchange;
 
   @override
   void initState() {
@@ -56,6 +59,7 @@ class _DetailScreenState extends State<DetailScreen> {
     isFavourite = widget.isFavourite;
     _loadChartConfig();
     _loadExchangePreference();
+    _loadExchangeConfigs();
     _loadEvents();
   }
 
@@ -72,18 +76,46 @@ class _DetailScreenState extends State<DetailScreen> {
     cfg.save(prefs);
   }
 
+  Future<void> _loadExchangeConfigs() async {
+    final configs = await loadExchangeConfigs();
+    if (mounted) setState(() => _exchanges = configs);
+  }
+
   Future<void> _loadExchangePreference() async {
     final prefs = await SharedPreferences.getInstance();
-    final key = prefs.getString('settings.preferredExchange') ?? 'binance';
+    final svc = PreferencesService(prefs);
     setState(() {
-      _exchange = ExchangeLabel.fromKey(key);
+      _preferredExchangeId = svc.preferredExchange;
+      final name = svc.customExchangeName;
+      final url = svc.customExchangeUrl;
+      if (name != null && url != null && name.isNotEmpty && url.isNotEmpty) {
+        _customExchange = CustomExchange(name: name, urlTemplate: url);
+      }
     });
   }
 
-  Future<void> _saveExchange(Exchange ex) async {
-    setState(() => _exchange = ex);
+  Future<void> _savePreferredExchange(String id) async {
+    setState(() => _preferredExchangeId = id);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('settings.preferredExchange', ex.key);
+    await prefs.setString('settings.preferredExchange', id);
+  }
+
+  Future<void> _saveCustomExchange(CustomExchange? custom) async {
+    setState(() => _customExchange = custom);
+    final prefs = await SharedPreferences.getInstance();
+    final svc = PreferencesService(prefs);
+    svc.customExchangeName = custom?.name;
+    svc.customExchangeUrl = custom?.urlTemplate;
+  }
+
+  Future<void> _showCustomExchangeForm() async {
+    final result = await showCustomExchangeEditor(
+      context,
+      existing: _customExchange,
+    );
+    if (result != null) {
+      _saveCustomExchange(result);
+    }
   }
 
   void _loadEvents() {
@@ -282,8 +314,12 @@ class _DetailScreenState extends State<DetailScreen> {
             TradeActionButtons(
               symbol: widget.symbol.value,
               timeframe: widget.timeframe.value,
-              exchange: _exchange,
-              onExchangeChanged: _saveExchange,
+              preferredExchangeId: _preferredExchangeId,
+              exchanges: _exchanges,
+              customExchange: _customExchange,
+              onExchangeChanged: _savePreferredExchange,
+              onAddCustom: _showCustomExchangeForm,
+              onEditCustom: _showCustomExchangeForm,
             ),
             if (percentChange != null) ...[
               const SizedBox(height: 12),

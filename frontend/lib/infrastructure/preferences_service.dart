@@ -31,6 +31,8 @@ class PreferencesService {
   static const _keyPreferredExchange = 'settings.preferredExchange';
   static const _keySelectedCountries = 'settings.selectedCountries';
   static const _keyMacroInfluence = 'settings.macroInfluenceFilter';
+  static const _keyCustomExchangeName = 'settings.customExchangeName';
+  static const _keyCustomExchangeUrl = 'settings.customExchangeUrl';
 
   final SharedPreferences _prefs;
 
@@ -76,6 +78,29 @@ class PreferencesService {
   /// Persisted exchange key: 'binance', 'mexc', or 'bybit'. Default: 'binance'.
   String get preferredExchange => _prefs.getString(_keyPreferredExchange) ?? 'binance';
   set preferredExchange(String v) => _prefs.setString(_keyPreferredExchange, v);
+
+  // ---- custom exchange ----
+
+  /// User-defined custom exchange name, or null if not set.
+  String? get customExchangeName => _prefs.getString(_keyCustomExchangeName);
+  set customExchangeName(String? v) {
+    if (v == null) {
+      _prefs.remove(_keyCustomExchangeName);
+    } else {
+      _prefs.setString(_keyCustomExchangeName, v);
+    }
+  }
+
+  /// User-defined custom exchange URL template, or null if not set.
+  /// Should contain 'BTC' as placeholder for the base symbol.
+  String? get customExchangeUrl => _prefs.getString(_keyCustomExchangeUrl);
+  set customExchangeUrl(String? v) {
+    if (v == null) {
+      _prefs.remove(_keyCustomExchangeUrl);
+    } else {
+      _prefs.setString(_keyCustomExchangeUrl, v);
+    }
+  }
 
   // ---- macro events filters ----
 

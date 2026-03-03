@@ -1,22 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/features/detail/trade/exchange_config.dart';
 import 'package:pano_chart_frontend/features/detail/trade/trade_action_buttons.dart';
-import 'package:pano_chart_frontend/features/detail/trade/trade_links.dart';
 
 Widget _wrap(Widget child) {
   return MaterialApp(
-    home: Scaffold(body: child),
+    home: Scaffold(body: SingleChildScrollView(child: child)),
   );
 }
 
+const _testExchanges = [
+  ExchangeConfig(id: 'binance', name: 'Binance', urlTemplate: 'https://binance.com/trade/{SYMBOL}_USDT'),
+  ExchangeConfig(id: 'mexc', name: 'MEXC', urlTemplate: 'https://mexc.com/trade/{SYMBOL}_USDT'),
+  ExchangeConfig(id: 'bybit', name: 'Bybit', urlTemplate: 'https://bybit.com/trade/{SYMBOL}USDT'),
+];
+
 void main() {
+  group('CustomExchange', () {
+    test('buildUrl replaces BTC with base symbol', () {
+      const c = CustomExchange(
+        name: 'MyDex',
+        urlTemplate: 'https://mydex.com/trade/BTC_USDT',
+      );
+      final uri = c.buildUrl('eth');
+      expect(uri.toString(), 'https://mydex.com/trade/ETH_USDT');
+    });
+
+    test('buildUrl replaces all BTC occurrences', () {
+      const c = CustomExchange(
+        name: 'X',
+        urlTemplate: 'https://x.com/BTC/trade/BTC',
+      );
+      final uri = c.buildUrl('sol');
+      expect(uri.toString(), 'https://x.com/SOL/trade/SOL');
+    });
+
+    test('buildUrl with lowercase input uppercases it', () {
+      const c = CustomExchange(
+        name: 'X',
+        urlTemplate: 'https://x.com/trade/BTC_USDT',
+      );
+      final uri = c.buildUrl('avax');
+      expect(uri.toString(), 'https://x.com/trade/AVAX_USDT');
+    });
+  });
+
   group('TradeActionButtons', () {
-    testWidgets('renders TradingView and exchange buttons', (tester) async {
+    testWidgets('renders TradingView and preferred exchange buttons',
+        (tester) async {
       await tester.pumpWidget(_wrap(
         TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
-          exchange: Exchange.binance,
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
         ),
       ));
 
@@ -26,12 +63,27 @@ void main() {
       expect(find.byIcon(Icons.swap_horiz), findsOneWidget);
     });
 
-    testWidgets('exchange label updates when exchange changes', (tester) async {
+    testWidgets('shows "…or choose another" link', (tester) async {
       await tester.pumpWidget(_wrap(
         TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
-          exchange: Exchange.mexc,
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+        ),
+      ));
+
+      expect(find.text('…or choose another'), findsOneWidget);
+    });
+
+    testWidgets('preferred exchange label reflects preferredExchangeId',
+        (tester) async {
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'mexc',
+          exchanges: _testExchanges,
         ),
       ));
 
@@ -39,119 +91,327 @@ void main() {
       expect(find.text('Binance'), findsNothing);
     });
 
-    testWidgets('shows Bybit label for bybit exchange', (tester) async {
+    testWidgets('falls back to first exchange when id not found',
+        (tester) async {
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'unknown_exchange',
+          exchanges: _testExchanges,
+        ),
+      ));
+
+      // Falls back to first → Binance
+      expect(find.text('Binance'), findsOneWidget);
+    });
+
+    testWidgets('shows custom exchange button when provided', (tester) async {
       await tester.pumpWidget(_wrap(
         TradeActionButtons(
           symbol: 'BTCUSDT',
           timeframe: '4h',
-          exchange: Exchange.bybit,
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          customExchange: const CustomExchange(
+            name: 'MyDex',
+            urlTemplate: 'https://mydex.com/BTC_USDT',
+          ),
         ),
       ));
 
-      expect(find.text('Bybit'), findsOneWidget);
+      expect(find.text('MyDex'), findsOneWidget);
+      expect(find.text('edit'), findsOneWidget);
     });
 
-    testWidgets('long press on exchange button shows picker', (tester) async {
-      Exchange? changed;
+    testWidgets('hides custom exchange section when null', (tester) async {
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'BTCUSDT',
+          timeframe: '4h',
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          customExchange: null,
+        ),
+      ));
+
+      expect(find.text('edit'), findsNothing);
+    });
+
+    testWidgets('tapping "…or choose another" opens exchange sheet',
+        (tester) async {
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          onExchangeChanged: (_) {},
+          onAddCustom: () {},
+        ),
+      ));
+
+      await tester.tap(find.text('…or choose another'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Choose Exchange'), findsOneWidget);
+      expect(find.text('Binance'), findsWidgets);
+      expect(find.text('MEXC'), findsWidgets);
+      expect(find.text('Bybit'), findsWidgets);
+      expect(find.text('Add your own (url redirect)'), findsOneWidget);
+    });
+
+    testWidgets('selecting exchange in sheet fires onExchangeChanged',
+        (tester) async {
+      String? changed;
 
       await tester.pumpWidget(_wrap(
         TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
-          exchange: Exchange.binance,
-          onExchangeChanged: (ex) => changed = ex,
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          onExchangeChanged: (id) => changed = id,
+          onAddCustom: () {},
         ),
       ));
 
-      // Long press the exchange button to open the picker
-      await tester.longPress(find.text('Binance'));
+      await tester.tap(find.text('…or choose another'));
       await tester.pumpAndSettle();
 
-      // The bottom sheet should show all exchange options
-      expect(find.text('Preferred Exchange'), findsOneWidget);
-      expect(find.text('Binance'), findsWidgets); // button + sheet
-      expect(find.text('MEXC'), findsOneWidget);
-      expect(find.text('Bybit'), findsOneWidget);
-
-      // Tap MEXC
-      await tester.tap(find.text('MEXC'));
+      // Tap MEXC in the sheet
+      await tester.tap(find.text('MEXC').last);
       await tester.pumpAndSettle();
 
-      expect(changed, Exchange.mexc);
+      expect(changed, 'mexc');
+    });
+
+    testWidgets('sheet highlights current exchange with radio icon',
+        (tester) async {
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'mexc',
+          exchanges: _testExchanges,
+          onExchangeChanged: (_) {},
+          onAddCustom: () {},
+        ),
+      ));
+
+      await tester.tap(find.text('…or choose another'));
+      await tester.pumpAndSettle();
+
+      // MEXC should be checked
+      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
+      // Others unchecked
+      expect(find.byIcon(Icons.radio_button_off), findsNWidgets(2));
+    });
+
+    testWidgets('tapping "Add your own" in sheet fires onAddCustom',
+        (tester) async {
+      bool fired = false;
+
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'ETHUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          onExchangeChanged: (_) {},
+          onAddCustom: () => fired = true,
+        ),
+      ));
+
+      await tester.tap(find.text('…or choose another'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Add your own (url redirect)'));
+      await tester.pumpAndSettle();
+
+      expect(fired, isTrue);
+    });
+
+    testWidgets('tapping "edit" fires onEditCustom', (tester) async {
+      bool fired = false;
+
+      await tester.pumpWidget(_wrap(
+        TradeActionButtons(
+          symbol: 'BTCUSDT',
+          timeframe: '1h',
+          preferredExchangeId: 'binance',
+          exchanges: _testExchanges,
+          customExchange: const CustomExchange(
+            name: 'MyDex',
+            urlTemplate: 'https://mydex.com/BTC',
+          ),
+          onEditCustom: () => fired = true,
+        ),
+      ));
+
+      await tester.tap(find.text('edit'));
+      await tester.pumpAndSettle();
+
+      expect(fired, isTrue);
     });
   });
 
-  group('showExchangePicker', () {
-    testWidgets('returns null when dismissed', (tester) async {
-      Exchange? result;
+  group('showCustomExchangeEditor', () {
+    testWidgets('shows dialog with name and URL fields', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showCustomExchangeEditor(context),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Add Custom Exchange'), findsOneWidget);
+      expect(find.text('Name'), findsOneWidget);
+      expect(find.text('URL'), findsOneWidget);
+      expect(find.text('Save'), findsOneWidget);
+      expect(find.text('Cancel'), findsOneWidget);
+    });
+
+    testWidgets('pre-fills when editing existing', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showCustomExchangeEditor(
+                context,
+                existing: const CustomExchange(
+                  name: 'OldDex',
+                  urlTemplate: 'https://old.com/BTC',
+                ),
+              ),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Edit Custom Exchange'), findsOneWidget);
+      expect(find.text('OldDex'), findsOneWidget);
+      expect(find.text('https://old.com/BTC'), findsOneWidget);
+    });
+
+    testWidgets('cancel returns null', (tester) async {
+      CustomExchange? result;
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: Builder(
             builder: (context) => ElevatedButton(
               onPressed: () async {
-                result = await showExchangePicker(context, Exchange.binance);
+                result = await showCustomExchangeEditor(context);
               },
-              child: const Text('Pick'),
+              child: const Text('Open'),
             ),
           ),
         ),
       ));
 
-      await tester.tap(find.text('Pick'));
+      await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
 
-      // Dismiss by tapping the scrim
-      await tester.tapAt(const Offset(10, 10));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       expect(result, isNull);
     });
 
-    testWidgets('returns selected exchange', (tester) async {
-      Exchange? result;
+    testWidgets('save returns CustomExchange with entered values',
+        (tester) async {
+      CustomExchange? result;
 
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: Builder(
             builder: (context) => ElevatedButton(
               onPressed: () async {
-                result = await showExchangePicker(context, Exchange.binance);
+                result = await showCustomExchangeEditor(context);
               },
-              child: const Text('Pick'),
+              child: const Text('Open'),
             ),
           ),
         ),
       ));
 
-      await tester.tap(find.text('Pick'));
+      await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Bybit'));
+      // Clear default URL, enter new values
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Name'), 'NewDex');
+      await tester.enterText(
+          find.widgetWithText(TextField, 'URL'), 'https://new.com/BTC_USDT');
+
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(result, Exchange.bybit);
+      expect(result, isNotNull);
+      expect(result!.name, 'NewDex');
+      expect(result!.urlTemplate, 'https://new.com/BTC_USDT');
     });
 
-    testWidgets('highlights current exchange', (tester) async {
+    testWidgets('save does nothing when name is empty', (tester) async {
+      CustomExchange? result;
+
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
           body: Builder(
             builder: (context) => ElevatedButton(
-              onPressed: () => showExchangePicker(context, Exchange.mexc),
-              child: const Text('Pick'),
+              onPressed: () async {
+                result = await showCustomExchangeEditor(context);
+              },
+              child: const Text('Open'),
             ),
           ),
         ),
       ));
 
-      await tester.tap(find.text('Pick'));
+      await tester.tap(find.text('Open'));
       await tester.pumpAndSettle();
 
-      // The current exchange should have a checked radio icon
-      expect(find.byIcon(Icons.radio_button_checked), findsOneWidget);
-      // The other two should have unchecked icons
-      expect(find.byIcon(Icons.radio_button_off), findsNWidgets(2));
+      // Leave name empty, enter only URL
+      await tester.enterText(
+          find.widgetWithText(TextField, 'URL'), 'https://new.com/BTC');
+
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      // Dialog should still be showing
+      expect(find.text('Save'), findsOneWidget);
+      expect(result, isNull);
+    });
+
+    testWidgets('shows hint text about BTC placeholder', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showCustomExchangeEditor(context),
+              child: const Text('Open'),
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('BTC'), findsWidgets);
+      expect(find.textContaining('placeholder'), findsOneWidget);
     });
   });
 }

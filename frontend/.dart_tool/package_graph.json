@@ -12,7 +12,8 @@
         "http",
         "sensors_plus",
         "shared_preferences",
-        "url_launcher"
+        "url_launcher",
+        "yaml"
       ],
       "devDependencies": [
         "flutter_launcher_icons",
@@ -66,6 +67,15 @@
         "test_api",
         "vector_math",
         "vm_service"
+      ]
+    },
+    {
+      "name": "yaml",
+      "version": "3.1.3",
+      "dependencies": [
+        "collection",
+        "source_span",
+        "string_scanner"
       ]
     },
     {
@@ -133,15 +143,6 @@
         "meta",
         "sky_engine",
         "vector_math"
-      ]
-    },
-    {
-      "name": "yaml",
-      "version": "3.1.3",
-      "dependencies": [
-        "collection",
-        "source_span",
-        "string_scanner"
       ]
     },
     {
