@@ -7,9 +7,9 @@ import '../../infrastructure/preferences_service.dart';
 import '../bubble_map/bubble_map_screen.dart';
 import '../bubble_map/bubble_map_view_model.dart';
 import '../candles/application/get_candle_series.dart';
-import '../candles/application/get_candle_series_input.dart';
 import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
+import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import 'overview_state.dart';
@@ -137,45 +137,19 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   // ---- navigation helpers ----
 
-  Duration _candleDuration(String tf) {
-    switch (tf) {
-      case '1m':
-        return const Duration(minutes: 1);
-      case '5m':
-        return const Duration(minutes: 5);
-      case '15m':
-        return const Duration(minutes: 15);
-      case '1h':
-        return const Duration(hours: 1);
-      case '4h':
-        return const Duration(hours: 4);
-      case '1d':
-        return const Duration(days: 1);
-      default:
-        return const Duration(hours: 1);
-    }
-  }
-
   /// Number of candles the overview sparkline covers.
-  static const int _sparklineCandles = 30;
+  static const int _sparklineCandles = kSparklineCandles;
 
   /// Indicator warmup margin — extra candles fetched for accurate indicators
   /// from the very first visible candle.  Hidden on the chart.
-  static const int _indicatorWarmup = 50;
-
-  /// Total visible chart candles after warmup.
-  static const int _chartCandles = 600;
+  static const int _indicatorWarmup = kIndicatorWarmup;
 
   Future<void> _onItemTapped(OverviewItem item) async {
     final now = DateTime.now().toUtc();
-    // Fetch enough candles for the full chart + indicator warmup.
-    final totalCandles = _chartCandles + _indicatorWarmup;
-    final from = now.subtract(_candleDuration(_timeframe) * totalCandles);
-    final input = GetCandleSeriesInput(
+    final input = buildDetailChartInput(
       symbol: item.symbol,
       timeframe: _timeframe,
-      from: from,
-      to: now,
+      now: now,
     );
 
     // Compute rank = 1-based position in current list.

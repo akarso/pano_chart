@@ -8,7 +8,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../candles/application/get_candle_series.dart';
-import '../candles/application/get_candle_series_input.dart';
+import '../detail/chart_navigation.dart';
 import '../detail/detail_context.dart';
 import '../detail/detail_screen.dart';
 import '../events/events_view_model.dart';
@@ -191,27 +191,6 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
 
   // ---- navigation ----
 
-  Duration _candleDuration(String tf) {
-    switch (tf) {
-      case '1m':
-        return const Duration(minutes: 1);
-      case '5m':
-        return const Duration(minutes: 5);
-      case '15m':
-        return const Duration(minutes: 15);
-      case '1h':
-        return const Duration(hours: 1);
-      case '4h':
-        return const Duration(hours: 4);
-      case '1d':
-        return const Duration(days: 1);
-      default:
-        return const Duration(hours: 1);
-    }
-  }
-
-  static const int _sparklineCandles = 30;
-
   String _detailTimeframe(String overviewTf) {
     final idx = _timeframes.indexOf(overviewTf);
     if (idx <= 0) return overviewTf;
@@ -221,16 +200,12 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   Future<void> _onBubbleTap(PackedBubble bubble) async {
     final token = bubble.token;
     final now = DateTime.now().toUtc();
-    final tf = vm.state.timeframe;
-    final timespan = _candleDuration(tf) * _sparklineCandles;
-    final from = now.subtract(timespan);
-    final detailTf = _detailTimeframe(tf);
+    final detailTf = _detailTimeframe(vm.state.timeframe);
 
-    final input = GetCandleSeriesInput(
+    final input = buildDetailChartInput(
       symbol: token.symbol,
       timeframe: detailTf,
-      from: from,
-      to: now,
+      now: now,
     );
 
     showDialog(
@@ -249,6 +224,8 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             symbol: AppSymbol(token.symbol),
             timeframe: Timeframe(detailTf),
             series: series,
+            warmupCount: kIndicatorWarmup,
+            initialVisibleCount: kSparklineCandles,
             eventsViewModel: widget.eventsViewModel,
             detailContext: DetailContext(
               rank: 0,

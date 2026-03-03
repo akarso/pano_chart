@@ -42,18 +42,23 @@ class PhysicsBody {
 /// [PhysicsBody] objects, making it easy to test.
 class BubblePhysics {
   /// Coefficient of restitution for collisions (0 = perfectly inelastic,
-  /// 1 = perfectly elastic).  0.6 gives a nice bouncy-but-settling feel.
-  static const double restitution = 0.6;
+  /// 1 = perfectly elastic).  0.82 gives a satisfying bouncy feel.
+  static const double restitution = 0.82;
 
   /// Linear drag coefficient.  Applied as `v *= (1 - drag)` per step.
   static const double linearDrag = 0.015;
 
   /// Angular drag coefficient.  Applied as `ω *= (1 - angularDrag)`.
-  static const double angularDrag = 0.02;
+  /// Higher value damps rotation quickly once collisions stop.
+  static const double angularDrag = 0.08;
 
   /// Friction coefficient used to convert tangential collision impulse
-  /// into angular velocity change.
-  static const double frictionCoeff = 0.3;
+  /// into angular velocity change.  Kept low to avoid perpetual spin.
+  static const double frictionCoeff = 0.12;
+
+  /// Number of constraint-solving iterations per step.  Multiple passes
+  /// prevent bubbles from overlapping when many pile up together.
+  static const int _solverIterations = 3;
 
   /// Minimum gap between bodies after collision resolution (prevents
   /// bodies from overlapping on the next frame).
@@ -108,16 +113,24 @@ class BubblePhysics {
       }
     }
 
-    // 2. Resolve circle-wall collisions.
-    for (final b in bodies) {
-      _resolveWalls(b, width, height);
+    // 2. Multiple solver passes to resolve overlaps properly.
+    for (var iter = 0; iter < _solverIterations; iter++) {
+      // Walls first.
+      for (final b in bodies) {
+        _resolveWalls(b, width, height);
+      }
+
+      // Circle-circle collisions (O(n²) — fine for ≤50 bodies).
+      for (var i = 0; i < bodies.length; i++) {
+        for (var j = i + 1; j < bodies.length; j++) {
+          _resolveCollision(bodies[i], bodies[j]);
+        }
+      }
     }
 
-    // 3. Resolve circle-circle collisions (O(n²) — fine for ≤50 bodies).
-    for (var i = 0; i < bodies.length; i++) {
-      for (var j = i + 1; j < bodies.length; j++) {
-        _resolveCollision(bodies[i], bodies[j]);
-      }
+    // Final wall clamp — ensure nothing leaked past boundaries.
+    for (final b in bodies) {
+      _resolveWalls(b, width, height);
     }
   }
 
