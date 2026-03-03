@@ -334,7 +334,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
 
   Widget _buildLegend(BubbleMapState state) {
     final isVolume = state.sizeBy == 'volume';
-    final sizeLabel = isVolume ? 'Volume' : '|Price Change|';
+    final sizeLabel = isVolume ? 'Volume' : 'Price Change';
     final colorLabel = isVolume ? 'Volume rank' : 'Price change';
 
     return Container(

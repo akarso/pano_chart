@@ -8,6 +8,7 @@ import '../../features/events/api/events_api.dart';
 import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
+import '../../features/fear_greed/http_fear_greed_api.dart';
 import '../../features/overview/get_rankings_impl.dart';
 import '../../features/overview/http_rankings_api.dart';
 import '../../features/overview/overview_view_model.dart';
@@ -45,5 +46,10 @@ class CompositionRoot {
     final api = HttpRankingsApi(baseUrl: apiBaseUrl, client: httpClient);
     final getRankings = GetRankingsImpl(api, pageSize: 50);
     return BubbleMapViewModel(getRankings);
+  }
+
+  /// Creates a wired FearGreedApi.
+  FearGreedApi createFearGreedApi() {
+    return HttpFearGreedApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 }

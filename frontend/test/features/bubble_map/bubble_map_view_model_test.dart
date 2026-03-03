@@ -55,7 +55,7 @@ void main() {
       expect(vm.state.bubbles, isEmpty);
       expect(vm.state.timeframe, '15m');
       expect(vm.state.pageIndex, 0);
-      expect(vm.state.sizeBy, 'volume');
+      expect(vm.state.sizeBy, 'change');
     });
 
     test('load sets loading then bubbles', () async {

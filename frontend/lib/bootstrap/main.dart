@@ -13,6 +13,7 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
   final getCandleSeries = root.createGetCandleSeries();
   final eventsViewModel = root.createEventsViewModel();
   final bubbleMapViewModel = root.createBubbleMapViewModel();
+  final fearGreedApi = root.createFearGreedApi();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -21,6 +22,7 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
       eventsViewModel: eventsViewModel,
       prefs: prefs,
       bubbleMapViewModel: bubbleMapViewModel,
+      fearGreedApi: fearGreedApi,
     ),
   );
   return component.createApp();

@@ -9,7 +9,7 @@ void main() {
       expect(state.bubbles, isEmpty);
       expect(state.timeframe, '15m');
       expect(state.pageIndex, 0);
-      expect(state.sizeBy, 'volume');
+      expect(state.sizeBy, 'change');
       expect(state.error, isNull);
     });
 

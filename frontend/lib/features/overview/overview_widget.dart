@@ -9,6 +9,8 @@ import '../bubble_map/bubble_map_view_model.dart';
 import '../candles/application/get_candle_series.dart';
 import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
+import '../fear_greed/fear_greed_dialog.dart';
+import '../fear_greed/http_fear_greed_api.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
@@ -25,6 +27,7 @@ class OverviewWidget extends StatefulWidget {
   final EventsViewModel? eventsViewModel;
   final PreferencesService? prefs;
   final BubbleMapViewModel? bubbleMapViewModel;
+  final FearGreedApi? fearGreedApi;
 
   const OverviewWidget({
     Key? key,
@@ -33,6 +36,7 @@ class OverviewWidget extends StatefulWidget {
     this.eventsViewModel,
     this.prefs,
     this.bubbleMapViewModel,
+    this.fearGreedApi,
   }) : super(key: key);
 
   @override
@@ -546,6 +550,23 @@ class OverviewWidgetState extends State<OverviewWidget>
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (widget.fearGreedApi != null)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _overlay = _OverlayKind.none);
+              showFearGreedDialog(context, widget.fearGreedApi!);
+            },
+            icon: const Icon(Icons.speed, size: 18),
+            label: const Text('Fear & Greed'),
+          ),
+        if (widget.fearGreedApi != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: CustomPaint(
+              size: const Size(double.infinity, 1),
+              painter: _DottedLinePainter(color: const Color(0xFF666666)),
+            ),
+          ),
         if (widget.bubbleMapViewModel != null)
           TextButton.icon(
             onPressed: () {

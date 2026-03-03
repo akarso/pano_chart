@@ -23,7 +23,7 @@ class BubbleMapState {
         bubbles: [],
         timeframe: '15m',
         pageIndex: 0,
-        sizeBy: 'volume',
+        sizeBy: 'change',
       );
 
   BubbleMapState copyWith({
