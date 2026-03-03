@@ -23,7 +23,14 @@ class App extends StatelessWidget {
           : null,
       onGenerateRoute: home == null ? _placeholderRoute : null,
       themeMode: ThemeMode.dark,
-      darkTheme: ThemeData.dark(useMaterial3: true),
+      darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: ThemeData.dark(useMaterial3: true).colorScheme.copyWith(
+          primary: const Color(0xFF00e6c0),
+          onPrimary: Colors.black,
+          secondary: const Color(0xFF00e6c0),
+          onSecondary: Colors.black,
+        ),
+      ),
     );
   }
 

@@ -29,6 +29,8 @@ class PreferencesService {
   static const _keyShowEvents = 'settings.showEvents';
   static const _keyEventFilter = 'settings.eventFilter';
   static const _keyPreferredExchange = 'settings.preferredExchange';
+  static const _keySelectedCountries = 'settings.selectedCountries';
+  static const _keyMacroInfluence = 'settings.macroInfluenceFilter';
 
   final SharedPreferences _prefs;
 
@@ -74,6 +76,24 @@ class PreferencesService {
   /// Persisted exchange key: 'binance', 'mexc', or 'bybit'. Default: 'binance'.
   String get preferredExchange => _prefs.getString(_keyPreferredExchange) ?? 'binance';
   set preferredExchange(String v) => _prefs.setString(_keyPreferredExchange, v);
+
+  // ---- macro events filters ----
+
+  /// Selected countries for the macro events screen.
+  /// Default: {'United States'}.
+  Set<String> get selectedCountries =>
+      (_prefs.getStringList(_keySelectedCountries) ?? ['United States']).toSet();
+
+  set selectedCountries(Set<String> v) =>
+      _prefs.setStringList(_keySelectedCountries, v.toList());
+
+  /// Macro influence filter — set of impact levels to show.
+  /// Stored as list of 'high', 'medium', 'low'. Default: all three.
+  Set<String> get macroInfluenceFilter =>
+      (_prefs.getStringList(_keyMacroInfluence) ?? ['high', 'medium', 'low']).toSet();
+
+  set macroInfluenceFilter(Set<String> v) =>
+      _prefs.setStringList(_keyMacroInfluence, v.toList());
 
   // ---- favourites ----
 

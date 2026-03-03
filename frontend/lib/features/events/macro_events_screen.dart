@@ -4,7 +4,7 @@ import '../../domain/event.dart';
 import 'events_list_screen.dart' show impactColor;
 import 'events_view_model.dart';
 
-/// Standalone screen that loads macroeconomic events for the US
+/// Standalone screen that loads macroeconomic events for selected countries
 /// (yesterday → tomorrow) and displays them in a scrollable list.
 ///
 /// Reachable from the overview menu as "Macroeconomical Events".
@@ -15,10 +15,12 @@ class MacroEventsScreen extends StatefulWidget {
       : super(key: key);
 
   @override
-  State<MacroEventsScreen> createState() => _MacroEventsScreenState();
+  State<MacroEventsScreen> createState() => MacroEventsScreenState();
 }
 
-class _MacroEventsScreenState extends State<MacroEventsScreen> {
+class MacroEventsScreenState extends State<MacroEventsScreen> {
+  bool _filterExpanded = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,29 +42,129 @@ class _MacroEventsScreenState extends State<MacroEventsScreen> {
     final to = now.add(const Duration(days: 1));
     final fmt = (DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-    widget.viewModel.load(fmt(from), fmt(to), country: 'United States');
+    widget.viewModel
+        .loadMultiCountry(fmt(from), fmt(to), widget.viewModel.state.selectedCountries);
+  }
+
+  String _titleLabel() {
+    final countries = widget.viewModel.state.selectedCountries;
+    if (countries.isEmpty) return 'Macro Events';
+    if (countries.length == 1) return 'Macro Events — ${countries.first}';
+    return 'Macro Events — ${countries.length} regions';
   }
 
   @override
   Widget build(BuildContext context) {
     final state = widget.viewModel.state;
-    final filtered = state.filteredEvents..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final filtered = state.macroFilteredEvents
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         elevation: 0,
-        title: const Text('Macro Events — US',
-            style: TextStyle(color: Colors.white)),
+        title: Text(_titleLabel(),
+            style: const TextStyle(color: Colors.white)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _filterExpanded ? Icons.filter_list_off : Icons.filter_list,
+              color: Colors.white,
+            ),
+            onPressed: () => setState(() => _filterExpanded = !_filterExpanded),
+          ),
+        ],
       ),
-      body: _buildBody(state, filtered),
+      body: Column(
+        children: [
+          _buildFilterPanel(state),
+          Expanded(child: _buildBody(state, filtered)),
+        ],
+      ),
     );
   }
+
+  // ---- filter panel ----
+
+  Widget _buildFilterPanel(EventsState state) {
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOut,
+      alignment: Alignment.topCenter,
+      clipBehavior: Clip.hardEdge,
+      child: _filterExpanded
+          ? Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                border: Border(
+                  bottom: BorderSide(
+                      color: Colors.white.withAlpha(25), width: 1),
+                ),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Countries',
+                      style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: kAvailableCountries.map((country) {
+                      final selected =
+                          state.selectedCountries.contains(country);
+                      return _FilterChip(
+                        label: country,
+                        selected: selected,
+                        onTap: () {
+                          widget.viewModel.toggleCountry(country);
+                          _loadEvents();
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text('Influence',
+                      style: TextStyle(
+                          color: Colors.white70,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: EventImpact.values.map((impact) {
+                      final selected =
+                          state.macroInfluenceFilter.contains(impact);
+                      return _FilterChip(
+                        label: macroInfluenceLabel(impact),
+                        selected: selected,
+                        dotColor: impactColor(impact),
+                        onTap: () {
+                          widget.viewModel.toggleMacroInfluence(impact);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            )
+          : const SizedBox.shrink(),
+    );
+  }
+
+  // ---- main body ----
 
   Widget _buildBody(EventsState state, List<Event> filtered) {
     if (state.isLoading && state.events.isEmpty) {
@@ -78,6 +180,12 @@ class _MacroEventsScreenState extends State<MacroEventsScreen> {
             TextButton(onPressed: _loadEvents, child: const Text('Retry')),
           ],
         ),
+      );
+    }
+    if (state.selectedCountries.isEmpty) {
+      return const Center(
+        child: Text('Select at least one country',
+            style: TextStyle(color: Colors.white54, fontSize: 14)),
       );
     }
     if (filtered.isEmpty) {
@@ -102,6 +210,72 @@ class _MacroEventsScreenState extends State<MacroEventsScreen> {
     );
   }
 }
+
+// ---- filter chip ----
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color? dotColor;
+  final VoidCallback onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.selected,
+    this.dotColor,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected
+              ? Colors.white.withAlpha(20)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: selected ? Colors.white54 : Colors.white24,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (dotColor != null) ...[
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: dotColor,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.white54,
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+            if (selected) ...[
+              const SizedBox(width: 4),
+              const Icon(Icons.check, size: 14, color: Colors.white70),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---- event tile ----
 
 class _EventTile extends StatelessWidget {
   final Event event;
@@ -184,9 +358,9 @@ class _EventTile extends StatelessWidget {
       case EventImpact.high:
         return 'HIGH';
       case EventImpact.medium:
-        return 'MED';
+        return 'MOD';
       case EventImpact.low:
-        return 'LOW';
+        return 'STD';
     }
   }
 
