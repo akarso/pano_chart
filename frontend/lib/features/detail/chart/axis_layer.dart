@@ -15,6 +15,11 @@ class YAxisLabels extends StatelessWidget {
   final List<double>? emaFast;
   final List<double>? emaSlow;
 
+  /// Optional externally-computed price range (e.g. with vertical scaling).
+  /// When provided, overrides auto-scaling from visible candles.
+  final double? priceLo;
+  final double? priceHi;
+
   const YAxisLabels({
     Key? key,
     required this.candles,
@@ -22,25 +27,34 @@ class YAxisLabels extends StatelessWidget {
     required this.endIndex,
     this.emaFast,
     this.emaSlow,
+    this.priceLo,
+    this.priceHi,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     if (candles.isEmpty || startIndex >= endIndex) return const SizedBox();
 
-    double lo = double.infinity, hi = double.negativeInfinity;
-    for (var i = startIndex; i < endIndex && i < candles.length; i++) {
-      if (candles[i].low < lo) lo = candles[i].low;
-      if (candles[i].high > hi) hi = candles[i].high;
+    double lo, hi;
+    if (priceLo != null && priceHi != null) {
+      lo = priceLo!;
+      hi = priceHi!;
+    } else {
+      lo = double.infinity;
+      hi = double.negativeInfinity;
+      for (var i = startIndex; i < endIndex && i < candles.length; i++) {
+        if (candles[i].low < lo) lo = candles[i].low;
+        if (candles[i].high > hi) hi = candles[i].high;
+      }
+      _expandRange(emaFast, startIndex, endIndex, lo, hi, (a, b) {
+        lo = a;
+        hi = b;
+      });
+      _expandRange(emaSlow, startIndex, endIndex, lo, hi, (a, b) {
+        lo = a;
+        hi = b;
+      });
     }
-    _expandRange(emaFast, startIndex, endIndex, lo, hi, (a, b) {
-      lo = a;
-      hi = b;
-    });
-    _expandRange(emaSlow, startIndex, endIndex, lo, hi, (a, b) {
-      lo = a;
-      hi = b;
-    });
     if (lo >= hi) return const SizedBox();
 
     const gridLines = 5;

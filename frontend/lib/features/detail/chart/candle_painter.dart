@@ -18,6 +18,11 @@ class CandlePainter extends CustomPainter {
   final List<double>? emaFast;
   final List<double>? emaSlow;
 
+  /// Optional externally-computed price range (e.g. with vertical scaling).
+  /// When provided, overrides auto-scaling from visible candles.
+  final double? priceLo;
+  final double? priceHi;
+
   static const Color upColor = Color(0xFF00C853);
   static const Color downColor = Color(0xFFFF1744);
   static const double _padFrac = 0.06;
@@ -33,6 +38,8 @@ class CandlePainter extends CustomPainter {
     required this.scrollPixelOffset,
     this.emaFast,
     this.emaSlow,
+    this.priceLo,
+    this.priceHi,
   });
 
   @override
@@ -43,21 +50,27 @@ class CandlePainter extends CustomPainter {
     final pad = h * _padFrac;
     final chartH = h - 2 * pad;
 
-    // Visible min/max for auto-scaling Y.
-    double lo = double.infinity, hi = double.negativeInfinity;
-    for (var i = startIndex; i < endIndex && i < candles.length; i++) {
-      if (candles[i].low < lo) lo = candles[i].low;
-      if (candles[i].high > hi) hi = candles[i].high;
+    // Visible min/max for auto-scaling Y (or use externally provided range).
+    double lo, hi;
+    if (priceLo != null && priceHi != null) {
+      lo = priceLo!;
+      hi = priceHi!;
+    } else {
+      lo = double.infinity;
+      hi = double.negativeInfinity;
+      for (var i = startIndex; i < endIndex && i < candles.length; i++) {
+        if (candles[i].low < lo) lo = candles[i].low;
+        if (candles[i].high > hi) hi = candles[i].high;
+      }
+      _expandRange(emaFast, startIndex, endIndex, (v) {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      });
+      _expandRange(emaSlow, startIndex, endIndex, (v) {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      });
     }
-    // Also include EMA values in the visible range.
-    _expandRange(emaFast, startIndex, endIndex, (v) {
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    });
-    _expandRange(emaSlow, startIndex, endIndex, (v) {
-      if (v < lo) lo = v;
-      if (v > hi) hi = v;
-    });
 
     final range = (hi - lo) == 0 ? 1.0 : (hi - lo);
     double toY(double price) => pad + chartH * (1 - (price - lo) / range);
@@ -199,6 +212,8 @@ class CandlePainter extends CustomPainter {
       old.endIndex != endIndex ||
       old.candleWidth != candleWidth ||
       old.scrollPixelOffset != scrollPixelOffset ||
+      old.priceLo != priceLo ||
+      old.priceHi != priceHi ||
       !identical(old.candles, candles) ||
       !identical(old.emaFast, emaFast) ||
       !identical(old.emaSlow, emaSlow);

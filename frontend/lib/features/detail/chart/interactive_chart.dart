@@ -28,6 +28,12 @@ class InteractiveChart extends StatefulWidget {
   /// Total height of the combined chart.
   final double height;
 
+  /// Leading candles used only for indicator warmup (not scrollable).
+  final int warmupCount;
+
+  /// Number of candles to fill the viewport width initially.
+  final int initialVisibleCount;
+
   const InteractiveChart({
     Key? key,
     required this.series,
@@ -36,6 +42,8 @@ class InteractiveChart extends StatefulWidget {
     this.eventsViewModel,
     this.onNavigateToEvent,
     this.height = 360,
+    this.warmupCount = 0,
+    this.initialVisibleCount = 30,
   }) : super(key: key);
 
   @override
@@ -49,6 +57,10 @@ class _InteractiveChartState extends State<InteractiveChart> {
   double? _prevScale;
   double? _prevFocalX;
   double _prevScrollOffset = 0;
+
+  // ── vertical scale ──
+  double _priceScaleY = 1.0; // 1.0 = auto-fit, >1 = zoomed in
+  double? _prevPriceScaleY;
 
   bool _didInitialScroll = false;
 
@@ -112,10 +124,18 @@ class _InteractiveChartState extends State<InteractiveChart> {
     return (_scrollOffset - _scrollOffset.floor()) * _candleWidth;
   }
 
+  /// Effective warmup clamped to available candle count.
+  int get _effectiveWarmup =>
+      math.min(widget.warmupCount, widget.series.candles.length - 1);
+
   void _clampScroll(double viewportWidth) {
     final maxScroll = widget.series.candles.length -
         (viewportWidth / _candleWidth).floor();
-    _scrollOffset = _scrollOffset.clamp(0.0, math.max(0.0, maxScroll.toDouble()));
+    final minScroll = _effectiveWarmup.toDouble();
+    _scrollOffset = _scrollOffset.clamp(
+      minScroll,
+      math.max(minScroll, maxScroll.toDouble()),
+    );
   }
 
   // ── gesture handling ──
@@ -124,22 +144,28 @@ class _InteractiveChartState extends State<InteractiveChart> {
     _prevScale = _candleWidth;
     _prevFocalX = d.localFocalPoint.dx;
     _prevScrollOffset = _scrollOffset;
+    _prevPriceScaleY = _priceScaleY;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d, double viewportWidth) {
     setState(() {
       if (d.pointerCount >= 2) {
-        // Pinch-to-zoom — scale candleWidth around focal point.
+        // Pinch-to-zoom — scale candleWidth (horizontal) and priceScaleY
+        // (vertical) around the focal point.
         // Also dismiss crosshair immediately.
         _crosshair = null;
-        final newWidth = (_prevScale! * d.scale)
-            .clamp(_minCandleWidth, _maxCandleWidth);
 
-        // Keep the candle under the focal point stationary.
+        // Horizontal zoom.
+        final newWidth = (_prevScale! * d.horizontalScale)
+            .clamp(_minCandleWidth, _maxCandleWidth);
         final focalCandle =
             _prevScrollOffset + _prevFocalX! / _prevScale!;
         _candleWidth = newWidth;
         _scrollOffset = focalCandle - d.localFocalPoint.dx / _candleWidth;
+
+        // Vertical zoom.
+        _priceScaleY = (_prevPriceScaleY! * d.verticalScale)
+            .clamp(0.3, 10.0);
       } else {
         // Single-finger pan.
         final dx = d.localFocalPoint.dx - _prevFocalX!;
@@ -179,24 +205,50 @@ class _InteractiveChartState extends State<InteractiveChart> {
           color: const Color(0xFF1A1A2E),
           child: LayoutBuilder(builder: (context, constraints) {
             final vw = constraints.maxWidth;
-            // On first build, scroll to show last candles.
-            if (!_didInitialScroll) {
-              _didInitialScroll = true;
-              final visibleCount = (vw / _candleWidth).floor();
-              if (candles.length > visibleCount) {
-                _scrollOffset =
-                    (candles.length - visibleCount).toDouble();
-              }
-            }
-            _clampScroll(vw);
-
-            final start = _visibleStart(vw);
-            final end = _visibleEnd(vw);
-            final pixOff = _scrollPixelOffset(vw);
-
             // Y-axis width reservation.
             const yAxisW = 44.0;
             final chartW = vw - yAxisW;
+
+            // On first build, set candleWidth to match sparkline ratio
+            // and scroll to show the last initialVisibleCount candles.
+            if (!_didInitialScroll) {
+              _didInitialScroll = true;
+              final ivCount = widget.initialVisibleCount.clamp(1, candles.length);
+              _candleWidth = (chartW / ivCount).clamp(_minCandleWidth, _maxCandleWidth);
+              final visibleCount = (chartW / _candleWidth).floor();
+              _scrollOffset = math.max(
+                _effectiveWarmup.toDouble(),
+                (candles.length - visibleCount).toDouble(),
+              );
+            }
+            _clampScroll(chartW);
+
+            final start = _visibleStart(chartW);
+            final end = _visibleEnd(chartW);
+            final pixOff = _scrollPixelOffset(chartW);
+
+            // ── Compute scaled price range ──
+            double baseLo = double.infinity, baseHi = double.negativeInfinity;
+            for (var i = start; i < end && i < candles.length; i++) {
+              if (candles[i].low < baseLo) baseLo = candles[i].low;
+              if (candles[i].high > baseHi) baseHi = candles[i].high;
+            }
+            _expandForRange(_emaFast, start, end, (v) {
+              if (v < baseLo) baseLo = v;
+              if (v > baseHi) baseHi = v;
+            });
+            _expandForRange(_emaSlow, start, end, (v) {
+              if (v < baseLo) baseLo = v;
+              if (v > baseHi) baseHi = v;
+            });
+            final baseRange = (baseHi - baseLo) == 0 ? 1.0 : (baseHi - baseLo);
+            final baseCenter = (baseHi + baseLo) / 2;
+            final scaledRange = baseRange / _priceScaleY;
+            final priceLo = baseCenter - scaledRange / 2;
+            final priceHi = baseCenter + scaledRange / 2;
+
+            // Whether user has scrolled to the hard candle limit.
+            final atHardLimit = _scrollOffset <= _effectiveWarmup + 0.5;
 
             return GestureDetector(
               onScaleStart: _onScaleStart,
@@ -223,6 +275,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           scrollPixelOffset: pixOff,
                           emaFast: _emaFast,
                           emaSlow: _emaSlow,
+                          priceLo: priceLo,
+                          priceHi: priceHi,
                         ),
                       ),
                     ),
@@ -255,6 +309,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         endIndex: end,
                         emaFast: _emaFast,
                         emaSlow: _emaSlow,
+                        priceLo: priceLo,
+                        priceHi: priceHi,
                       ),
                     ),
                   ),
@@ -342,8 +398,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           volumeHeight: volumeH,
                           oscillatorHeight: oscH,
                           chartWidth: chartW,
-                          priceLo: _visiblePriceLo(start, end),
-                          priceHi: _visiblePriceHi(start, end),
+                          priceLo: priceLo,
+                          priceHi: priceHi,
                           rsiPeriod: widget.config.showRsi ? widget.config.rsiPeriod : null,
                           atrPeriod: widget.config.showAtr ? widget.config.atrPeriod : null,
                           emaFastPeriod: widget.config.showEmaFast ? widget.config.emaFastPeriod : null,
@@ -376,6 +432,24 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           color: Color(0x8826A69A),
                           fontSize: 9,
                           fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+
+                  // ── Hard candle limit label ──
+                  if (atHardLimit)
+                    Positioned(
+                      left: 2,
+                      top: priceH / 2 - 40,
+                      child: Transform.rotate(
+                        angle: -math.pi / 2,
+                        child: Text(
+                          'Hard candle limit reached',
+                          style: TextStyle(
+                            color: Colors.red.withOpacity(0.7),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
                     ),
@@ -463,29 +537,9 @@ class _InteractiveChartState extends State<InteractiveChart> {
     });
   }
 
-  // ── Visible price range (shared with crosshair Y-tag) ──
+  // ── Helpers (shared with crosshair, build, etc.) ──
 
-  double _visiblePriceLo(int start, int end) {
-    double lo = double.infinity;
-    for (var i = start; i < end && i < widget.series.candles.length; i++) {
-      if (widget.series.candles[i].low < lo) lo = widget.series.candles[i].low;
-    }
-    _expandForCrosshair(_emaFast, start, end, (v) { if (v < lo) lo = v; });
-    _expandForCrosshair(_emaSlow, start, end, (v) { if (v < lo) lo = v; });
-    return lo;
-  }
-
-  double _visiblePriceHi(int start, int end) {
-    double hi = double.negativeInfinity;
-    for (var i = start; i < end && i < widget.series.candles.length; i++) {
-      if (widget.series.candles[i].high > hi) hi = widget.series.candles[i].high;
-    }
-    _expandForCrosshair(_emaFast, start, end, (v) { if (v > hi) hi = v; });
-    _expandForCrosshair(_emaSlow, start, end, (v) { if (v > hi) hi = v; });
-    return hi;
-  }
-
-  void _expandForCrosshair(List<double>? vals, int start, int end, void Function(double) apply) {
+  void _expandForRange(List<double>? vals, int start, int end, void Function(double) apply) {
     if (vals == null) return;
     for (var i = start; i < end && i < vals.length; i++) {
       if (!vals[i].isNaN) apply(vals[i]);

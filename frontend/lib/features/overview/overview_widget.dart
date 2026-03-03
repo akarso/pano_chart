@@ -159,30 +159,21 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Number of candles the overview sparkline covers.
   static const int _sparklineCandles = 30;
 
-  /// Standard intervals ordered by duration (ascending).
-  static const List<String> _intervals = ['1m', '5m', '15m', '1h', '4h', '1d'];
+  /// Indicator warmup margin — extra candles fetched for accurate indicators
+  /// from the very first visible candle.  Hidden on the chart.
+  static const int _indicatorWarmup = 50;
 
-  /// Returns a finer-grained timeframe for the detail chart that covers the
-  /// same time window as the overview sparkline (30 × overview-TF) but with
-  /// more candles.  Picks the closest standard interval whose duration is
-  /// strictly less than the overview TF; falls back to the overview TF itself
-  /// when already at the smallest interval.
-  String _detailTimeframe(String overviewTf) {
-    final idx = _intervals.indexOf(overviewTf);
-    // Already at finest interval, or unknown → keep as-is.
-    if (idx <= 0) return overviewTf;
-    return _intervals[idx - 1];
-  }
+  /// Total visible chart candles after warmup.
+  static const int _chartCandles = 600;
 
   Future<void> _onItemTapped(OverviewItem item) async {
     final now = DateTime.now().toUtc();
-    // Time window = what the sparkline covers.
-    final timespan = _candleDuration(_timeframe) * _sparklineCandles;
-    final from = now.subtract(timespan);
-    final detailTf = _detailTimeframe(_timeframe);
+    // Fetch enough candles for the full chart + indicator warmup.
+    final totalCandles = _chartCandles + _indicatorWarmup;
+    final from = now.subtract(_candleDuration(_timeframe) * totalCandles);
     final input = GetCandleSeriesInput(
       symbol: item.symbol,
-      timeframe: detailTf,
+      timeframe: _timeframe,
       from: from,
       to: now,
     );
@@ -205,8 +196,10 @@ class OverviewWidgetState extends State<OverviewWidget>
         MaterialPageRoute(
           builder: (_) => DetailScreen(
             symbol: AppSymbol(item.symbol),
-            timeframe: Timeframe(detailTf),
+            timeframe: Timeframe(_timeframe),
             series: series,
+            warmupCount: _indicatorWarmup,
+            initialVisibleCount: _sparklineCandles,
             isFavourite: _favourites.contains(item.symbol),
             eventsViewModel: widget.eventsViewModel,
             detailContext: DetailContext(

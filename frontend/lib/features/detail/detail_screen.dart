@@ -23,6 +23,12 @@ class DetailScreen extends StatefulWidget {
   final bool isFavourite;
   final EventsViewModel? eventsViewModel;
 
+  /// Leading candles used only for indicator warmup (not scrollable).
+  final int warmupCount;
+
+  /// Number of candles to fill the viewport width initially.
+  final int initialVisibleCount;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -31,6 +37,8 @@ class DetailScreen extends StatefulWidget {
     this.detailContext,
     this.isFavourite = false,
     this.eventsViewModel,
+    this.warmupCount = 0,
+    this.initialVisibleCount = 30,
   }) : super(key: key);
 
   @override
@@ -262,6 +270,8 @@ class _DetailScreenState extends State<DetailScreen> {
                 onConfigChanged: _saveChartConfig,
                 eventsViewModel: widget.eventsViewModel,
                 onNavigateToEvent: _navigateToEventsList,
+                warmupCount: widget.warmupCount,
+                initialVisibleCount: widget.initialVisibleCount,
               ),
             // Event overlay controls
             if (widget.eventsViewModel != null) ...[
