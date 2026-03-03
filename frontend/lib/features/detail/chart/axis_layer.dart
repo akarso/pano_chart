@@ -69,13 +69,20 @@ class YAxisLabels extends StatelessWidget {
         children: [
           for (var i = 0; i <= gridLines; i++)
             Positioned(
-              top: pad + chartH * i / gridLines - 6,
-              right: 4,
-              child: Text(
-                _formatPrice(hi - (hi - lo) * i / gridLines),
-                style: const TextStyle(
-                  color: Color(0x73FFFFFF),
-                  fontSize: 9,
+              top: pad + chartH * i / gridLines - 8,
+              right: 2,
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: BoxDecoration(
+                  color: const Color(0x801A1A2E),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: Text(
+                  _formatPrice(hi - (hi - lo) * i / gridLines),
+                  style: const TextStyle(
+                    color: Color(0x73FFFFFF),
+                    fontSize: 9,
+                  ),
                 ),
               ),
             ),

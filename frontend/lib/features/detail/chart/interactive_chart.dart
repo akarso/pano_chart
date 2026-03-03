@@ -60,7 +60,6 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
   // ── vertical scale ──
   double _priceScaleY = 1.0; // 1.0 = auto-fit, >1 = zoomed in
-  double? _prevPriceScaleY;
 
   bool _didInitialScroll = false;
 
@@ -73,6 +72,24 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ── limits ──
   static const double _minCandleWidth = 2.0;
   static const double _maxCandleWidth = 40.0;
+
+  // ── axis overlay sizing ──
+  static const double _yAxisW = 44.0;
+  static const double _yAxisDragW = 50.0;
+  static const double _xAxisDragH = 24.0;
+
+  // ── gesture zone tracking ──
+  _GestureZone _activeGesture = _GestureZone.chart;
+  double _yAxisDragStartY = 0;
+  double _yAxisDragStartScale = 1.0;
+  double _xAxisDragStartX = 0;
+  double _xAxisDragStartWidth = 10.0;
+  double _xAxisDragStartScroll = 0;
+
+  // ── layout cache (set in build before gesture callbacks fire) ──
+  double _layoutVw = 0;
+  double _layoutTotalH = 0;
+  double _layoutChartBottom = 0;
 
   // ── crosshair ──
   CrosshairState? _crosshair;
@@ -141,37 +158,78 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ── gesture handling ──
 
   void _onScaleStart(ScaleStartDetails d) {
+    final pos = d.localFocalPoint;
+
+    // Y-axis drag zone: right strip within chart content area.
+    if (d.pointerCount == 1 &&
+        pos.dx > _layoutVw - _yAxisDragW &&
+        pos.dy < _layoutChartBottom) {
+      _activeGesture = _GestureZone.yAxis;
+      _yAxisDragStartY = pos.dy;
+      _yAxisDragStartScale = _priceScaleY;
+      return;
+    }
+
+    // X-axis drag zone: bottom strip.
+    if (d.pointerCount == 1 &&
+        pos.dy > _layoutTotalH - _xAxisDragH) {
+      _activeGesture = _GestureZone.xAxis;
+      _xAxisDragStartX = pos.dx;
+      _xAxisDragStartWidth = _candleWidth;
+      _xAxisDragStartScroll = _scrollOffset;
+      return;
+    }
+
+    // Default: chart pan / pinch.
+    _activeGesture = _GestureZone.chart;
     _prevScale = _candleWidth;
     _prevFocalX = d.localFocalPoint.dx;
     _prevScrollOffset = _scrollOffset;
-    _prevPriceScaleY = _priceScaleY;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d, double viewportWidth) {
     setState(() {
-      if (d.pointerCount >= 2) {
-        // Pinch-to-zoom — scale candleWidth (horizontal) and priceScaleY
-        // (vertical) around the focal point.
-        // Also dismiss crosshair immediately.
-        _crosshair = null;
-
-        // Horizontal zoom.
-        final newWidth = (_prevScale! * d.horizontalScale)
-            .clamp(_minCandleWidth, _maxCandleWidth);
-        final focalCandle =
-            _prevScrollOffset + _prevFocalX! / _prevScale!;
-        _candleWidth = newWidth;
-        _scrollOffset = focalCandle - d.localFocalPoint.dx / _candleWidth;
-
-        // Vertical zoom.
-        _priceScaleY = (_prevPriceScaleY! * d.verticalScale)
-            .clamp(0.3, 10.0);
-      } else {
-        // Single-finger pan.
-        final dx = d.localFocalPoint.dx - _prevFocalX!;
-        _scrollOffset = _prevScrollOffset - dx / _candleWidth;
+      switch (_activeGesture) {
+        case _GestureZone.yAxis:
+          if (d.pointerCount == 1) {
+            final delta = d.localFocalPoint.dy - _yAxisDragStartY;
+            _priceScaleY = (_yAxisDragStartScale * math.exp(delta * 0.008))
+                .clamp(0.3, 10.0);
+          }
+          break;
+        case _GestureZone.xAxis:
+          if (d.pointerCount == 1) {
+            final delta = d.localFocalPoint.dx - _xAxisDragStartX;
+            final newWidth =
+                (_xAxisDragStartWidth * math.exp(delta * 0.008))
+                    .clamp(_minCandleWidth, _maxCandleWidth);
+            final viewCenter = _xAxisDragStartScroll +
+                viewportWidth / (2 * _xAxisDragStartWidth);
+            _candleWidth = newWidth;
+            _scrollOffset =
+                viewCenter - viewportWidth / (2 * _candleWidth);
+            _clampScroll(viewportWidth);
+          }
+          break;
+        case _GestureZone.chart:
+          if (d.pointerCount >= 2) {
+            _crosshair = null;
+            // Horizontal pinch zoom only (vertical pinch disabled).
+            final newWidth = (_prevScale! * d.horizontalScale)
+                .clamp(_minCandleWidth, _maxCandleWidth);
+            final focalCandle =
+                _prevScrollOffset + _prevFocalX! / _prevScale!;
+            _candleWidth = newWidth;
+            _scrollOffset =
+                focalCandle - d.localFocalPoint.dx / _candleWidth;
+          } else {
+            // Single-finger pan.
+            final dx = d.localFocalPoint.dx - _prevFocalX!;
+            _scrollOffset = _prevScrollOffset - dx / _candleWidth;
+          }
+          _clampScroll(viewportWidth);
+          break;
       }
-      _clampScroll(viewportWidth);
     });
   }
 
@@ -205,9 +263,13 @@ class _InteractiveChartState extends State<InteractiveChart> {
           color: const Color(0xFF1A1A2E),
           child: LayoutBuilder(builder: (context, constraints) {
             final vw = constraints.maxWidth;
-            // Y-axis width reservation.
-            const yAxisW = 44.0;
-            final chartW = vw - yAxisW;
+            // Chart renders full width; Y-axis labels overlay on top.
+            final chartW = vw;
+
+            // Cache layout dimensions for gesture zone detection.
+            _layoutVw = vw;
+            _layoutTotalH = priceH + volumeH + oscH + xAxisH;
+            _layoutChartBottom = priceH + volumeH + oscH;
 
             // On first build, set candleWidth to match sparkline ratio
             // and scroll to show the last initialVisibleCount candles.
@@ -296,11 +358,11 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       ),
                     ),
 
-                  // ── Y-axis labels ──
+                  // ── Y-axis labels (overlay with background) ──
                   Positioned(
                     right: 0,
                     top: 0,
-                    width: yAxisW,
+                    width: _yAxisW,
                     height: priceH,
                     child: IgnorePointer(
                       child: YAxisLabels(
@@ -411,7 +473,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   // ── Oscillator labels ──
                   if (_rsi != null)
                     Positioned(
-                      right: yAxisW + 4,
+                      right: _yAxisW + 4,
                       top: priceH + volumeH + 2,
                       child: const Text(
                         'RSI',
@@ -424,7 +486,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                   if (_atr != null)
                     Positioned(
-                      right: yAxisW + 4,
+                      right: _yAxisW + 4,
                       top: priceH + volumeH + 14,
                       child: const Text(
                         'ATR',
@@ -546,3 +608,6 @@ class _InteractiveChartState extends State<InteractiveChart> {
     }
   }
 }
+
+/// Which zone of the chart the current gesture started in.
+enum _GestureZone { chart, yAxis, xAxis }
