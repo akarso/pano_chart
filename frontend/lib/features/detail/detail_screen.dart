@@ -368,20 +368,19 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              if (_isLoadingTf)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 32),
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else
-                InteractiveChart(
-                series: series,
-                config: _chartConfig,
-                onConfigChanged: _saveChartConfig,
-                eventsViewModel: widget.eventsViewModel,
-                onNavigateToEvent: _navigateToEventsList,
-                warmupCount: _warmupCount,
-                initialVisibleCount: widget.initialVisibleCount,
+              SizedBox(
+                height: 360,
+                child: _isLoadingTf
+                  ? const Center(child: CircularProgressIndicator())
+                  : InteractiveChart(
+                      series: series,
+                      config: _chartConfig,
+                      onConfigChanged: _saveChartConfig,
+                      eventsViewModel: widget.eventsViewModel,
+                      onNavigateToEvent: _navigateToEventsList,
+                      warmupCount: _warmupCount,
+                      initialVisibleCount: widget.initialVisibleCount,
+                    ),
               ),
             // Event overlay controls
             if (widget.eventsViewModel != null) ...[
