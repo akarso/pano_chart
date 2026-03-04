@@ -24,5 +24,6 @@ abstract class GetOverview {
     required String sort,
     String? snapshot,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   });
 }

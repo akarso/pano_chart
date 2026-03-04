@@ -30,6 +30,7 @@ class _FakeGetOverview extends GetOverview {
     required String sort,
     String? snapshot,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   }) async {
     // Capture the call index at invocation time (before any awaits).
     final callIdx = calls.length;
@@ -379,6 +380,95 @@ void main() {
       expect(vm.state.sort, 'gain');
       expect(vm.state.items.length, 1);
       expect(vm.state.items[0].symbol, 'ETHUSDT');
+    });
+
+    group('loadMissingFavourites', () {
+      test('fetches symbols not yet in items and merges them', () async {
+        final page1 = [
+          const OverviewItem(symbol: 'BTCUSDT', totalScore: 10),
+          const OverviewItem(symbol: 'ETHUSDT', totalScore: 8),
+        ];
+        final missingResult = [
+          const OverviewItem(symbol: 'XYZUSDT', totalScore: 3),
+          const OverviewItem(symbol: 'ABCUSDT', totalScore: 1),
+        ];
+
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(items: page1, hasMore: true),
+          OverviewResult(items: missingResult, hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+
+        await vm.loadInitial('1h');
+        expect(vm.state.items.length, 2);
+
+        await vm.loadMissingFavourites(
+          '1h',
+          {'BTCUSDT', 'XYZUSDT', 'ABCUSDT'},
+        );
+
+        // BTCUSDT was already loaded, so only XYZUSDT + ABCUSDT added
+        expect(vm.state.items.length, 4);
+        final symbols = vm.state.items.map((i) => i.symbol).toSet();
+        expect(symbols, containsAll(['BTCUSDT', 'ETHUSDT', 'XYZUSDT', 'ABCUSDT']));
+
+        // The second call should have used the symbols parameter
+        expect(fakeGetOverview.calls.length, 2);
+      });
+
+      test('is a no-op when all favourites are already loaded', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            items: [OverviewItem(symbol: 'BTCUSDT', totalScore: 5)],
+            hasMore: false,
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+
+        await vm.loadInitial('1h');
+        expect(fakeGetOverview.calls.length, 1);
+
+        await vm.loadMissingFavourites('1h', {'BTCUSDT'});
+
+        // No additional call made
+        expect(fakeGetOverview.calls.length, 1);
+      });
+
+      test('is a no-op when favourites set is empty', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+
+        await vm.loadInitial('1h');
+        expect(fakeGetOverview.calls.length, 1);
+
+        await vm.loadMissingFavourites('1h', {});
+
+        expect(fakeGetOverview.calls.length, 1);
+      });
+
+      test('silently ignores errors', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            items: [OverviewItem(symbol: 'BTCUSDT', totalScore: 5)],
+            hasMore: true,
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+
+        await vm.loadInitial('1h');
+
+        // Make next call throw
+        fakeGetOverview.error = Exception('network error');
+
+        // Should not throw
+        await vm.loadMissingFavourites('1h', {'XYZUSDT'});
+
+        // Items unchanged
+        expect(vm.state.items.length, 1);
+        expect(vm.state.items[0].symbol, 'BTCUSDT');
+      });
     });
   });
 }

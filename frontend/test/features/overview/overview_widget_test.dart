@@ -21,6 +21,7 @@ class _FakeGetOverview extends GetOverview {
     required String sort,
     String? snapshot,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   }) async {
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;

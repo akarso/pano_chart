@@ -280,6 +280,76 @@ func TestRankingsV2Handler_PageSizeClampedTo100(t *testing.T) {
 	uc.AssertExpectations(t)
 }
 
+func TestRankingsV2Handler_SymbolsFilter(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "AAAUSDT"), TotalScore: 10, Scores: map[string]float64{}, Volume: 1000},
+		{Symbol: mustSymbol(t, "BBBUSD"), TotalScore: 8, Scores: map[string]float64{}, Volume: 500},
+		{Symbol: mustSymbol(t, "CCCUSD"), TotalScore: 5, Scores: map[string]float64{}, Volume: 300},
+		{Symbol: mustSymbol(t, "DDDUSD"), TotalScore: 3, Scores: map[string]float64{}, Volume: 100},
+	}
+
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(results, nil)
+
+	// Request only BBBUSD and DDDUSD
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&symbols=BBBUSD,DDDUSD", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var body rankingsV2Response
+	err := json.Unmarshal(w.Body.Bytes(), &body)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 2, body.TotalItems)
+	assert.Equal(t, 1, body.TotalPages)
+	if assert.Len(t, body.Results, 2) {
+		assert.Equal(t, "BBBUSD", body.Results[0].Symbol)
+		assert.Equal(t, "DDDUSD", body.Results[1].Symbol)
+	}
+
+	uc.AssertExpectations(t)
+}
+
+func TestRankingsV2Handler_SymbolsFilter_NoMatch(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "AAAUSDT"), TotalScore: 10, Scores: map[string]float64{}, Volume: 1000},
+	}
+
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(results, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&symbols=ZZZZUSD", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var body rankingsV2Response
+	err := json.Unmarshal(w.Body.Bytes(), &body)
+	assert.NoError(t, err)
+
+	assert.Equal(t, 0, body.TotalItems)
+	assert.Len(t, body.Results, 0)
+
+	uc.AssertExpectations(t)
+}
+
 // --- Unit tests for helpers ---
 
 func TestParsePositiveIntOrDefault(t *testing.T) {

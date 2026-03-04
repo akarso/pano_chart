@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
@@ -74,6 +75,19 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pageSize = 100
 	}
 
+	// --- Parse symbols (optional, comma-separated) ---
+	var symbolFilter map[string]struct{}
+	if raw := r.URL.Query().Get("symbols"); raw != "" {
+		parts := strings.Split(raw, ",")
+		symbolFilter = make(map[string]struct{}, len(parts))
+		for _, s := range parts {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				symbolFilter[s] = struct{}{}
+			}
+		}
+	}
+
 	// --- Execute use case ---
 	req := usecases.GetRankingsRequest{
 		Timeframe:    tf,
@@ -84,6 +98,17 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeRankingsError(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	// --- Filter by symbols when requested ---
+	if symbolFilter != nil {
+		filtered := results[:0:0]
+		for _, res := range results {
+			if _, ok := symbolFilter[res.Symbol.String()]; ok {
+				filtered = append(filtered, res)
+			}
+		}
+		results = filtered
 	}
 
 	// --- Pagination ---

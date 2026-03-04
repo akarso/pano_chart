@@ -128,6 +128,7 @@ class _FakeRankingsApi implements RankingsApi {
     required int page,
     required int pageSize,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   }) async {
     capturedTimeframe = timeframe;
     capturedSort = sort;

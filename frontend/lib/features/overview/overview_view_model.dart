@@ -289,6 +289,52 @@ class OverviewViewModel {
     _state = _state.copyWith(sidewaysAlgo: algo);
   }
 
+  /// Fetches any favourited symbols that are **not** yet present in the
+  /// loaded items list. Uses the `symbols` query filter so the backend
+  /// returns only the requested symbols regardless of their ranking page.
+  ///
+  /// If all favourites are already loaded this is a no-op.
+  Future<void> loadMissingFavourites(
+    String timeframe,
+    Set<String> favourites,
+  ) async {
+    if (favourites.isEmpty) return;
+
+    final loaded = _state.items.map((i) => i.symbol).toSet();
+    final missing = favourites.difference(loaded);
+    if (missing.isEmpty) return;
+
+    final currentGen = _generation;
+
+    try {
+      final result = await _getOverview(
+        timeframe: timeframe,
+        page: 1,
+        sort: _state.sort,
+        sidewaysAlgo: _state.sidewaysAlgo,
+        symbols: missing.toList(),
+      );
+
+      if (currentGen != _generation) return;
+
+      if (result.items.isEmpty) return;
+
+      // Merge and re-sort. Deduplicate just in case a scroll-load raced
+      // with this fetch.
+      final currentSymbols = _state.items.map((i) => i.symbol).toSet();
+      final newOnly =
+          result.items.where((i) => !currentSymbols.contains(i.symbol));
+      final merged = [..._state.items, ...newOnly];
+      final sorted =
+          _sortItems(merged, _state.sort, direction: _state.sortDirection);
+
+      _setState(_state.copyWith(items: sorted));
+    } catch (_) {
+      // Silently ignore — user still sees the favourites that were already
+      // loaded; the missing ones simply won't appear until next refresh.
+    }
+  }
+
   void _setState(OverviewState newState) {
     _state = newState;
     onChanged?.call();

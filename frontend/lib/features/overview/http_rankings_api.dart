@@ -23,10 +23,13 @@ class HttpRankingsApi implements RankingsApi {
     required int page,
     required int pageSize,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   }) async {
-    final uri = Uri.parse(
-      '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=$sidewaysAlgo',
-    );
+    var url = '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=$sidewaysAlgo';
+    if (symbols.isNotEmpty) {
+      url += '&symbols=${symbols.join(',')}';
+    }
+    final uri = Uri.parse(url);
 
     final response = await client.get(uri);
 

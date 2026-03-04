@@ -344,7 +344,13 @@ class OverviewWidgetState extends State<OverviewWidget>
           // Favourites toggle
           GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() => _showFavourites = !_showFavourites),
+            onTap: () {
+              final willShow = !_showFavourites;
+              setState(() => _showFavourites = willShow);
+              if (willShow && _favourites.isNotEmpty) {
+                vm.loadMissingFavourites(_timeframe, _favourites);
+              }
+            },
             child: SizedBox(
               width: 44,
               height: 44,

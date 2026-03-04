@@ -8,5 +8,6 @@ abstract class RankingsApi {
     required int page,
     required int pageSize,
     String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
   });
 }
