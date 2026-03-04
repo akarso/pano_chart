@@ -281,8 +281,8 @@ class OverviewWidgetState extends State<OverviewWidget>
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          // Back arrow (visible only in favourites mode)
-          if (_showFavourites)
+          if (_showFavourites) ...[
+            // Back arrow + title (matches Bubble Map AppBar style)
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () => setState(() => _showFavourites = false),
@@ -295,44 +295,51 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ),
               ),
             ),
-          // Logo + branding
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (_showFavourites) {
-                setState(() => _showFavourites = false);
-              }
-              // Optionally scroll to top
-              _scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
-            },
-            child: Padding(
-              padding: const EdgeInsets.only(left: 0, right: 8),
-              child: Row(
-                children: [
-                  Container(
-                    margin: const EdgeInsets.only(right: 15),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(3),
-                      child: Image.asset(
-                        'assets/icon.png',
-                        width: 26,
-                        height: 26,
-                      ),
-                    ),
-                  ),
-                  const Text(
-                    'Pano Charts',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF00e6c0),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
+            const Text(
+              'Favourites',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF00E6C0),
+                letterSpacing: 0.5,
               ),
             ),
-          ),
+          ] else ...[
+            // Logo + branding
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                _scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+              },
+              child: Padding(
+                padding: const EdgeInsets.only(left: 0, right: 8),
+                child: Row(
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.only(right: 15),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: Image.asset(
+                          'assets/icon.png',
+                          width: 26,
+                          height: 26,
+                        ),
+                      ),
+                    ),
+                    const Text(
+                      'Pano Charts',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF00E6C0),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const Spacer(),
           // Favourites toggle
           GestureDetector(

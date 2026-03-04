@@ -6,8 +6,8 @@ import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
 import '../events/event_filter.dart';
-import '../events/events_list_screen.dart';
 import '../events/events_view_model.dart';
+import '../events/macro_events_screen.dart';
 import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
@@ -231,13 +231,14 @@ class _DetailScreenState extends State<DetailScreen> {
     if (evm == null) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => EventsListScreen(
-          events: evm.state.events,
-          filterLevel: evm.state.filterLevel,
-          scrollToEventId: scrollToEventId,
-        ),
+        builder: (_) => MacroEventsScreen(viewModel: evm),
       ),
-    );
+    ).then((_) {
+      // Re-attach the onChanged listener (MacroEventsScreen overrides it)
+      // and reload events for the chart's date range so the chart overlay
+      // reflects any updates (e.g. newly visible future events).
+      _loadEvents();
+    });
   }
 
   // ---- build ----

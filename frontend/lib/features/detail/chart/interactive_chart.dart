@@ -185,8 +185,11 @@ class _InteractiveChartState extends State<InteractiveChart> {
     }
 
     if (furthestSlot <= 0) return 0;
-    // Add a small right padding (10% extra or minimum 2 slots).
-    return furthestSlot + math.max(2, (furthestSlot * 0.1).ceil());
+    // Ensure enough right padding so future markers are not hidden behind
+    // the Y-axis price labels overlay (_yAxisW = 44px).
+    final yAxisSlots = (_yAxisW / _candleWidth).ceil() + 1;
+    final minPad = math.max(yAxisSlots, 3);
+    return furthestSlot + math.max(minPad, (furthestSlot * 0.1).ceil());
   }
 
   // ── gesture handling ──
