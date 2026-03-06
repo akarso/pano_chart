@@ -11,8 +11,14 @@ import 'events_view_model.dart';
 class MacroEventsScreen extends StatefulWidget {
   final EventsViewModel viewModel;
 
-  const MacroEventsScreen({Key? key, required this.viewModel})
-      : super(key: key);
+  /// When non-null, the screen centers on this event and highlights it.
+  final String? scrollToEventId;
+
+  const MacroEventsScreen({
+    Key? key,
+    required this.viewModel,
+    this.scrollToEventId,
+  }) : super(key: key);
 
   @override
   State<MacroEventsScreen> createState() => MacroEventsScreenState();
@@ -20,12 +26,23 @@ class MacroEventsScreen extends StatefulWidget {
 
 class MacroEventsScreenState extends State<MacroEventsScreen> {
   bool _filterExpanded = false;
+  bool _hasScrolled = false;
+  String? _highlightedEventId;
+  final Map<String, GlobalKey> _eventKeys = {};
 
   @override
   void initState() {
     super.initState();
+    _highlightedEventId = widget.scrollToEventId;
     widget.viewModel.onChanged = () {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        if (!_hasScrolled) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _scrollToInitialPosition();
+          });
+        }
+      }
     };
     _loadEvents();
   }
@@ -34,6 +51,68 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   void dispose() {
     widget.viewModel.onChanged = null;
     super.dispose();
+  }
+
+  /// Scrolls to the initial position after events are loaded.
+  ///
+  /// If [scrollToEventId] was provided, centers on that event.
+  /// Otherwise, scrolls so the closest future event is one row below
+  /// the top edge.
+  void _scrollToInitialPosition() {
+    if (_hasScrolled || !mounted) return;
+    final state = widget.viewModel.state;
+    final filtered = List<Event>.of(state.macroFilteredEvents)
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    if (filtered.isEmpty) return;
+
+    _hasScrolled = true;
+
+    if (widget.scrollToEventId != null) {
+      _scrollToEvent(widget.scrollToEventId!, filtered, center: true);
+    } else {
+      _scrollToClosestFuture(filtered);
+    }
+  }
+
+  void _scrollToEvent(
+      String eventId, List<Event> sorted, {bool center = false}) {
+    final key = _eventKeys[eventId];
+    if (key?.currentContext != null) {
+      Scrollable.ensureVisible(
+        key!.currentContext!,
+        alignment: center ? 0.5 : 0.0,
+        duration: const Duration(milliseconds: 300),
+      );
+    }
+  }
+
+  void _scrollToClosestFuture(List<Event> sorted) {
+    final now = DateTime.now().toUtc();
+    final futureIdx = sorted.indexWhere((e) => e.timestamp.isAfter(now));
+
+    if (futureIdx < 0) {
+      // All events are past — scroll to end
+      final key = _eventKeys[sorted.last.id];
+      if (key?.currentContext != null) {
+        Scrollable.ensureVisible(
+          key!.currentContext!,
+          alignment: 1.0,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    } else if (futureIdx > 0) {
+      // Show the last past event at the top edge → closest future
+      // event appears one row below.
+      final key = _eventKeys[sorted[futureIdx - 1].id];
+      if (key?.currentContext != null) {
+        Scrollable.ensureVisible(
+          key!.currentContext!,
+          alignment: 0.0,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    }
+    // futureIdx == 0 → already at top, nothing to scroll.
   }
 
   void _loadEvents() {
@@ -197,15 +276,30 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
 
     return RefreshIndicator(
       onRefresh: () async => _loadEvents(),
-      child: ListView.separated(
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.only(
           left: 16, right: 16, top: 8,
           bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
         ),
-        itemCount: filtered.length,
-        separatorBuilder: (_, __) =>
-            Divider(color: Colors.white.withAlpha(25), height: 1),
-        itemBuilder: (_, index) => _EventTile(event: filtered[index]),
+        child: Column(
+          children: [
+            for (var i = 0; i < filtered.length; i++) ...[
+              Builder(builder: (_) {
+                final event = filtered[i];
+                final key =
+                    _eventKeys.putIfAbsent(event.id, () => GlobalKey());
+                return _EventTile(
+                  key: key,
+                  event: event,
+                  isHighlighted: event.id == _highlightedEventId,
+                );
+              }),
+              if (i < filtered.length - 1)
+                Divider(color: Colors.white.withAlpha(25), height: 1),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -279,13 +373,18 @@ class _FilterChip extends StatelessWidget {
 
 class _EventTile extends StatelessWidget {
   final Event event;
-  const _EventTile({required this.event});
+  final bool isHighlighted;
+  const _EventTile({
+    super.key,
+    required this.event,
+    this.isHighlighted = false,
+  });
 
   bool get _isPast => event.timestamp.isBefore(DateTime.now().toUtc());
 
   @override
   Widget build(BuildContext context) {
-    return Opacity(
+    Widget tile = Opacity(
       opacity: _isPast ? 0.45 : 1.0,
       child: Padding(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
@@ -351,6 +450,16 @@ class _EventTile extends StatelessWidget {
       ),
     ),
     );
+    if (isHighlighted) {
+      tile = DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.green, width: 1.5),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: tile,
+      );
+    }
+    return tile;
   }
 
   static String _impactLabel(EventImpact i) {

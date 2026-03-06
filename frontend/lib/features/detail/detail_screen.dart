@@ -311,7 +311,11 @@ class _DetailScreenState extends State<DetailScreen> {
     if (evm == null) return;
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => MacroEventsScreen(viewModel: evm),
+        builder: (_) => MacroEventsScreen(
+          viewModel: evm,
+          scrollToEventId:
+              scrollToEventId.isNotEmpty ? scrollToEventId : null,
+        ),
       ),
     ).then((_) {
       // Re-attach the onChanged listener (MacroEventsScreen overrides it)
