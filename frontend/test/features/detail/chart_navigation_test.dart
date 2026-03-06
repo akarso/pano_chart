@@ -19,8 +19,8 @@ void main() {
   });
 
   group('shared constants', () {
-    test('kSparklineCandles is 30', () {
-      expect(kSparklineCandles, 30);
+    test('kSparklineCandles is 110', () {
+      expect(kSparklineCandles, 110);
     });
 
     test('kIndicatorWarmup is 50', () {

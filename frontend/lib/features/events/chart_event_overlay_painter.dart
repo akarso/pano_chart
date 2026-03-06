@@ -27,7 +27,11 @@ class EventMarker {
 class EventOverlayPainter extends CustomPainter {
   final List<EventMarker> markers;
 
-  EventOverlayPainter({required this.markers});
+  /// Height of the price area.  Past-event lines stop at this height;
+  /// future-event dashed lines extend to the full canvas height (x-axis).
+  final double? priceAreaHeight;
+
+  EventOverlayPainter({required this.markers, this.priceAreaHeight});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -46,13 +50,14 @@ class EventOverlayPainter extends CustomPainter {
 
   void _drawPastMarker(
       Canvas canvas, EventMarker marker, Color color, Size size) {
+    final lineBottom = priceAreaHeight ?? size.height;
     final paint = Paint()
       ..color = color.withAlpha(60)
       ..strokeWidth = 1.2;
 
     canvas.drawLine(
       Offset(marker.x, 0),
-      Offset(marker.x, size.height),
+      Offset(marker.x, lineBottom),
       paint,
     );
 
@@ -129,6 +134,7 @@ class EventOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant EventOverlayPainter old) {
-    return !identical(markers, old.markers);
+    return !identical(markers, old.markers) ||
+        priceAreaHeight != old.priceAreaHeight;
   }
 }

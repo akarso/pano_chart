@@ -9,6 +9,10 @@ import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
 import '../../features/fear_greed/http_fear_greed_api.dart';
+import '../../features/news/api/news_api.dart';
+import '../../features/news/application/get_news.dart';
+import '../../features/news/infrastructure/http_news_api.dart';
+import '../../features/news/news_view_model.dart';
 import '../../features/overview/get_rankings_impl.dart';
 import '../../features/overview/http_rankings_api.dart';
 import '../../features/overview/overview_view_model.dart';
@@ -17,9 +21,13 @@ import '../../features/overview/overview_view_model.dart';
 class CompositionRoot {
   final String apiBaseUrl;
   final http.Client httpClient;
+  final int stablecoinPadding;
 
-  CompositionRoot({required this.apiBaseUrl, http.Client? httpClient})
-      : httpClient = httpClient ?? http.Client();
+  CompositionRoot({
+    required this.apiBaseUrl,
+    http.Client? httpClient,
+    this.stablecoinPadding = 0,
+  }) : httpClient = httpClient ?? http.Client();
 
   /// Creates a wired GetCandleSeries use case instance.
   GetCandleSeries createGetCandleSeries() {
@@ -30,7 +38,7 @@ class CompositionRoot {
   /// Creates a wired OverviewViewModel backed by the rankings API.
   OverviewViewModel createOverviewViewModel() {
     final api = HttpRankingsApi(baseUrl: apiBaseUrl, client: httpClient);
-    final getRankings = GetRankingsImpl(api);
+    final getRankings = GetRankingsImpl(api, pageSize: 30 + stablecoinPadding);
     return OverviewViewModel(getRankings);
   }
 
@@ -51,5 +59,12 @@ class CompositionRoot {
   /// Creates a wired FearGreedApi.
   FearGreedApi createFearGreedApi() {
     return HttpFearGreedApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired NewsViewModel backed by the news API.
+  NewsViewModel createNewsViewModel() {
+    final api = HttpNewsApi(client: httpClient, baseUrl: apiBaseUrl);
+    final getNews = GetNewsImpl(api);
+    return NewsViewModel(getNews);
   }
 }

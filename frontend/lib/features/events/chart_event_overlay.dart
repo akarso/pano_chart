@@ -15,10 +15,15 @@ class ChartEventOverlay extends StatefulWidget {
   /// to the events list (receives the event ID to scroll to).
   final ValueChanged<String>? onNavigateToEvent;
 
+  /// Height of the price area.  Past-event lines stop here; future-event
+  /// dashed lines extend beyond to reach the x-axis.
+  final double? priceAreaHeight;
+
   const ChartEventOverlay({
     Key? key,
     required this.markers,
     this.onNavigateToEvent,
+    this.priceAreaHeight,
   }) : super(key: key);
 
   @override
@@ -35,7 +40,10 @@ class _ChartEventOverlayState extends State<ChartEventOverlay> {
         // Paint the vertical lines
         Positioned.fill(
           child: CustomPaint(
-            painter: EventOverlayPainter(markers: widget.markers),
+            painter: EventOverlayPainter(
+              markers: widget.markers,
+              priceAreaHeight: widget.priceAreaHeight,
+            ),
           ),
         ),
         // Hit test layer

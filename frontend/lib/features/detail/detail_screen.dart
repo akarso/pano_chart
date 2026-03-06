@@ -182,7 +182,87 @@ class _DetailScreenState extends State<DetailScreen> {
     return '$y-$m-$d';
   }
 
-  // ---- helpers ----
+  /// Reload the current chart data (same timeframe, fresh candles).
+  Future<void> _reloadChart() async {
+    final svc = widget.getCandleSeries;
+    if (svc == null) return;
+    setState(() => _isLoadingTf = true);
+    try {
+      final input = buildDetailChartInput(
+        symbol: widget.symbol.value,
+        timeframe: _timeframe,
+      );
+      final result = await svc.execute(input);
+      if (!mounted) return;
+      setState(() {
+        _series = result;
+        _warmupCount = kIndicatorWarmup;
+        _isLoadingTf = false;
+      });
+      _loadEvents();
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingTf = false);
+    }
+  }
+
+  // ---- percentage helpers ----
+
+  /// Compute the percentage change from the reference area (last
+  /// [widget.initialVisibleCount] candles).  This matches the overview
+  /// sparkline the user tapped on.
+  double? _referenceAreaPct() {
+    final candles = _series.candles;
+    final n = widget.initialVisibleCount;
+    if (candles.length < 2) return null;
+    final startIdx = (candles.length - n).clamp(0, candles.length - 1);
+    final first = candles[startIdx].close;
+    final last = candles.last.close;
+    if (first == 0) return null;
+    return ((last - first) / first) * 100;
+  }
+
+  /// Compute the percentage change over the last 24 hours.
+  double? _last24hPct() {
+    final candles = _series.candles;
+    if (candles.length < 2) return null;
+    final now = candles.last.timestamp;
+    final cutoff = now.subtract(const Duration(hours: 24));
+    // Find the first candle at or after the cutoff.
+    int idx = 0;
+    for (var i = 0; i < candles.length; i++) {
+      if (!candles[i].timestamp.isBefore(cutoff)) {
+        idx = i;
+        break;
+      }
+    }
+    // If all candles are within 24h, use the first candle.
+    final first = candles[idx].close;
+    final last = candles.last.close;
+    if (first == 0) return null;
+    return ((last - first) / first) * 100;
+  }
+
+  /// Index of the start of the reference area (for the green line).
+  int get _referenceStartIndex {
+    final total = _series.candles.length;
+    return (total - widget.initialVisibleCount).clamp(0, total - 1);
+  }
+
+  void _showInfoDialog({required String title, required String body}) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   String _formatVolume(double vol) {
     if (vol >= 1e9) return '\$${(vol / 1e9).toStringAsFixed(1)}B';
@@ -249,12 +329,8 @@ class _DetailScreenState extends State<DetailScreen> {
     final candles = series.candles;
     final ctx = widget.detailContext;
 
-    double? percentChange;
-    if (candles.length >= 2) {
-      final first = candles.first.close;
-      final last = candles.last.close;
-      percentChange = ((last - first) / first) * 100;
-    }
+    final pct24h = _last24hPct();
+    final pctRef = _referenceAreaPct();
 
     return WillPopScope(
       onWillPop: () async {
@@ -343,6 +419,12 @@ class _DetailScreenState extends State<DetailScreen> {
             ],
           ),
           actions: [
+            if (widget.getCandleSeries != null)
+              IconButton(
+                icon: const Icon(Icons.refresh, color: Colors.white70),
+                onPressed: _isLoadingTf ? null : _reloadChart,
+                tooltip: 'Reload chart',
+              ),
             IconButton(
               icon: const Icon(Icons.close, color: Colors.white),
               onPressed: () => Navigator.of(context).maybePop(isFavourite),
@@ -351,6 +433,7 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         body: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
           padding: EdgeInsets.only(
             left: 16, right: 16, top: 8,
             bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
@@ -358,7 +441,7 @@ class _DetailScreenState extends State<DetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (ctx != null) _buildHeaderBlock(ctx, percentChange),
+              if (ctx != null) _buildHeaderBlock(ctx, pct24h, pctRef),
               if (ctx != null) const SizedBox(height: 12),
               Text(
                 _timeRangeLabel(),
@@ -368,20 +451,22 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              SizedBox(
-                height: 360,
-                child: _isLoadingTf
-                  ? const Center(child: CircularProgressIndicator())
-                  : InteractiveChart(
-                      series: series,
-                      config: _chartConfig,
-                      onConfigChanged: _saveChartConfig,
-                      eventsViewModel: widget.eventsViewModel,
-                      onNavigateToEvent: _navigateToEventsList,
-                      warmupCount: _warmupCount,
-                      initialVisibleCount: widget.initialVisibleCount,
-                    ),
-              ),
+              if (_isLoadingTf)
+                const SizedBox(
+                  height: 360,
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else
+                InteractiveChart(
+                  series: series,
+                  config: _chartConfig,
+                  onConfigChanged: _saveChartConfig,
+                  eventsViewModel: widget.eventsViewModel,
+                  onNavigateToEvent: _navigateToEventsList,
+                  warmupCount: _warmupCount,
+                  initialVisibleCount: widget.initialVisibleCount,
+                  referenceStartIndex: _referenceStartIndex,
+                ),
             // Event overlay controls
             if (widget.eventsViewModel != null) ...[
               const SizedBox(height: 8),
@@ -398,19 +483,57 @@ class _DetailScreenState extends State<DetailScreen> {
               onAddCustom: _showCustomExchangeForm,
               onEditCustom: _showCustomExchangeForm,
             ),
-            if (percentChange != null) ...[
+            if (pct24h != null || pctRef != null) ...[
               const SizedBox(height: 12),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    '${percentChange > 0 ? '+' : ''}${percentChange.toStringAsFixed(2)}%',
-                    style: TextStyle(
-                      color: percentChange > 0 ? Colors.green : Colors.red,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
+                  // 24h percentage
+                  if (pct24h != null) ...[
+                    Text(
+                      '${pct24h > 0 ? '+' : ''}${pct24h.toStringAsFixed(2)}%',
+                      style: TextStyle(
+                        color: pct24h > 0 ? Colors.green : (pct24h < 0 ? Colors.red : Colors.grey),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 2),
+                    GestureDetector(
+                      onTap: () => _showInfoDialog(
+                        title: '24h Change',
+                        body: 'Percentage change over the last 24 hours.',
+                      ),
+                      child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                    ),
+                  ],
+                  // Divider
+                  if (pct24h != null && pctRef != null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8),
+                      child: Text('|', style: TextStyle(color: Colors.white24, fontSize: 16)),
+                    ),
+                  // Reference area percentage
+                  if (pctRef != null) ...[
+                    Text(
+                      '${pctRef > 0 ? '+' : ''}${pctRef.toStringAsFixed(2)}%',
+                      style: TextStyle(
+                        color: pctRef > 0 ? Colors.green : (pctRef < 0 ? Colors.red : Colors.grey),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    GestureDetector(
+                      onTap: () => _showInfoDialog(
+                        title: 'Reference Area',
+                        body: 'Percentage change across the reference area '
+                            '(green line on time axis) — same window as the '
+                            'overview sparkline you tapped on.',
+                      ),
+                      child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                    ),
+                  ],
+                  const Spacer(),
                   Text(
                     candles.last.close.toStringAsFixed(2),
                     style: const TextStyle(
@@ -503,7 +626,7 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _buildHeaderBlock(DetailContext ctx, double? percentChange) {
+  Widget _buildHeaderBlock(DetailContext ctx, double? pct24h, double? pctRef) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -517,15 +640,25 @@ class _DetailScreenState extends State<DetailScreen> {
         const SizedBox(height: 4),
         Row(
           children: [
-            if (percentChange != null)
+            if (pct24h != null)
               Text(
-                '24h Change: ${percentChange > 0 ? '+' : ''}${percentChange.toStringAsFixed(1)}%',
+                '24h: ${pct24h > 0 ? '+' : ''}${pct24h.toStringAsFixed(1)}%',
                 style: TextStyle(
-                  color: percentChange > 0 ? Colors.green : Colors.red,
+                  color: pct24h > 0 ? Colors.green : (pct24h < 0 ? Colors.red : Colors.grey),
                   fontSize: 13,
                 ),
               ),
-            if (percentChange != null) const SizedBox(width: 16),
+            if (pct24h != null && pctRef != null)
+              const Text(' | ', style: TextStyle(color: Colors.white24, fontSize: 13)),
+            if (pctRef != null)
+              Text(
+                'Ref: ${pctRef > 0 ? '+' : ''}${pctRef.toStringAsFixed(1)}%',
+                style: TextStyle(
+                  color: pctRef > 0 ? Colors.green : (pctRef < 0 ? Colors.red : Colors.grey),
+                  fontSize: 12,
+                ),
+              ),
+            const SizedBox(width: 16),
             Text(
               'Vol: ${_formatVolume(ctx.volume)}',
               style: const TextStyle(

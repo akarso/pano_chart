@@ -50,7 +50,7 @@ class HttpEventsApi implements EventsApi {
       queryParameters: queryParams,
     );
 
-    final response = await client.get(uri);
+    final response = await client.get(uri).timeout(const Duration(seconds: 15));
 
     if (response.statusCode != 200) {
       throw HttpEventsApiException(

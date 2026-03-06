@@ -16,7 +16,7 @@ class HttpFearGreedApi implements FearGreedApi {
   @override
   Future<FearGreedData> fetch() async {
     final uri = Uri.parse('$baseUrl/api/v1/fear-greed');
-    final response = await client.get(uri);
+    final response = await client.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) {
       throw HttpFearGreedApiException(
         'Fear & Greed API error: ${response.statusCode}',

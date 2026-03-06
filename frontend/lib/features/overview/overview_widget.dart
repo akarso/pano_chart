@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
+import '../../infrastructure/stablecoin_config.dart';
 import '../bubble_map/bubble_map_screen.dart';
 import '../bubble_map/bubble_map_view_model.dart';
 import '../candles/application/get_candle_series.dart';
@@ -11,6 +12,8 @@ import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
 import '../fear_greed/fear_greed_dialog.dart';
 import '../fear_greed/http_fear_greed_api.dart';
+import '../news/news_list_screen.dart';
+import '../news/news_view_model.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
@@ -28,6 +31,8 @@ class OverviewWidget extends StatefulWidget {
   final PreferencesService? prefs;
   final BubbleMapViewModel? bubbleMapViewModel;
   final FearGreedApi? fearGreedApi;
+  final StablecoinConfig stablecoins;
+  final NewsViewModel? newsViewModel;
 
   const OverviewWidget({
     Key? key,
@@ -37,6 +42,8 @@ class OverviewWidget extends StatefulWidget {
     this.prefs,
     this.bubbleMapViewModel,
     this.fearGreedApi,
+    this.stablecoins = const StablecoinConfig({}),
+    this.newsViewModel,
   }) : super(key: key);
 
   @override
@@ -53,6 +60,8 @@ class OverviewWidgetState extends State<OverviewWidget>
   int _columns = 2;
   String _timeframe = '1h';
   bool _normalizeSparklines = true;
+  bool _hiResSparklines = true;
+  bool _excludeStablecoins = true;
   bool _showFavourites = false;
   Set<String> _favourites = {};
 
@@ -81,6 +90,8 @@ class OverviewWidgetState extends State<OverviewWidget>
       _columns = p.columns;
       _timeframe = p.timeframe;
       _normalizeSparklines = p.normalizeSparklines;
+      _hiResSparklines = p.hiResSparklines;
+      _excludeStablecoins = p.excludeStablecoins;
       _favourites = p.favourites;
 
       // Sync sort, sidewaysAlgo, and sortDirection into the view model
@@ -249,7 +260,7 @@ class OverviewWidgetState extends State<OverviewWidget>
           // Nav bar + overlay unit — bottom border moves with rollout
           Container(
             decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Colors.grey, width: 1)),
+              border: Border(bottom: BorderSide(color: Color(0xFF1A1A2E), width: 1)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -275,7 +286,7 @@ class OverviewWidgetState extends State<OverviewWidget>
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Colors.black, Color(0xFF333333)],
+          colors: [Colors.black, Colors.black],
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -316,7 +327,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                 child: Row(
                   children: [
                     Container(
-                      margin: const EdgeInsets.only(right: 15),
+                      margin: const EdgeInsets.only(right: 14),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(3),
                         child: Image.asset(
@@ -326,15 +337,15 @@ class OverviewWidgetState extends State<OverviewWidget>
                         ),
                       ),
                     ),
-                    const Text(
-                      'Pano Charts',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF00E6C0),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
+                    // const Text(
+                    //   'your\nmissing\nelement',
+                    //   style: TextStyle(
+                    //     fontSize: 6,
+                    //     fontWeight: FontWeight.w700,
+                    //     color: Color(0xFF00E6C0),
+                    //     letterSpacing: 0.5,
+                    //   ),
+                    // ),
                   ],
                 ),
               ),
@@ -395,8 +406,8 @@ class OverviewWidgetState extends State<OverviewWidget>
           ? Container(
               key: ValueKey(_overlay),
               width: double.infinity,
-              decoration: BoxDecoration(
-                color: const Color(0xFF333333).withAlpha((0.9 * 255).round()),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1A1A2E),
               ),
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -504,6 +515,7 @@ class OverviewWidgetState extends State<OverviewWidget>
               size: const Size(double.infinity, 1),
             ),
             const SizedBox(height: 20),
+            // Row 1: Normalize (left) + Direction (right, when visible)
             Row(
               children: [
                 SizedBox(
@@ -553,6 +565,63 @@ class OverviewWidgetState extends State<OverviewWidget>
                     ],
                   ), ctrlFontSize),
                 ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Row 2: Exclude stablecoins (left) + Hi res (right)
+            Row(
+              children: [
+                if (widget.stablecoins.count > 0) ...[
+                  SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: Checkbox(
+                      value: _excludeStablecoins,
+                      onChanged: (v) {
+                        setState(() => _excludeStablecoins = v ?? true);
+                        _prefs?.excludeStablecoins = _excludeStablecoins;
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _excludeStablecoins = !_excludeStablecoins);
+                      _prefs?.excludeStablecoins = _excludeStablecoins;
+                    },
+                    child: Text(
+                      'Exclude stablecoins',
+                      style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                GestureDetector(
+                  onTap: () {
+                    setState(() => _hiResSparklines = !_hiResSparklines);
+                    _prefs?.hiResSparklines = _hiResSparklines;
+                  },
+                  child: Text(
+                    'Hi res',
+                    style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: Checkbox(
+                    value: _hiResSparklines,
+                    onChanged: (v) {
+                      setState(() => _hiResSparklines = v ?? true);
+                      _prefs?.hiResSparklines = _hiResSparklines;
+                    },
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
               ],
             ),
           ],
@@ -642,6 +711,29 @@ class OverviewWidgetState extends State<OverviewWidget>
               painter: _DottedLinePainter(color: const Color(0xFF666666)),
             ),
           ),
+        if (widget.newsViewModel != null)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => NewsListScreen(
+                    viewModel: widget.newsViewModel!,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.article_outlined, size: 18),
+            label: const Text('News & Updates'),
+          ),
+        if (widget.newsViewModel != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: CustomPaint(
+              size: const Size(double.infinity, 1),
+              painter: _DottedLinePainter(color: const Color(0xFF666666)),
+            ),
+          ),
         TextButton.icon(
           onPressed: () => _showInfoDialog(
             title: 'About',
@@ -700,9 +792,16 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
 
     final allItems = state.items;
-    final visibleItems = _showFavourites
+    var visibleItems = _showFavourites
         ? allItems.where((i) => _favourites.contains(i.symbol)).toList()
         : allItems;
+
+    // Hide stablecoins when the setting is active.
+    if (_excludeStablecoins && widget.stablecoins.count > 0) {
+      visibleItems = visibleItems
+          .where((i) => !widget.stablecoins.isStablecoin(i.symbol))
+          .toList();
+    }
 
     if (_showFavourites && visibleItems.isEmpty) {
       return const Center(
@@ -743,6 +842,7 @@ class OverviewWidgetState extends State<OverviewWidget>
               item: item,
               columns: _columns,
               normalize: _normalizeSparklines,
+              hiRes: _hiResSparklines,
               globalMaxPct: _globalMaxPctChange(state),
               isFavourite: _favourites.contains(item.symbol),
               sort: state.sort,
@@ -846,6 +946,7 @@ class _OverviewGridItem extends StatelessWidget {
   final OverviewItem item;
   final int columns;
   final bool normalize;
+  final bool hiRes;
   final double globalMaxPct;
   final bool isFavourite;
   final String sort;
@@ -854,6 +955,7 @@ class _OverviewGridItem extends StatelessWidget {
     required this.item,
     required this.columns,
     required this.normalize,
+    this.hiRes = true,
     required this.globalMaxPct,
     this.isFavourite = false,
     required this.sort,
@@ -877,7 +979,9 @@ class _OverviewGridItem extends StatelessWidget {
               children: [
                 Padding(
                   padding: EdgeInsets.all(pad),
-                  child: _buildSparkline(item.sparkline),
+                  child: _buildSparkline(
+                    hiRes ? item.sparkline : _downsample(item.sparkline),
+                  ),
                 ),
                 Positioned(
                   left: pad + 4,
@@ -918,14 +1022,25 @@ class _OverviewGridItem extends StatelessWidget {
                   child: Builder(
                     builder: (_) {
                       final pct = _sparklinePriceChange(item.sparkline);
-                      final sign = pct >= 0 ? '+' : '';
+                      final rounded = pct.toStringAsFixed(1);
+                      // Treat ±0.0 as zero — grey, no sign.
+                      final isZero = rounded == '0.0' || rounded == '-0.0';
+                      final label = isZero
+                          ? '0.0%'
+                          : '${pct >= 0 ? '+' : ''}$rounded%';
+                      final color = isZero
+                          ? Colors.grey
+                          : (pct >= 0 ? Colors.green : Colors.red);
                       return Text(
-                        '$sign${pct.toStringAsFixed(1)}%',
+                        label,
                         style: TextStyle(
                           fontSize: (fontSize * 0.55).clamp(7.0, 11.0),
-                          color: pct >= 0 ? Colors.green : Colors.red,
+                          color: color,
                           fontWeight: FontWeight.w600,
-                          backgroundColor: Colors.black.withAlpha((0.18 * 255).round()),
+                          shadows: const [
+                            Shadow(color: Colors.black, blurRadius: 3),
+                            Shadow(color: Colors.black, blurRadius: 3),
+                          ],
                         ),
                       );
                     },
@@ -943,6 +1058,20 @@ class _OverviewGridItem extends StatelessWidget {
   double _sparklinePriceChange(List<double> sparkline) {
     if (sparkline.length < 2 || sparkline.first == 0) return 0.0;
     return ((sparkline.last - sparkline.first) / sparkline.first) * 100;
+  }
+
+  /// Downsample a sparkline by averaging each pair of adjacent points.
+  static List<double> _downsample(List<double> points) {
+    if (points.length <= 2) return points;
+    final result = <double>[];
+    for (var i = 0; i < points.length - 1; i += 2) {
+      result.add((points[i] + points[i + 1]) / 2);
+    }
+    // If odd number of points, keep the last one.
+    if (points.length.isOdd) {
+      result.add(points.last);
+    }
+    return result;
   }
 
   Widget _buildSparkline(List<double> points) {
@@ -1001,8 +1130,19 @@ class SparklineRenderer extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     if (points.length < 2) return;
 
+    // Use grey when the change rounds to 0.0% to stay coherent
+    // with the percentage label on the card.
+    final pct = points.first == 0
+        ? 0.0
+        : ((points.last - points.first) / points.first) * 100;
+    final rounded = pct.toStringAsFixed(1);
+    final isZero = rounded == '0.0' || rounded == '-0.0';
+    final lineColor = isZero
+        ? Colors.grey
+        : (points.last >= points.first ? Colors.green : Colors.red);
+
     final paint = Paint()
-      ..color = points.last >= points.first ? Colors.green : Colors.red
+      ..color = lineColor
       ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke;
 

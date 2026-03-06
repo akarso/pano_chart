@@ -18,6 +18,7 @@ import (
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/feargreed"
+	"pano_chart/backend/infrastructure/news"
 	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/rankings"
 	"pano_chart/backend/infrastructure/snapshot"
@@ -246,6 +247,14 @@ func main() {
 	fearGreedFetcher := feargreed.NewFetcher(nil, "")
 	fearGreedUC := feargreed.NewRedisCachedFearGreed(fearGreedFetcher, redisClient, 6*time.Hour)
 
+	// --- News use case (filesystem-based, cached 5min) ---
+	newsDir := os.Getenv("NEWS_DIR")
+	if newsDir == "" {
+		newsDir = "./news"
+	}
+	newsRepo := news.NewFsNewsRepository(newsDir, 5*time.Minute)
+	newsUC := usecases.NewGetNews(newsRepo)
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -258,6 +267,9 @@ func main() {
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
 	mux.Handle("/api/v1/fear-greed", adhttp.NewFearGreedHandler(fearGreedUC))
+	mux.Handle("/api/news", adhttp.NewNewsHandler(newsUC))
+	mux.Handle("/api/news/", adhttp.NewNewsHandler(newsUC))
+	log.Println("[main] /api/news endpoint registered")
 	if eventsUC != nil {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")

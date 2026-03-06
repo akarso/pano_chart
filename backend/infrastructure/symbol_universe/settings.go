@@ -9,22 +9,9 @@ const (
 )
 
 // ExcludedSymbols contains symbols that should be filtered out of the
-// trading universe. Stablecoins produce misleading sparklines when
-// normalized and are not meaningful for trading analysis.
-var ExcludedSymbols = map[string]struct{}{
-	"USDCUSDT":  {},
-	"USD1USDT":  {},
-	"FDUSDUSDT": {},
-	"DAIUSDT":   {},
-	"TUSDUSDT":  {},
-	"BUSDUSDT":  {},
-	"USDPUSDT":  {},
-	"EURUSDT":   {},
-	"GBPUSDT":   {},
-	"AEURUSDT":  {},
-	"USTCUSDT":  {},
-	"PYUSDUSDT": {},
-}
+// trading universe. Now empty — stablecoin filtering is handled on the
+// frontend via assets/stablecoins.yaml and a user-togglable checkbox.
+var ExcludedSymbols = map[string]struct{}{}
 
 // BuildBinanceURLs builds exchangeInfo and ticker URLs from a base URL.
 // If base is empty, DefaultBinanceAPIBaseURL is used.

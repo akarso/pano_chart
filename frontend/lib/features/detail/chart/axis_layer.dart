@@ -129,6 +129,13 @@ class XAxisLabels extends StatelessWidget {
   final double scrollPixelOffset;
   final String timeframe;
 
+  /// Number of extra candle-width slots beyond [candles.length] for future
+  /// event projection.  When > 0, labels are generated for those slots too.
+  final int futureSlots;
+
+  /// Duration of one candle — used to compute projected timestamps.
+  final Duration? candleDuration;
+
   const XAxisLabels({
     Key? key,
     required this.candles,
@@ -137,6 +144,8 @@ class XAxisLabels extends StatelessWidget {
     required this.candleWidth,
     required this.scrollPixelOffset,
     required this.timeframe,
+    this.futureSlots = 0,
+    this.candleDuration,
   }) : super(key: key);
 
   @override
@@ -146,15 +155,30 @@ class XAxisLabels extends StatelessWidget {
     // Determine label spacing: at least 70px between labels.
     final candlesPerLabel = math.max(1, (70 / candleWidth).ceil());
 
+    // Total slots including future projection.
+    final totalSlots = candles.length + futureSlots;
+    final lastTs = candles.last.timestamp;
+    final dur = candleDuration;
+
     return LayoutBuilder(builder: (context, constraints) {
       final labels = <Widget>[];
 
-      for (var i = startIndex; i < endIndex && i < candles.length;
+      for (var i = startIndex; i < endIndex && i < totalSlots;
           i += candlesPerLabel) {
         final cx = (i - startIndex) * candleWidth +
             candleWidth / 2 -
             scrollPixelOffset;
         if (cx < -30 || cx > constraints.maxWidth + 30) continue;
+
+        // Compute timestamp: real candle or projected future.
+        final DateTime ts;
+        if (i < candles.length) {
+          ts = candles[i].timestamp;
+        } else if (dur != null) {
+          ts = lastTs.add(dur * (i - candles.length + 1));
+        } else {
+          continue;
+        }
 
         labels.add(Positioned(
           left: cx - 25,
@@ -162,7 +186,7 @@ class XAxisLabels extends StatelessWidget {
           child: SizedBox(
             width: 50,
             child: Text(
-              _formatTimestamp(candles[i].timestamp),
+              _formatTimestamp(ts),
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Color(0x73FFFFFF),

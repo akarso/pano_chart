@@ -39,7 +39,7 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   void _loadEvents() {
     final now = DateTime.now().toUtc();
     final from = now.subtract(const Duration(days: 1));
-    final to = now.add(const Duration(days: 1));
+    final to = now.add(const Duration(days: 2));
     final fmt = (DateTime d) =>
         '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
     widget.viewModel

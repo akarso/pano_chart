@@ -191,16 +191,11 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
 
   // ---- navigation ----
 
-  String _detailTimeframe(String overviewTf) {
-    final idx = _timeframes.indexOf(overviewTf);
-    if (idx <= 0) return overviewTf;
-    return _timeframes[idx - 1];
-  }
-
   Future<void> _onBubbleTap(PackedBubble bubble) async {
     final token = bubble.token;
     final now = DateTime.now().toUtc();
-    final detailTf = _detailTimeframe(vm.state.timeframe);
+    // Use the SAME timeframe as the bubble map (not one level down).
+    final detailTf = vm.state.timeframe;
 
     final input = buildDetailChartInput(
       symbol: token.symbol,
@@ -430,33 +425,43 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
 
         final displayBubbles = _physicsBubbles ?? state.bubbles;
 
-        return GestureDetector(
-          onTapDown: (details) {
-            final idx = _hitTest(details.localPosition);
-            if (idx != _highlightIndex) {
-              setState(() => _highlightIndex = idx);
-            }
-          },
-          onTapUp: (details) {
-            final idx = _hitTest(details.localPosition);
-            if (idx >= 0) {
-              _onBubbleTap(displayBubbles[idx]);
-            }
-            setState(() => _highlightIndex = -1);
-          },
-          onTapCancel: () {
-            if (_highlightIndex != -1) {
-              setState(() => _highlightIndex = -1);
-            }
-          },
-          child: CustomPaint(
-            size: Size(w, h),
-            painter: BubblePainter(
-              bubbles: displayBubbles,
-              highlightIndex: _highlightIndex,
-              angles: _physicsAngles,
+        return Stack(
+          children: [
+            GestureDetector(
+              onTapDown: (details) {
+                final idx = _hitTest(details.localPosition);
+                if (idx != _highlightIndex) {
+                  setState(() => _highlightIndex = idx);
+                }
+              },
+              onTapUp: (details) {
+                final idx = _hitTest(details.localPosition);
+                if (idx >= 0) {
+                  _onBubbleTap(displayBubbles[idx]);
+                }
+                setState(() => _highlightIndex = -1);
+              },
+              onTapCancel: () {
+                if (_highlightIndex != -1) {
+                  setState(() => _highlightIndex = -1);
+                }
+              },
+              child: CustomPaint(
+                size: Size(w, h),
+                painter: BubblePainter(
+                  bubbles: displayBubbles,
+                  highlightIndex: _highlightIndex,
+                  angles: _physicsAngles,
+                ),
+              ),
             ),
-          ),
+            // Loading overlay when switching timeframe / page
+            if (state.isLoading && state.bubbles.isNotEmpty)
+              Container(
+                color: const Color(0x88000000),
+                child: const Center(child: CircularProgressIndicator()),
+              ),
+          ],
         );
       },
     );

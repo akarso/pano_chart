@@ -7,7 +7,8 @@ import '../candles/application/get_candle_series_input.dart';
 /// accuracy regardless of entry point.
 
 /// Number of candles the sparkline covers — used as `initialVisibleCount`.
-const int kSparklineCandles = 30;
+/// Matches the backend precision (110 candles for the rankings sparkline).
+const int kSparklineCandles = 110;
 
 /// Extra candles fetched purely for indicator warmup (EMA, RSI, ATR).
 /// These candles are hidden — the user cannot scroll past them.
@@ -26,17 +27,17 @@ const List<String> kTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
 Duration maxProjectionWindow(String tf) {
   switch (tf) {
     case '1m':
-      return const Duration(hours: 4);
+      return const Duration(hours: 1);
     case '5m':
-      return const Duration(hours: 4);
+      return const Duration(hours: 2);
     case '15m':
       return const Duration(hours: 6);
     case '1h':
       return const Duration(hours: 24);
     case '4h':
-      return const Duration(hours: 48);
+      return const Duration(days: 2);
     case '1d':
-      return const Duration(days: 3);
+      return const Duration(days: 2);
     default:
       return const Duration(hours: 24);
   }

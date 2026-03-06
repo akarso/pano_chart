@@ -35,6 +35,11 @@ class InteractiveChart extends StatefulWidget {
   /// Number of candles to fill the viewport width initially.
   final int initialVisibleCount;
 
+  /// Absolute candle index where the reference area (overview sparkline)
+  /// starts.  A green line is drawn above the X-axis from this index to
+  /// the last candle.  `null` hides the reference line.
+  final int? referenceStartIndex;
+
   const InteractiveChart({
     Key? key,
     required this.series,
@@ -45,6 +50,7 @@ class InteractiveChart extends StatefulWidget {
     this.height = 360,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
+    this.referenceStartIndex,
   }) : super(key: key);
 
   @override
@@ -142,9 +148,17 @@ class _InteractiveChartState extends State<InteractiveChart> {
     return (_scrollOffset - _scrollOffset.floor()) * _candleWidth;
   }
 
-  /// Effective warmup clamped to available candle count.
-  int get _effectiveWarmup =>
-      math.min(widget.warmupCount, widget.series.candles.length - 1);
+  /// Effective warmup clamped so that at least a handful of candles remain
+  /// visible.  For very short series (fresh tokens) the warmup is reduced
+  /// to zero rather than hiding nearly every candle.
+  int get _effectiveWarmup {
+    final total = widget.series.candles.length;
+    final raw = widget.warmupCount;
+    if (raw <= 0 || total <= 1) return 0;
+    // Reserve at least 2 candles (or the full series if tiny) for display.
+    final minVisible = total < 10 ? total : 10;
+    return math.max(0, math.min(raw, total - minVisible));
+  }
 
   void _clampScroll(double viewportWidth) {
     final maxScroll = (widget.series.candles.length + _futureSlots) -
@@ -156,40 +170,45 @@ class _InteractiveChartState extends State<InteractiveChart> {
     );
   }
 
-  /// Number of extra candle-width slots appended to the right for future
-  /// event projection. Zero when no future events exist.
+  /// Number of extra candle-width slots appended to the right for the
+  /// future event projection zone.  Always shows the full projection
+  /// window when events are enabled so users know the zone exists.
   int get _futureSlots {
     final evm = widget.eventsViewModel;
     if (evm == null || !evm.state.showEvents) return 0;
     final candles = widget.series.candles;
     if (candles.isEmpty) return 0;
 
+    final tf = widget.series.timeframe;
+    final maxSlots = maxProjectionSlots(tf);
+    if (maxSlots <= 0) return 0;
+
+    // Always show the full projection window with right padding.
+    final yAxisSlots = (_yAxisW / _candleWidth).ceil() + 1;
+    final minPad = math.max(yAxisSlots, 3);
+    return maxSlots + minPad;
+  }
+
+  /// Whether any future event markers exist in the current projection.
+  bool get _hasFutureEvents {
+    final evm = widget.eventsViewModel;
+    if (evm == null || !evm.state.showEvents) return false;
+    final candles = widget.series.candles;
+    if (candles.isEmpty) return false;
+
     final lastTs = candles.last.timestamp;
     final tf = widget.series.timeframe;
     final dur = candleDuration(tf);
     final maxSlots = maxProjectionSlots(tf);
-    if (maxSlots <= 0 || dur.inMilliseconds <= 0) return 0;
+    if (maxSlots <= 0 || dur.inMilliseconds <= 0) return false;
 
-    final events = evm.state.filteredEvents;
     final maxTs = lastTs.add(dur * maxSlots);
-
-    // Find the furthest future event within the projection window.
-    int furthestSlot = 0;
-    for (final e in events) {
-      if (!e.timestamp.isAfter(lastTs)) continue;
-      if (e.timestamp.isAfter(maxTs)) continue;
-      final diff = e.timestamp.difference(lastTs);
-      final slot =
-          (diff.inMilliseconds / dur.inMilliseconds).ceil();
-      if (slot > furthestSlot) furthestSlot = slot;
+    for (final e in evm.state.filteredEvents) {
+      if (e.timestamp.isAfter(lastTs) && !e.timestamp.isAfter(maxTs)) {
+        return true;
+      }
     }
-
-    if (furthestSlot <= 0) return 0;
-    // Ensure enough right padding so future markers are not hidden behind
-    // the Y-axis price labels overlay (_yAxisW = 44px).
-    final yAxisSlots = (_yAxisW / _candleWidth).ceil() + 1;
-    final minPad = math.max(yAxisSlots, 3);
-    return furthestSlot + math.max(minPad, (furthestSlot * 0.1).ceil());
+    return false;
   }
 
   // ── gesture handling ──
@@ -290,7 +309,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
     final volumeH = hasOscillator ? widget.height * 0.14 : widget.height * 0.22;
     final oscH = hasOscillator ? widget.height * 0.22 : 0.0;
     final xAxisH = 18.0;
-    final totalH = priceH + volumeH + oscH + xAxisH;
+    final totalH = priceH + volumeH + oscH + xAxisH + 20; // extra bottom padding for gesture zone
 
     return SizedBox(
       height: totalH,
@@ -381,17 +400,18 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                   ),
 
-                  // ── Event overlay ──
+                  // ── Event overlay (full height so future dashed lines reach x-axis) ──
                   if (widget.eventsViewModel != null &&
                       widget.eventsViewModel!.state.showEvents)
                     Positioned(
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH,
+                      height: priceH + volumeH + oscH + xAxisH,
                       child: ChartEventOverlay(
                         markers: _buildEventMarkers(chartW),
                         onNavigateToEvent: widget.onNavigateToEvent,
+                        priceAreaHeight: priceH,
                       ),
                     ),
 
@@ -473,13 +493,36 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       child: XAxisLabels(
                         candles: candles,
                         startIndex: start,
-                        endIndex: end,
+                        endIndex: end + _futureSlots,
                         candleWidth: _candleWidth,
                         scrollPixelOffset: pixOff,
                         timeframe: widget.series.timeframe,
+                        futureSlots: _futureSlots,
+                        candleDuration: candleDuration(widget.series.timeframe),
                       ),
                     ),
                   ),
+
+                  // ── Reference area green line (just above X-axis) ──
+                  if (widget.referenceStartIndex != null)
+                    Positioned(
+                      left: 0,
+                      top: priceH + volumeH + oscH - 2,
+                      width: chartW,
+                      height: 3,
+                      child: IgnorePointer(
+                        child: CustomPaint(
+                          size: Size(chartW, 3),
+                          painter: _ReferenceLinePainter(
+                            referenceStartIndex: widget.referenceStartIndex!,
+                            referenceEndIndex: candles.length - 1,
+                            visibleStartIndex: start,
+                            candleWidth: _candleWidth,
+                            scrollPixelOffset: pixOff,
+                          ),
+                        ),
+                      ),
+                    ),
 
                   // ── Crosshair overlay ──
                   if (_crosshair != null)
@@ -546,6 +589,25 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           'Hard candle limit reached',
                           style: TextStyle(
                             color: Colors.red.withOpacity(0.7),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // ── Future events placeholder label ──
+                  if (_futureSlots > 0 && !_hasFutureEvents)
+                    Positioned(
+                      // Position at the midpoint of the future zone.
+                      right: _yAxisW + 8,
+                      top: priceH / 2 - 40,
+                      child: Transform.rotate(
+                        angle: math.pi / 2,
+                        child: const Text(
+                          'future events will appear here',
+                          style: TextStyle(
+                            color: Color(0xB3FF0000),
                             fontSize: 9,
                             fontWeight: FontWeight.w500,
                           ),
@@ -694,3 +756,55 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
 /// Which zone of the chart the current gesture started in.
 enum _GestureZone { chart, yAxis, xAxis }
+
+/// Paints a green reference line above the X-axis indicating the overview
+/// sparkline window (the candles the user saw before opening detail).
+class _ReferenceLinePainter extends CustomPainter {
+  final int referenceStartIndex;
+  final int referenceEndIndex;
+  final int visibleStartIndex;
+  final double candleWidth;
+  final double scrollPixelOffset;
+
+  _ReferenceLinePainter({
+    required this.referenceStartIndex,
+    required this.referenceEndIndex,
+    required this.visibleStartIndex,
+    required this.candleWidth,
+    required this.scrollPixelOffset,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final startX = (referenceStartIndex - visibleStartIndex) * candleWidth -
+        scrollPixelOffset;
+    final endX = (referenceEndIndex - visibleStartIndex + 1) * candleWidth -
+        scrollPixelOffset;
+
+    // Only paint the portion that's on screen.
+    final clampedStart = startX.clamp(0.0, size.width);
+    final clampedEnd = endX.clamp(0.0, size.width);
+    if (clampedStart >= clampedEnd) return;
+
+    final paint = Paint()
+      ..color = const Color(0xAA00C853) // green with some alpha
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawLine(
+      Offset(clampedStart, size.height / 2),
+      Offset(clampedEnd, size.height / 2),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ReferenceLinePainter old) {
+    return referenceStartIndex != old.referenceStartIndex ||
+        referenceEndIndex != old.referenceEndIndex ||
+        visibleStartIndex != old.visibleStartIndex ||
+        candleWidth != old.candleWidth ||
+        scrollPixelOffset != old.scrollPixelOffset;
+  }
+}

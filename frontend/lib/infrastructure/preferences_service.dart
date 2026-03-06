@@ -25,6 +25,8 @@ class PreferencesService {
   static const _keySidewaysAlgo = 'settings.sidewaysAlgo';
   static const _keySortDirection = 'settings.sortDirection';
   static const _keyNormalize = 'settings.normalizeSparklines';
+  static const _keyHiRes = 'settings.hiResSparklines';
+  static const _keyExcludeStablecoins = 'settings.excludeStablecoins';
   static const _keyFavourites = 'favourites';
   static const _keyShowEvents = 'settings.showEvents';
   static const _keyEventFilter = 'settings.eventFilter';
@@ -63,6 +65,12 @@ class PreferencesService {
 
   bool get normalizeSparklines => _prefs.getBool(_keyNormalize) ?? true;
   set normalizeSparklines(bool v) => _prefs.setBool(_keyNormalize, v);
+
+  bool get hiResSparklines => _prefs.getBool(_keyHiRes) ?? true;
+  set hiResSparklines(bool v) => _prefs.setBool(_keyHiRes, v);
+
+  bool get excludeStablecoins => _prefs.getBool(_keyExcludeStablecoins) ?? true;
+  set excludeStablecoins(bool v) => _prefs.setBool(_keyExcludeStablecoins, v);
 
   // ---- event overlay settings ----
 

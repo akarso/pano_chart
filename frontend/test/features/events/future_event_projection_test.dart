@@ -26,12 +26,12 @@ void main() {
 
   group('maxProjectionWindow', () {
     test('returns correct windows for all timeframes', () {
-      expect(maxProjectionWindow('1m'), const Duration(hours: 4));
-      expect(maxProjectionWindow('5m'), const Duration(hours: 4));
+      expect(maxProjectionWindow('1m'), const Duration(hours: 1));
+      expect(maxProjectionWindow('5m'), const Duration(hours: 2));
       expect(maxProjectionWindow('15m'), const Duration(hours: 6));
       expect(maxProjectionWindow('1h'), const Duration(hours: 24));
-      expect(maxProjectionWindow('4h'), const Duration(hours: 48));
-      expect(maxProjectionWindow('1d'), const Duration(days: 3));
+      expect(maxProjectionWindow('4h'), const Duration(days: 2));
+      expect(maxProjectionWindow('1d'), const Duration(days: 2));
     });
 
     test('defaults to 24h for unknown timeframe', () {
@@ -44,12 +44,12 @@ void main() {
       expect(maxProjectionSlots('1h'), 24);
     });
 
-    test('1m → 240 slots (4h / 1m)', () {
-      expect(maxProjectionSlots('1m'), 240);
+    test('1m → 60 slots (1h / 1m)', () {
+      expect(maxProjectionSlots('1m'), 60);
     });
 
-    test('5m → 48 slots (4h / 5m)', () {
-      expect(maxProjectionSlots('5m'), 48);
+    test('5m → 24 slots (2h / 5m)', () {
+      expect(maxProjectionSlots('5m'), 24);
     });
 
     test('15m → 24 slots (6h / 15m)', () {
@@ -60,8 +60,8 @@ void main() {
       expect(maxProjectionSlots('4h'), 12);
     });
 
-    test('1d → 3 slots (3d / 1d)', () {
-      expect(maxProjectionSlots('1d'), 3);
+    test('1d → 2 slots (2d / 1d)', () {
+      expect(maxProjectionSlots('1d'), 2);
     });
   });
 

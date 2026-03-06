@@ -5,15 +5,24 @@ import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
 import '../features/overview/overview_widget.dart';
 import '../infrastructure/preferences_service.dart';
+import '../infrastructure/stablecoin_config.dart';
 
 /// Exposed bootstrap function so tests can instantiate the app without side effects.
-Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
-  final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+Widget bootstrapApp({
+  required AppConfig config,
+  PreferencesService? prefs,
+  StablecoinConfig stablecoins = const StablecoinConfig({}),
+}) {
+  final root = CompositionRoot(
+    apiBaseUrl: config.apiBaseUrl,
+    stablecoinPadding: stablecoins.count,
+  );
   final overviewViewModel = root.createOverviewViewModel();
   final getCandleSeries = root.createGetCandleSeries();
   final eventsViewModel = root.createEventsViewModel();
   final bubbleMapViewModel = root.createBubbleMapViewModel();
   final fearGreedApi = root.createFearGreedApi();
+  final newsViewModel = root.createNewsViewModel();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -23,6 +32,8 @@ Widget bootstrapApp({required AppConfig config, PreferencesService? prefs}) {
       prefs: prefs,
       bubbleMapViewModel: bubbleMapViewModel,
       fearGreedApi: fearGreedApi,
+      stablecoins: stablecoins,
+      newsViewModel: newsViewModel,
     ),
   );
   return component.createApp();
@@ -38,8 +49,9 @@ void main() async {
   ));
 
   final prefs = await PreferencesService.create();
+  final stablecoins = await loadStablecoinConfig();
 
   const config = AppConfig(
       apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
-  runApp(bootstrapApp(config: config, prefs: prefs));
+  runApp(bootstrapApp(config: config, prefs: prefs, stablecoins: stablecoins));
 }
