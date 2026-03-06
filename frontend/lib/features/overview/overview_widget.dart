@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../../core/overview_banner.dart';
+import '../../core/sequential_visual_executor.dart';
+import '../../core/sparkline_flash_dot.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../../infrastructure/preferences_service.dart';
@@ -54,7 +58,7 @@ class OverviewWidget extends StatefulWidget {
 enum _OverlayKind { none, settings, menu }
 
 class OverviewWidgetState extends State<OverviewWidget>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final OverviewViewModel vm;
   final ScrollController _scrollController = ScrollController();
   int _columns = 2;
@@ -71,12 +75,52 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Threshold in pixels from bottom to trigger loading more items.
   static const double _scrollThreshold = 200.0;
 
+  // ---- staggered reveal animation ----
+  late SequentialVisualExecutor _revealExecutor;
+  bool _revealPending = false;
+
+  // ---- flash dot state ----
+  /// Previous sparkline last-values, keyed by symbol.
+  /// Captured before refresh so we can compare after.
+  Map<String, double> _previousLastValues = {};
+  /// Per-symbol flash dot animation controllers.
+  final Map<String, AnimationController> _flashControllers = {};
+  /// Per-symbol flash progress (0→1→0 for the flash envelope).
+  final Map<String, double> _flashProgress = {};
+  /// Per-symbol flash color (green / red).
+  final Map<String, Color> _flashColors = {};
+  bool _isRefreshing = false;
+
+  // ---- staleness & banner ----
+  final StalenessTracker _stalenessTracker = StalenessTracker();
+
   PreferencesService? get _prefs => widget.prefs;
 
   @override
   void initState() {
     super.initState();
     vm = widget.viewModel;
+
+    // ---- reveal executor (staggered opacity animation) ----
+    _revealExecutor = SequentialVisualExecutor(
+      config: const SequentialEffectConfig(
+        appearStagger: Duration(milliseconds: 10),
+        animateStagger: Duration(milliseconds: 20),
+        animateDuration: Duration(milliseconds: 300),
+        animateCurve: Curves.easeIn,
+      ),
+      vsync: this,
+      effectBuilder: (child, progress) =>
+          Opacity(opacity: progress, child: child),
+    );
+
+    // ---- staleness tracker ----
+    _stalenessTracker
+      ..setTimeframe(_timeframe)
+      ..onChanged = () {
+        if (mounted) setState(() {});
+      }
+      ..start();
 
     // Attach prefs to view model for offline cache
     vm.attachPrefs(_prefs);
@@ -105,14 +149,48 @@ class OverviewWidgetState extends State<OverviewWidget>
       if (p.sortDirection != vm.state.sortDirection) {
         vm.changeSortDirectionSilent(p.sortDirection);
       }
+
+      _stalenessTracker.setTimeframe(_timeframe);
     }
 
     vm.onChanged = () {
+      // Detect whether this is a successful load (items present, not loading).
+      final st = vm.state;
+      final isOffline = st.error != null &&
+          st.error!.contains('Offline') &&
+          st.items.isNotEmpty;
+      final isSuccessfulLoad =
+          !st.isLoading && st.items.isNotEmpty && st.error == null;
+
+      if (isOffline) {
+        _stalenessTracker.markOffline();
+      } else if (isSuccessfulLoad) {
+        _stalenessTracker.markOnline();
+
+        // Flash dots: compare with previous values.
+        if (_isRefreshing) {
+          _isRefreshing = false;
+          _triggerFlashDots(st.items);
+        }
+      }
+
       setState(() {});
+
       // After new items are rendered, check if we still need more to fill the viewport.
       SchedulerBinding.instance.addPostFrameCallback((_) {
         _checkAndLoadMore();
+        // Trigger staggered reveal for newly-appeared items.
+        if (_revealPending) {
+          _revealPending = false;
+          _executeReveal();
+        }
       });
+
+      // Prepare reveal animation for the new item count.
+      if (!st.isLoading && st.items.isNotEmpty) {
+        _revealExecutor.prepare(st.items.length);
+        _revealPending = true;
+      }
     };
     _scrollController.addListener(_onScroll);
     vm.loadInitial(_timeframe);
@@ -123,6 +201,12 @@ class OverviewWidgetState extends State<OverviewWidget>
     vm.onChanged = null;
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _revealExecutor.dispose();
+    _stalenessTracker.stop();
+    for (final ctrl in _flashControllers.values) {
+      ctrl.dispose();
+    }
+    _flashControllers.clear();
     super.dispose();
   }
 
@@ -140,6 +224,114 @@ class OverviewWidgetState extends State<OverviewWidget>
         vm.loadNext(_timeframe);
       }
     }
+  }
+
+  // ---- reveal animation helpers ----
+
+  /// Computes the indices of items currently visible in the scroll viewport
+  /// and fires the staggered reveal animation for them.
+  void _executeReveal() {
+    if (!_scrollController.hasClients) {
+      // Fallback: animate all items (e.g. first load before scroll attaches).
+      final all = List.generate(vm.state.items.length, (i) => i);
+      _revealExecutor.execute(all, onFrame: () {
+        if (mounted) setState(() {});
+      });
+      return;
+    }
+
+    final viewportTop = _scrollController.position.pixels;
+    final viewportBottom = viewportTop + _scrollController.position.viewportDimension;
+
+    // Estimate visible indices based on grid layout (2.5 aspect ratio, spacing).
+    final spacing = _columns == 3 ? 4.0 : 8.0;
+    final gridWidth = MediaQuery.of(context).size.width - 16; // left+right padding
+    final cellWidth = (gridWidth - spacing * (_columns - 1)) / _columns;
+    final cellHeight = cellWidth / 2.5 + spacing;
+    if (cellHeight <= 0) return;
+
+    final firstVisible = ((viewportTop / cellHeight) * _columns).floor();
+    final lastVisible =
+        ((viewportBottom / cellHeight) * _columns).ceil();
+
+    final total = vm.state.items.length;
+    final indices = <int>[];
+    for (var i = firstVisible.clamp(0, total); i < lastVisible.clamp(0, total); i++) {
+      indices.add(i);
+    }
+    if (indices.isEmpty && total > 0) {
+      // Safety: animate first screenful.
+      for (var i = 0; i < total && i < _columns * 6; i++) {
+        indices.add(i);
+      }
+    }
+
+    _revealExecutor.execute(indices, onFrame: () {
+      if (mounted) setState(() {});
+    });
+  }
+
+  // ---- flash dot helpers ----
+
+  /// Captures the last sparkline value for each currently loaded item
+  /// so we can compare after refresh.
+  void _captureSparklineValues() {
+    _previousLastValues = {};
+    for (final item in vm.state.items) {
+      if (item.sparkline.isNotEmpty) {
+        _previousLastValues[item.symbol] = item.sparkline.last;
+      }
+    }
+  }
+
+  /// After refresh, compares new sparkline last-values with old and
+  /// fires flash dot animations for changed items.
+  void _triggerFlashDots(List<OverviewItem> items) {
+    // Dispose old flash controllers.
+    for (final ctrl in _flashControllers.values) {
+      ctrl.dispose();
+    }
+    _flashControllers.clear();
+    _flashProgress.clear();
+    _flashColors.clear();
+
+    for (var order = 0; order < items.length; order++) {
+      final item = items[order];
+      final prev = _previousLastValues[item.symbol];
+      if (prev == null || item.sparkline.isEmpty) continue;
+      final curr = item.sparkline.last;
+      if (curr == prev) continue;
+
+      final color = curr > prev ? Colors.green : Colors.red;
+      final delay = Duration(milliseconds: 10 * order);
+
+      Future.delayed(delay, () {
+        if (!mounted) return;
+        final ctrl = AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 1000),
+        );
+        _flashControllers[item.symbol] = ctrl;
+        _flashColors[item.symbol] = color;
+
+        ctrl.addListener(() {
+          if (!mounted) return;
+          _flashProgress[item.symbol] = ctrl.value;
+          setState(() {});
+        });
+        ctrl.addStatusListener((status) {
+          if (status == AnimationStatus.completed) {
+            _flashProgress.remove(item.symbol);
+            _flashColors.remove(item.symbol);
+            ctrl.dispose();
+            _flashControllers.remove(item.symbol);
+            if (mounted) setState(() {});
+          }
+        });
+        ctrl.forward();
+      });
+    }
+    _previousLastValues = {};
   }
 
   // ---- overlay helpers ----
@@ -226,6 +418,8 @@ class OverviewWidgetState extends State<OverviewWidget>
   // ---- pull-to-refresh ----
 
   Future<void> _onRefresh() async {
+    _captureSparklineValues();
+    _isRefreshing = true;
     await vm.refresh(_timeframe);
   }
 
@@ -477,6 +671,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                   onChanged: (v) {
                     setState(() => _timeframe = v ?? '1h');
                     _prefs?.timeframe = _timeframe;
+                    _stalenessTracker.setTimeframe(_timeframe);
                     vm.loadInitial(_timeframe);
                   },
                 ), ctrlFontSize),
@@ -643,29 +838,24 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   Widget _buildMenuOverlay() {
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
         if (widget.fearGreedApi != null)
-          TextButton.icon(
-            onPressed: () {
+          _menuRow(
+            icon: Icons.speed,
+            label: 'Fear & Greed',
+            onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               showFearGreedDialog(context, widget.fearGreedApi!);
             },
-            icon: const Icon(Icons.speed, size: 18),
-            label: const Text('Fear & Greed'),
           ),
-        if (widget.fearGreedApi != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: CustomPaint(
-              size: const Size(double.infinity, 1),
-              painter: _DottedLinePainter(color: const Color(0xFF666666)),
-            ),
-          ),
+        if (widget.fearGreedApi != null) _menuDivider(),
         if (widget.bubbleMapViewModel != null)
-          TextButton.icon(
-            onPressed: () {
+          _menuRow(
+            icon: Icons.bubble_chart,
+            label: 'Bubble Map',
+            onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -677,20 +867,13 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ),
               );
             },
-            icon: const Icon(Icons.bubble_chart, size: 18),
-            label: const Text('Bubble Map'),
           ),
-        if (widget.bubbleMapViewModel != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: CustomPaint(
-              size: const Size(double.infinity, 1),
-              painter: _DottedLinePainter(color: const Color(0xFF666666)),
-            ),
-          ),
+        if (widget.bubbleMapViewModel != null) _menuDivider(),
         if (widget.eventsViewModel != null)
-          TextButton.icon(
-            onPressed: () {
+          _menuRow(
+            icon: Icons.public,
+            label: 'Macro Events',
+            onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -700,20 +883,13 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ),
               );
             },
-            icon: const Icon(Icons.public, size: 18),
-            label: const Text('Macro Events'),
           ),
-        if (widget.eventsViewModel != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: CustomPaint(
-              size: const Size(double.infinity, 1),
-              painter: _DottedLinePainter(color: const Color(0xFF666666)),
-            ),
-          ),
+        if (widget.eventsViewModel != null) _menuDivider(),
         if (widget.newsViewModel != null)
-          TextButton.icon(
-            onPressed: () {
+          _menuRow(
+            icon: Icons.article_outlined,
+            label: 'News & Updates',
+            onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -723,44 +899,64 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ),
               );
             },
-            icon: const Icon(Icons.article_outlined, size: 18),
-            label: const Text('News & Updates'),
           ),
-        if (widget.newsViewModel != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: CustomPaint(
-              size: const Size(double.infinity, 1),
-              painter: _DottedLinePainter(color: const Color(0xFF666666)),
-            ),
-          ),
-        TextButton.icon(
-          onPressed: () => _showInfoDialog(
+        if (widget.newsViewModel != null) _menuDivider(),
+        _menuRow(
+          icon: Icons.info_outline,
+          label: 'About',
+          onTap: () => _showInfoDialog(
             title: 'About',
             body: 'Simple market screener app showcasing a custom technical analysis algorithm. '
                 'Built, because I was lacking exactly such a set of tools for my own trading decisions. ',
           ),
-          icon: const Icon(Icons.info_outline, size: 18),
-          label: const Text('About'),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: CustomPaint(
-            size: const Size(double.infinity, 1),
-            painter: _DottedLinePainter(color: const Color(0xFF666666)),
-          ),
-        ),
-        TextButton.icon(
-          onPressed: () => _showInfoDialog(
+        _menuDivider(),
+        _menuRow(
+          icon: Icons.help_outline,
+          label: 'Help',
+          onTap: () => _showInfoDialog(
             title: 'Help',
             body:
                 'Pull down to refresh data. Tap on any chart to see detailed view with score breakdown and more info. '
                 'Scroll to load more items (max 150 tickers). Use settings to change sort, timeframe, and other options.',
           ),
-          icon: const Icon(Icons.help_outline, size: 18),
-          label: const Text('Help'),
         ),
       ],
+    );
+  }
+
+  /// Full-width tappable menu row.
+  Widget _menuRow({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: Colors.white70),
+            const SizedBox(width: 12),
+            Text(
+              label,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _menuDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: CustomPaint(
+        size: const Size(double.infinity, 1),
+        painter: _DottedLinePainter(color: const Color(0xFF666666)),
+      ),
     );
   }
 
@@ -814,42 +1010,56 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
 
     final spacing = _columns == 3 ? 4.0 : 8.0;
-    return RefreshIndicator(
-      onRefresh: _onRefresh,
-      child: GridView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        controller: _scrollController,
-        padding: EdgeInsets.only(
-          left: 8, right: 8, top: 8,
-          bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
-        ),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: _columns,
-          crossAxisSpacing: spacing,
-          mainAxisSpacing: spacing,
-          childAspectRatio: 2.5,
-        ),
-        itemCount: visibleItems.length +
-            (!_showFavourites && state.hasMore ? 1 : 0),
-        itemBuilder: (context, index) {
-          if (index >= visibleItems.length) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final item = visibleItems[index];
-          return GestureDetector(
-            onTap: () => _onItemTapped(item),
-            child: _OverviewGridItem(
-              item: item,
-              columns: _columns,
-              normalize: _normalizeSparklines,
-              hiRes: _hiResSparklines,
-              globalMaxPct: _globalMaxPctChange(state),
-              isFavourite: _favourites.contains(item.symbol),
-              sort: state.sort,
+    final banner = OverviewBanner(kind: _stalenessTracker.kind);
+
+    return Column(
+      children: [
+        banner,
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _onRefresh,
+            child: GridView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              controller: _scrollController,
+              padding: EdgeInsets.only(
+                left: 8, right: 8, top: 8,
+                bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
+              ),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: _columns,
+                crossAxisSpacing: spacing,
+                mainAxisSpacing: spacing,
+                childAspectRatio: 2.5,
+              ),
+              itemCount: visibleItems.length +
+                  (!_showFavourites && state.hasMore ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (index >= visibleItems.length) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final item = visibleItems[index];
+                Widget child = GestureDetector(
+                  onTap: () => _onItemTapped(item),
+                  child: _OverviewGridItem(
+                    item: item,
+                    columns: _columns,
+                    normalize: _normalizeSparklines,
+                    hiRes: _hiResSparklines,
+                    globalMaxPct: _globalMaxPctChange(state),
+                    isFavourite: _favourites.contains(item.symbol),
+                    sort: state.sort,
+                    flashDotProgress: _flashProgress[item.symbol],
+                    flashDotColor: _flashColors[item.symbol],
+                  ),
+                );
+                // Apply staggered reveal animation.
+                child = _revealExecutor.buildChild(index, child);
+                return child;
+              },
             ),
-          );
-        },
-      ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -950,6 +1160,8 @@ class _OverviewGridItem extends StatelessWidget {
   final double globalMaxPct;
   final bool isFavourite;
   final String sort;
+  final double? flashDotProgress;
+  final Color? flashDotColor;
 
   const _OverviewGridItem({
     required this.item,
@@ -959,6 +1171,8 @@ class _OverviewGridItem extends StatelessWidget {
     required this.globalMaxPct,
     this.isFavourite = false,
     required this.sort,
+    this.flashDotProgress,
+    this.flashDotColor,
   });
 
   @override
@@ -1076,7 +1290,7 @@ class _OverviewGridItem extends StatelessWidget {
 
   Widget _buildSparkline(List<double> points) {
     if (points.isEmpty) return const Center(child: Text('No data'));
-    return CustomPaint(
+    final sparklinePaint = CustomPaint(
       painter: SparklineRenderer(
         points,
         normalize: normalize,
@@ -1084,6 +1298,29 @@ class _OverviewGridItem extends StatelessWidget {
       ),
       size: Size.infinite,
     );
+
+    // Overlay flash dot if active.
+    if (flashDotProgress != null &&
+        flashDotColor != null &&
+        flashDotProgress! > 0) {
+      return Stack(
+        children: [
+          sparklinePaint,
+          Positioned.fill(
+            child: CustomPaint(
+              painter: SparklineFlashDotPainter(
+                color: flashDotColor!,
+                progress: flashDotProgress!,
+                points: points,
+                normalize: normalize,
+                globalMaxPct: globalMaxPct,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+    return sparklinePaint;
   }
 
 

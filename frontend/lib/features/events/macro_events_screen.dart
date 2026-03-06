@@ -61,6 +61,9 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   void _scrollToInitialPosition() {
     if (_hasScrolled || !mounted) return;
     final state = widget.viewModel.state;
+    // Wait until loading finishes so we scroll on fresh data,
+    // not stale events left over from a previous screen.
+    if (state.isLoading) return;
     final filtered = List<Event>.of(state.macroFilteredEvents)
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
     if (filtered.isEmpty) return;
