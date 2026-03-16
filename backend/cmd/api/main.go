@@ -346,6 +346,11 @@ func main() {
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 
+	// --- Market regime detector ---
+	metricsService := metrics.NewMetricsService(compositeService, candleProvider, evalProvider)
+	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
+	log.Println("[main] Market regime detector initialized")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -373,8 +378,10 @@ func main() {
 	}
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
+	mux.Handle("/api/market/regime", regimeHandler)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
+	log.Println("[main] /api/market/regime endpoint registered")
 	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
 
 	c := cors.New(cors.Options{

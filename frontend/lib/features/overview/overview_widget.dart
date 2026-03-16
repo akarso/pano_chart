@@ -18,6 +18,7 @@ import '../fear_greed/fear_greed_dialog.dart';
 import '../fear_greed/http_fear_greed_api.dart';
 import '../market_state/http_composite_index_api.dart';
 import '../market_state/http_market_state_api.dart';
+import '../market_state/http_regime_api.dart';
 import '../market_state/market_pulse_screen.dart';
 import '../billing/billing_manager.dart';
 import '../billing/upgrade_screen.dart';
@@ -43,6 +44,7 @@ class OverviewWidget extends StatefulWidget {
   final FearGreedApi? fearGreedApi;
   final MarketStateApi? marketStateApi;
   final CompositeIndexApi? compositeIndexApi;
+  final RegimeApi? regimeApi;
   final StablecoinConfig stablecoins;
   final NewsViewModel? newsViewModel;
   final BillingManager? billingManager;
@@ -57,6 +59,7 @@ class OverviewWidget extends StatefulWidget {
     this.fearGreedApi,
     this.marketStateApi,
     this.compositeIndexApi,
+    this.regimeApi,
     this.stablecoins = const StablecoinConfig({}),
     this.newsViewModel,
     this.billingManager,
@@ -824,6 +827,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                   builder: (_) => MarketPulseScreen(
                     marketStateApi: widget.marketStateApi!,
                     compositeIndexApi: widget.compositeIndexApi!,
+                    regimeApi: widget.regimeApi,
                   ),
                 ),
               );

@@ -3,18 +3,22 @@ import 'package:flutter/material.dart';
 import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
+import 'http_regime_api.dart';
 import 'market_state_data.dart';
+import 'regime_data.dart';
 
 /// Full-page Market Pulse screen showing market state, breadth, and
 /// composite index chart. Designed for extensibility with future stats.
 class MarketPulseScreen extends StatefulWidget {
   final MarketStateApi marketStateApi;
   final CompositeIndexApi compositeIndexApi;
+  final RegimeApi? regimeApi;
 
   const MarketPulseScreen({
     Key? key,
     required this.marketStateApi,
     required this.compositeIndexApi,
+    this.regimeApi,
   }) : super(key: key);
 
   @override
@@ -24,6 +28,7 @@ class MarketPulseScreen extends StatefulWidget {
 class _MarketPulseScreenState extends State<MarketPulseScreen> {
   MarketStateData? _stateData;
   CompositeIndexData? _compositeData;
+  RegimeData? _regimeData;
   String? _error;
   bool _loading = true;
 
@@ -39,14 +44,20 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       _error = null;
     });
     try {
-      final results = await Future.wait([
+      final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: '4h'),
         widget.compositeIndexApi.fetch(timeframe: '4h', limit: 200),
-      ]);
+        if (widget.regimeApi != null)
+          widget.regimeApi!.fetch(timeframe: '4h'),
+      ];
+      final results = await Future.wait(futures);
       if (!mounted) return;
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
+        if (results.length > 2) {
+          _regimeData = results[2] as RegimeData;
+        }
         _loading = false;
       });
     } catch (e) {
@@ -114,10 +125,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
-          if (_stateData != null) _buildStateCard(_stateData!),
+          if (_regimeData != null) _buildRegimeCard(_regimeData!)
+          else if (_stateData != null) _buildStateCard(_stateData!),
           const SizedBox(height: 16),
           if (_compositeData != null) _buildCompositeCard(_compositeData!),
           const SizedBox(height: 16),
+          if (_regimeData != null) _buildMetricsCard(_regimeData!),
+          if (_regimeData != null) const SizedBox(height: 16),
           if (_stateData != null) _buildBreadthCard(_stateData!),
           const SizedBox(height: 32),
         ],
@@ -125,7 +139,128 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  // ---------- Market State Card ----------
+  // ---------- Regime Card ----------
+
+  Widget _buildRegimeCard(RegimeData data) {
+    final color = _regimeColor(data.regime);
+    final pct = (data.confidence * 100).toStringAsFixed(1);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(_regimeIcon(data.regime), color: color, size: 28),
+              const SizedBox(width: 8),
+              Text(
+                data.regime.toUpperCase(),
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '$pct% confidence  •  ${data.timeframe}',
+            style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- Metrics Card ----------
+
+  Widget _buildMetricsCard(RegimeData data) {
+    final m = data.metrics;
+    final volLabel = _volatilityLabel(m.volatilityExpansion);
+    final dispLabel = _dispersionLabel(m.dispersion);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Market Metrics',
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _metricRow('Volatility', volLabel,
+              _volatilityColor(m.volatilityExpansion)),
+          const SizedBox(height: 8),
+          _metricRow('Dispersion', dispLabel,
+              _dispersionColor(m.dispersion)),
+          const SizedBox(height: 8),
+          _metricRow(
+            'Trend Breadth',
+            '${(m.trendBreadth * 100).toStringAsFixed(1)}%',
+            Colors.tealAccent,
+          ),
+          const SizedBox(height: 8),
+          _metricRow(
+            'Compression Breadth',
+            '${(m.compressionBreadth * 100).toStringAsFixed(1)}%',
+            Colors.amber,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metricRow(String label, String value, Color color) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label,
+            style: const TextStyle(fontSize: 13, color: Colors.white70)),
+        Text(value, style: TextStyle(fontSize: 13, color: color)),
+      ],
+    );
+  }
+
+  String _volatilityLabel(double v) {
+    if (v > 1.3) return 'high';
+    if (v < 0.8) return 'low';
+    return 'normal';
+  }
+
+  Color _volatilityColor(double v) {
+    if (v > 1.3) return Colors.redAccent;
+    if (v < 0.8) return Colors.blueGrey;
+    return Colors.grey;
+  }
+
+  String _dispersionLabel(double d) {
+    if (d > 0.05) return 'high';
+    if (d < 0.02) return 'low';
+    return 'moderate';
+  }
+
+  Color _dispersionColor(double d) {
+    if (d > 0.05) return Colors.orangeAccent;
+    if (d < 0.02) return Colors.blueGrey;
+    return Colors.grey;
+  }
+
+  // ---------- Market State Card (fallback when no regime API) ----------
 
   Widget _buildStateCard(MarketStateData data) {
     final color = _stateColor(data.state);
@@ -322,6 +457,36 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Icons.open_in_full;
       case 'trend':
         return Icons.trending_up;
+      default:
+        return Icons.help_outline;
+    }
+  }
+
+  Color _regimeColor(String regime) {
+    switch (regime) {
+      case 'compression':
+        return Colors.amber;
+      case 'sideways':
+        return Colors.blueGrey;
+      case 'trend':
+        return Colors.tealAccent;
+      case 'expansion':
+        return Colors.redAccent;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  IconData _regimeIcon(String regime) {
+    switch (regime) {
+      case 'compression':
+        return Icons.compress;
+      case 'sideways':
+        return Icons.swap_horiz;
+      case 'trend':
+        return Icons.trending_up;
+      case 'expansion':
+        return Icons.open_in_full;
       default:
         return Icons.help_outline;
     }

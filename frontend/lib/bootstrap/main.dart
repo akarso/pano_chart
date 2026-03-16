@@ -28,6 +28,7 @@ Widget bootstrapApp({
   final fearGreedApi = root.createFearGreedApi();
   final marketStateApi = root.createMarketStateApi();
   final compositeIndexApi = root.createCompositeIndexApi();
+  final regimeApi = root.createRegimeApi();
   final newsViewModel = root.createNewsViewModel();
   final component = AppComponent(
     config,
@@ -40,6 +41,7 @@ Widget bootstrapApp({
       fearGreedApi: fearGreedApi,
       marketStateApi: marketStateApi,
       compositeIndexApi: compositeIndexApi,
+      regimeApi: regimeApi,
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
       billingManager: billingManager,
