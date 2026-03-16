@@ -27,6 +27,7 @@ Widget bootstrapApp({
   final bubbleMapViewModel = root.createBubbleMapViewModel();
   final fearGreedApi = root.createFearGreedApi();
   final marketStateApi = root.createMarketStateApi();
+  final compositeIndexApi = root.createCompositeIndexApi();
   final newsViewModel = root.createNewsViewModel();
   final component = AppComponent(
     config,
@@ -38,6 +39,7 @@ Widget bootstrapApp({
       bubbleMapViewModel: bubbleMapViewModel,
       fearGreedApi: fearGreedApi,
       marketStateApi: marketStateApi,
+      compositeIndexApi: compositeIndexApi,
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
       billingManager: billingManager,

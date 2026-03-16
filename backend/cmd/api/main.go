@@ -14,6 +14,7 @@ import (
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
 	appmarket "pano_chart/backend/application/market"
+	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
@@ -335,6 +336,16 @@ func main() {
 	marketHandler := adhttp.NewMarketHandler(marketService)
 	log.Println("[main] Market state service initialized")
 
+	// --- Market composite index ---
+	candleProvider := market.NewCompositeCandleProvider(
+		cachedUniverse, candleRepo, exchangeInfoURL, tickerURL,
+	)
+	compositeService := metrics.NewCompositeIndexService(candleProvider, rankingWorkers)
+	compositeCacheTTL := 45 * time.Second
+	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite")
+	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
+	log.Println("[main] Market composite index service initialized")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -361,7 +372,9 @@ func main() {
 		log.Println("[main] /api/sol/price endpoint registered")
 	}
 	mux.Handle("/api/market/state", marketHandler)
+	mux.Handle("/api/market/composite", compositeHandler)
 	log.Println("[main] /api/market/state endpoint registered")
+	log.Println("[main] /api/market/composite endpoint registered")
 	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
 
 	c := cors.New(cors.Options{

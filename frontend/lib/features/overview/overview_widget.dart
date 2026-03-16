@@ -16,8 +16,9 @@ import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
 import '../fear_greed/fear_greed_dialog.dart';
 import '../fear_greed/http_fear_greed_api.dart';
+import '../market_state/http_composite_index_api.dart';
 import '../market_state/http_market_state_api.dart';
-import '../market_state/market_state_dialog.dart';
+import '../market_state/market_pulse_screen.dart';
 import '../billing/billing_manager.dart';
 import '../billing/upgrade_screen.dart';
 import '../news/news_list_screen.dart';
@@ -41,6 +42,7 @@ class OverviewWidget extends StatefulWidget {
   final BubbleMapViewModel? bubbleMapViewModel;
   final FearGreedApi? fearGreedApi;
   final MarketStateApi? marketStateApi;
+  final CompositeIndexApi? compositeIndexApi;
   final StablecoinConfig stablecoins;
   final NewsViewModel? newsViewModel;
   final BillingManager? billingManager;
@@ -54,6 +56,7 @@ class OverviewWidget extends StatefulWidget {
     this.bubbleMapViewModel,
     this.fearGreedApi,
     this.marketStateApi,
+    this.compositeIndexApi,
     this.stablecoins = const StablecoinConfig({}),
     this.newsViewModel,
     this.billingManager,
@@ -813,10 +816,17 @@ class OverviewWidgetState extends State<OverviewWidget>
         if (widget.marketStateApi != null)
           _menuRow(
             icon: Icons.pie_chart,
-            label: 'Market State',
+            label: 'Market Pulse',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
-              showMarketStateDialog(context, widget.marketStateApi!);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => MarketPulseScreen(
+                    marketStateApi: widget.marketStateApi!,
+                    compositeIndexApi: widget.compositeIndexApi!,
+                  ),
+                ),
+              );
             },
           ),
         if (widget.marketStateApi != null) _menuDivider(),

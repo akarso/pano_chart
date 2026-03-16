@@ -13,6 +13,7 @@ import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
 import '../../features/fear_greed/http_fear_greed_api.dart';
+import '../../features/market_state/http_composite_index_api.dart';
 import '../../features/market_state/http_market_state_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
@@ -69,6 +70,11 @@ class CompositionRoot {
   /// Creates a wired MarketStateApi.
   MarketStateApi createMarketStateApi() {
     return HttpMarketStateApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired CompositeIndexApi.
+  CompositeIndexApi createCompositeIndexApi() {
+    return HttpCompositeIndexApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired NewsViewModel backed by the news API.
