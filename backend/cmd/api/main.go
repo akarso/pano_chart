@@ -15,6 +15,7 @@ import (
 	"pano_chart/backend/adapters/infra"
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/market/metrics"
+	"pano_chart/backend/application/market/transition"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
@@ -351,6 +352,12 @@ func main() {
 	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
 	log.Println("[main] Market regime detector initialized")
 
+	// --- Market transition probability engine ---
+	transitionEngine := transition.NewTransitionEngine()
+	transitionService := transition.NewTransitionService(metricsService, transitionEngine)
+	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
+	log.Println("[main] Market transition engine initialized")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -379,9 +386,11 @@ func main() {
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
 	mux.Handle("/api/market/regime", regimeHandler)
+	mux.Handle("/api/market/transition", transitionHandler)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
 	log.Println("[main] /api/market/regime endpoint registered")
+	log.Println("[main] /api/market/transition endpoint registered")
 	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
 
 	c := cors.New(cors.Options{

@@ -4,8 +4,10 @@ import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
+import 'http_transition_api.dart';
 import 'market_state_data.dart';
 import 'regime_data.dart';
+import 'transition_data.dart';
 
 /// Full-page Market Pulse screen showing market state, breadth, and
 /// composite index chart. Designed for extensibility with future stats.
@@ -13,12 +15,14 @@ class MarketPulseScreen extends StatefulWidget {
   final MarketStateApi marketStateApi;
   final CompositeIndexApi compositeIndexApi;
   final RegimeApi? regimeApi;
+  final TransitionApi? transitionApi;
 
   const MarketPulseScreen({
     Key? key,
     required this.marketStateApi,
     required this.compositeIndexApi,
     this.regimeApi,
+    this.transitionApi,
   }) : super(key: key);
 
   @override
@@ -29,6 +33,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   MarketStateData? _stateData;
   CompositeIndexData? _compositeData;
   RegimeData? _regimeData;
+  TransitionData? _transitionData;
   String? _error;
   bool _loading = true;
 
@@ -49,15 +54,26 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         widget.compositeIndexApi.fetch(timeframe: '4h', limit: 200),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: '4h'),
+        if (widget.transitionApi != null)
+          widget.transitionApi!.fetch(timeframe: '4h'),
       ];
       final results = await Future.wait(futures);
       if (!mounted) return;
+      int idx = 2;
+      RegimeData? regime;
+      TransitionData? trans;
+      if (widget.regimeApi != null) {
+        regime = results[idx] as RegimeData;
+        idx++;
+      }
+      if (widget.transitionApi != null) {
+        trans = results[idx] as TransitionData;
+      }
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
-        if (results.length > 2) {
-          _regimeData = results[2] as RegimeData;
-        }
+        _regimeData = regime;
+        _transitionData = trans;
         _loading = false;
       });
     } catch (e) {
@@ -132,6 +148,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           const SizedBox(height: 16),
           if (_regimeData != null) _buildMetricsCard(_regimeData!),
           if (_regimeData != null) const SizedBox(height: 16),
+          if (_transitionData != null) _buildTransitionCard(_transitionData!),
+          if (_transitionData != null) const SizedBox(height: 16),
           if (_stateData != null) _buildBreadthCard(_stateData!),
           const SizedBox(height: 32),
         ],
@@ -258,6 +276,80 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     if (d > 0.05) return Colors.orangeAccent;
     if (d < 0.02) return Colors.blueGrey;
     return Colors.grey;
+  }
+
+  // ---------- Transition Probability Card ----------
+
+  Widget _buildTransitionCard(TransitionData data) {
+    final p = data.probabilities;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Transition Probabilities',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                data.horizon,
+                style: const TextStyle(color: Colors.grey, fontSize: 11),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _probabilityBar('Trend', p.trend, Colors.tealAccent),
+          const SizedBox(height: 8),
+          _probabilityBar('Sideways', p.sideways, Colors.blueGrey),
+          const SizedBox(height: 8),
+          _probabilityBar('Expansion', p.expansion, Colors.redAccent),
+        ],
+      ),
+    );
+  }
+
+  Widget _probabilityBar(String label, double value, Color color) {
+    final pct = (value * 100).toStringAsFixed(0);
+    return Row(
+      children: [
+        SizedBox(
+          width: 80,
+          child: Text(label,
+              style: const TextStyle(fontSize: 13, color: Colors.white70)),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: value,
+              backgroundColor: Colors.white12,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+              minHeight: 8,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 36,
+          child: Text(
+            '$pct%',
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
+            textAlign: TextAlign.right,
+          ),
+        ),
+      ],
+    );
   }
 
   // ---------- Market State Card (fallback when no regime API) ----------

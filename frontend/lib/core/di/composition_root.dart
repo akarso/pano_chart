@@ -16,6 +16,7 @@ import '../../features/fear_greed/http_fear_greed_api.dart';
 import '../../features/market_state/http_composite_index_api.dart';
 import '../../features/market_state/http_market_state_api.dart';
 import '../../features/market_state/http_regime_api.dart';
+import '../../features/market_state/http_transition_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
@@ -81,6 +82,11 @@ class CompositionRoot {
   /// Creates a wired RegimeApi.
   RegimeApi createRegimeApi() {
     return HttpRegimeApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired TransitionApi.
+  TransitionApi createTransitionApi() {
+    return HttpTransitionApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired NewsViewModel backed by the news API.
