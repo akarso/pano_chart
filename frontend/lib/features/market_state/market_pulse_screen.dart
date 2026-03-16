@@ -4,9 +4,11 @@ import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
+import 'http_regime_history_api.dart';
 import 'http_transition_api.dart';
 import 'market_state_data.dart';
 import 'regime_data.dart';
+import 'regime_history_data.dart';
 import 'transition_data.dart';
 
 /// Full-page Market Pulse screen showing market state, breadth, and
@@ -16,6 +18,7 @@ class MarketPulseScreen extends StatefulWidget {
   final CompositeIndexApi compositeIndexApi;
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
+  final RegimeHistoryApi? regimeHistoryApi;
 
   const MarketPulseScreen({
     Key? key,
@@ -23,6 +26,7 @@ class MarketPulseScreen extends StatefulWidget {
     required this.compositeIndexApi,
     this.regimeApi,
     this.transitionApi,
+    this.regimeHistoryApi,
   }) : super(key: key);
 
   @override
@@ -34,6 +38,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   CompositeIndexData? _compositeData;
   RegimeData? _regimeData;
   TransitionData? _transitionData;
+  RegimeHistoryData? _regimeHistoryData;
   String? _error;
   bool _loading = true;
 
@@ -56,24 +61,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           widget.regimeApi!.fetch(timeframe: '4h'),
         if (widget.transitionApi != null)
           widget.transitionApi!.fetch(timeframe: '4h'),
+        if (widget.regimeHistoryApi != null)
+          widget.regimeHistoryApi!.fetch(timeframe: '4h'),
       ];
       final results = await Future.wait(futures);
       if (!mounted) return;
       int idx = 2;
       RegimeData? regime;
       TransitionData? trans;
+      RegimeHistoryData? history;
       if (widget.regimeApi != null) {
         regime = results[idx] as RegimeData;
         idx++;
       }
       if (widget.transitionApi != null) {
         trans = results[idx] as TransitionData;
+        idx++;
+      }
+      if (widget.regimeHistoryApi != null) {
+        history = results[idx] as RegimeHistoryData;
       }
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
         _regimeData = regime;
         _transitionData = trans;
+        _regimeHistoryData = history;
         _loading = false;
       });
     } catch (e) {
@@ -150,6 +163,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           if (_regimeData != null) const SizedBox(height: 16),
           if (_transitionData != null) _buildTransitionCard(_transitionData!),
           if (_transitionData != null) const SizedBox(height: 16),
+          if (_regimeHistoryData != null)
+            _buildRegimeHistoryCard(_regimeHistoryData!),
+          if (_regimeHistoryData != null) const SizedBox(height: 16),
           if (_stateData != null) _buildBreadthCard(_stateData!),
           const SizedBox(height: 32),
         ],
@@ -348,6 +364,110 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
             textAlign: TextAlign.right,
           ),
         ),
+      ],
+    );
+  }
+
+  // ---------- Regime History Card ----------
+
+  Widget _buildRegimeHistoryCard(RegimeHistoryData data) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'Regime History',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'Age: ${data.currentAge} candles',
+                style: const TextStyle(
+                  color: Colors.amberAccent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (data.history.isEmpty)
+            const Text(
+              'No history yet',
+              style: TextStyle(color: Colors.grey, fontSize: 12),
+            )
+          else
+            _buildTimeline(data.history),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimeline(List<RegimePeriodData> periods) {
+    // Show a horizontal regime timeline bar.
+    final totalCandles =
+        periods.fold<int>(0, (sum, p) => sum + p.durationCandles);
+    if (totalCandles == 0) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: SizedBox(
+            height: 12,
+            child: Row(
+              children: periods.map((p) {
+                final flex = math.max(1, p.durationCandles);
+                return Expanded(
+                  flex: flex,
+                  child: Container(color: _regimeColor(p.regime)),
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        ...periods.reversed.take(5).map((p) {
+          final open = p.end == null;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _regimeColor(p.regime),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${p.regime.toUpperCase()} — ${p.durationCandles} candles${open ? '  (active)' : ''}',
+                    style: TextStyle(
+                      color: open ? Colors.white : Colors.white54,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }

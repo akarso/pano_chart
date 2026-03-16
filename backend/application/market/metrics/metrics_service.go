@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"sync"
+	"time"
 
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
@@ -13,12 +14,19 @@ type EvaluationProvider interface {
 	GetLatestEvaluations(timeframe string) ([]domain.EvaluationSnapshot, error)
 }
 
+// RegimeObserver is notified after every regime calculation.
+// The Tracker from the regimehistory package satisfies this interface.
+type RegimeObserver interface {
+	Update(timeframe string, regime mkt.Regime, timestamp int64) error
+}
+
 // MetricsService is the central entry point for all market-level analytics.
 // It shares candle and evaluation data across metrics to avoid duplicate queries.
 type MetricsService struct {
 	compositeService *CompositeIndexService
 	candleProvider   CandleProvider
 	evalProvider     EvaluationProvider
+	observer         RegimeObserver // optional — may be nil
 }
 
 // NewMetricsService constructs the aggregator.
@@ -32,6 +40,11 @@ func NewMetricsService(
 		candleProvider:   cp,
 		evalProvider:     ep,
 	}
+}
+
+// SetObserver attaches a regime observer (e.g. the history tracker).
+func (s *MetricsService) SetObserver(o RegimeObserver) {
+	s.observer = o
 }
 
 // CalculateRegime computes the full regime summary for a timeframe.
@@ -124,6 +137,11 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 	}
 
 	regime, confidence := detectRegime(trendBreadth, compressionBreadth, volExpansion)
+
+	// Notify observer (e.g. regime history tracker) — fire-and-forget.
+	if s.observer != nil {
+		_ = s.observer.Update(timeframe, regime, time.Now().Unix())
+	}
 
 	return mkt.RegimeSummary{
 		Timeframe:  timeframe,

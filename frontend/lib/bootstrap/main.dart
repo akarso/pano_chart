@@ -30,6 +30,7 @@ Widget bootstrapApp({
   final compositeIndexApi = root.createCompositeIndexApi();
   final regimeApi = root.createRegimeApi();
   final transitionApi = root.createTransitionApi();
+  final regimeHistoryApi = root.createRegimeHistoryApi();
   final newsViewModel = root.createNewsViewModel();
   final component = AppComponent(
     config,
@@ -44,6 +45,7 @@ Widget bootstrapApp({
       compositeIndexApi: compositeIndexApi,
       regimeApi: regimeApi,
       transitionApi: transitionApi,
+      regimeHistoryApi: regimeHistoryApi,
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
       billingManager: billingManager,

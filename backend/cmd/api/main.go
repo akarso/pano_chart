@@ -15,6 +15,7 @@ import (
 	"pano_chart/backend/adapters/infra"
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/market/metrics"
+	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
@@ -349,12 +350,29 @@ func main() {
 
 	// --- Market regime detector ---
 	metricsService := metrics.NewMetricsService(compositeService, candleProvider, evalProvider)
+
+	// --- Regime history tracker (SQLite-backed) ---
+	regimeHistoryDBPath := os.Getenv("PC_REGIME_HISTORY_DB")
+	if regimeHistoryDBPath == "" {
+		regimeHistoryDBPath = "./regime_history.sqlite"
+	}
+	regimeHistoryRepo, err := regimehistory.NewSQLiteRepository(regimeHistoryDBPath)
+	if err != nil {
+		log.Fatalf("Failed to open regime history DB: %v", err)
+	}
+	regimeTracker := regimehistory.NewTracker(regimeHistoryRepo)
+	metricsService.SetObserver(regimeTracker)
+	regimeHistoryService := regimehistory.NewService(regimeHistoryRepo)
+	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
+	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
+
 	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
 	log.Println("[main] Market regime detector initialized")
 
 	// --- Market transition probability engine ---
 	transitionEngine := transition.NewTransitionEngine()
 	transitionService := transition.NewTransitionService(metricsService, transitionEngine)
+	transitionService.SetAgeProvider(regimeHistoryService)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
 
@@ -386,10 +404,12 @@ func main() {
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
 	mux.Handle("/api/market/regime", regimeHandler)
+	mux.Handle("/api/market/regime/history", regimeHistoryHandler)
 	mux.Handle("/api/market/transition", transitionHandler)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
 	log.Println("[main] /api/market/regime endpoint registered")
+	log.Println("[main] /api/market/regime/history endpoint registered")
 	log.Println("[main] /api/market/transition endpoint registered")
 	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
 
