@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import '../core/config/config.dart';
 import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
+import '../features/billing/billing_manager.dart';
+import '../features/billing/trial_manager.dart';
 import '../features/overview/overview_widget.dart';
 import '../infrastructure/preferences_service.dart';
 import '../infrastructure/stablecoin_config.dart';
@@ -12,6 +15,7 @@ Widget bootstrapApp({
   required AppConfig config,
   PreferencesService? prefs,
   StablecoinConfig stablecoins = const StablecoinConfig({}),
+  BillingManager? billingManager,
 }) {
   final root = CompositionRoot(
     apiBaseUrl: config.apiBaseUrl,
@@ -22,6 +26,7 @@ Widget bootstrapApp({
   final eventsViewModel = root.createEventsViewModel();
   final bubbleMapViewModel = root.createBubbleMapViewModel();
   final fearGreedApi = root.createFearGreedApi();
+  final marketStateApi = root.createMarketStateApi();
   final newsViewModel = root.createNewsViewModel();
   final component = AppComponent(
     config,
@@ -32,8 +37,10 @@ Widget bootstrapApp({
       prefs: prefs,
       bubbleMapViewModel: bubbleMapViewModel,
       fearGreedApi: fearGreedApi,
+      marketStateApi: marketStateApi,
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
+      billingManager: billingManager,
     ),
   );
   return component.createApp();
@@ -51,7 +58,26 @@ void main() async {
   final prefs = await PreferencesService.create();
   final stablecoins = await loadStablecoinConfig();
 
+  // Billing is only available on Android.
+  BillingManager? billingManager;
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    const config = AppConfig(
+        apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
+    final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+    final trialManager = TrialManager(prefs.sharedPreferences);
+    billingManager = root.createBillingManager(
+      userId: prefs.userId,
+      trialManager: trialManager,
+    );
+    await billingManager.init();
+  }
+
   const config = AppConfig(
       apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
-  runApp(bootstrapApp(config: config, prefs: prefs, stablecoins: stablecoins));
+  runApp(bootstrapApp(
+    config: config,
+    prefs: prefs,
+    stablecoins: stablecoins,
+    billingManager: billingManager,
+  ));
 }

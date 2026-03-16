@@ -597,10 +597,14 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
 
                   // ── Future events placeholder label ──
+                  // Anchored to the midpoint of the future zone so it
+                  // scrolls with the chart data instead of sticking to
+                  // the viewport edge.
                   if (_futureSlots > 0 && !_hasFutureEvents)
                     Positioned(
-                      // Position at the midpoint of the future zone.
-                      right: _yAxisW + 8,
+                      left: (candles.length + _futureSlots / 2.0 - start) *
+                              _candleWidth -
+                          pixOff,
                       top: priceH / 2 - 40,
                       child: Transform.rotate(
                         angle: math.pi / 2,

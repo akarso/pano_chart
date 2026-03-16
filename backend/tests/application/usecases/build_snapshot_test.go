@@ -94,4 +94,39 @@ func TestBuildSnapshot_MissingScoreKeysDefaultToZero(t *testing.T) {
 	if snap.TrendScore != 0 {
 		t.Errorf("expected 0, got %f", snap.TrendScore)
 	}
+	if snap.CompressionScore != 0 {
+		t.Errorf("expected 0, got %f", snap.CompressionScore)
+	}
+	if snap.BreakoutUpScore != 0 {
+		t.Errorf("expected 0, got %f", snap.BreakoutUpScore)
+	}
+	if snap.BreakoutDownScore != 0 {
+		t.Errorf("expected 0, got %f", snap.BreakoutDownScore)
+	}
+}
+
+func TestBuildSnapshot_CompressionBreakoutFromScores(t *testing.T) {
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("4h")
+	emptySeries, _ := domain.NewCandleSeries(sym, tf, nil)
+
+	scores := map[string]float64{
+		"Sideways Consistency": 0.5,
+		"Trend Predictability": 0.3,
+		"Compression":          0.82,
+		"Breakout Up":          0.15,
+		"Breakout Down":        0.05,
+	}
+
+	snap := usecases.BuildSnapshot(sym, tf, scores, emptySeries, 0, "v5.0.0")
+
+	if snap.CompressionScore != 0.82 {
+		t.Errorf("want CompressionScore 0.82, got %f", snap.CompressionScore)
+	}
+	if snap.BreakoutUpScore != 0.15 {
+		t.Errorf("want BreakoutUpScore 0.15, got %f", snap.BreakoutUpScore)
+	}
+	if snap.BreakoutDownScore != 0.05 {
+		t.Errorf("want BreakoutDownScore 0.05, got %f", snap.BreakoutDownScore)
+	}
 }

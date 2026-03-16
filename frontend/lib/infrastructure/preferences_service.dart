@@ -1,9 +1,39 @@
+import 'dart:math';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Persists user settings and favourites across app restarts.
 ///
 /// Uses [SharedPreferences] as the backing store.
 class PreferencesService {
+    static const _keyUserId = 'device.userId';
+
+    /// Returns the underlying [SharedPreferences] instance so other
+    /// services (e.g. [TrialManager]) can share the same storage.
+    SharedPreferences get sharedPreferences => _prefs;
+
+    /// Stable device identifier — generated once and persisted forever.
+    String get userId {
+      var id = _prefs.getString(_keyUserId);
+      if (id == null) {
+        id = _generateUuid();
+        _prefs.setString(_keyUserId, id);
+      }
+      return id;
+    }
+
+    /// Generates a v4 UUID using a cryptographically secure RNG.
+    static String _generateUuid() {
+      final rng = Random.secure();
+      final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+      bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+      final hex =
+          bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
+          '${hex.substring(12, 16)}-${hex.substring(16, 20)}-'
+          '${hex.substring(20)}';
+    }
     // ---- offline rankings cache ----
     static String _cacheKeyForTimeframe(String tf) => 'cache.rankings.$tf';
     static String _cacheTimestampKeyForTimeframe(String tf) => 'cache.rankings.$tf.ts';

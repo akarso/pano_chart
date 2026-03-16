@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../core/overview_banner.dart';
-import '../../core/sequential_visual_executor.dart';
+// import '../../core/sequential_visual_executor.dart'; // PR-034: kept for potential future use
 import '../../core/sparkline_flash_dot.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
@@ -16,8 +16,13 @@ import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
 import '../fear_greed/fear_greed_dialog.dart';
 import '../fear_greed/http_fear_greed_api.dart';
+import '../market_state/http_market_state_api.dart';
+import '../market_state/market_state_dialog.dart';
+import '../billing/billing_manager.dart';
+import '../billing/upgrade_screen.dart';
 import '../news/news_list_screen.dart';
 import '../news/news_view_model.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
@@ -35,8 +40,10 @@ class OverviewWidget extends StatefulWidget {
   final PreferencesService? prefs;
   final BubbleMapViewModel? bubbleMapViewModel;
   final FearGreedApi? fearGreedApi;
+  final MarketStateApi? marketStateApi;
   final StablecoinConfig stablecoins;
   final NewsViewModel? newsViewModel;
+  final BillingManager? billingManager;
 
   const OverviewWidget({
     Key? key,
@@ -46,8 +53,10 @@ class OverviewWidget extends StatefulWidget {
     this.prefs,
     this.bubbleMapViewModel,
     this.fearGreedApi,
+    this.marketStateApi,
     this.stablecoins = const StablecoinConfig({}),
     this.newsViewModel,
+    this.billingManager,
   }) : super(key: key);
 
   @override
@@ -75,10 +84,6 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Threshold in pixels from bottom to trigger loading more items.
   static const double _scrollThreshold = 200.0;
 
-  // ---- staggered reveal animation ----
-  late SequentialVisualExecutor _revealExecutor;
-  bool _revealPending = false;
-
   // ---- flash dot state ----
   /// Previous sparkline last-values, keyed by symbol.
   /// Captured before refresh so we can compare after.
@@ -100,19 +105,6 @@ class OverviewWidgetState extends State<OverviewWidget>
   void initState() {
     super.initState();
     vm = widget.viewModel;
-
-    // ---- reveal executor (staggered opacity animation) ----
-    _revealExecutor = SequentialVisualExecutor(
-      config: const SequentialEffectConfig(
-        appearStagger: Duration(milliseconds: 10),
-        animateStagger: Duration(milliseconds: 20),
-        animateDuration: Duration(milliseconds: 300),
-        animateCurve: Curves.easeIn,
-      ),
-      vsync: this,
-      effectBuilder: (child, progress) =>
-          Opacity(opacity: progress, child: child),
-    );
 
     // ---- staleness tracker ----
     _stalenessTracker
@@ -179,18 +171,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       // After new items are rendered, check if we still need more to fill the viewport.
       SchedulerBinding.instance.addPostFrameCallback((_) {
         _checkAndLoadMore();
-        // Trigger staggered reveal for newly-appeared items.
-        if (_revealPending) {
-          _revealPending = false;
-          _executeReveal();
-        }
       });
-
-      // Prepare reveal animation for the new item count.
-      if (!st.isLoading && st.items.isNotEmpty) {
-        _revealExecutor.prepare(st.items.length);
-        _revealPending = true;
-      }
     };
     _scrollController.addListener(_onScroll);
     vm.loadInitial(_timeframe);
@@ -201,8 +182,8 @@ class OverviewWidgetState extends State<OverviewWidget>
     vm.onChanged = null;
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
-    _revealExecutor.dispose();
     _stalenessTracker.stop();
+    _stopFpsMonitor();
     for (final ctrl in _flashControllers.values) {
       ctrl.dispose();
     }
@@ -226,50 +207,11 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
   }
 
-  // ---- reveal animation helpers ----
+  // ---- FPS monitoring (kept for future use) ----
 
-  /// Computes the indices of items currently visible in the scroll viewport
-  /// and fires the staggered reveal animation for them.
-  void _executeReveal() {
-    if (!_scrollController.hasClients) {
-      // Fallback: animate all items (e.g. first load before scroll attaches).
-      final all = List.generate(vm.state.items.length, (i) => i);
-      _revealExecutor.execute(all, onFrame: () {
-        if (mounted) setState(() {});
-      });
-      return;
-    }
+  void _startFpsMonitor() {}
 
-    final viewportTop = _scrollController.position.pixels;
-    final viewportBottom = viewportTop + _scrollController.position.viewportDimension;
-
-    // Estimate visible indices based on grid layout (2.5 aspect ratio, spacing).
-    final spacing = _columns == 3 ? 4.0 : 8.0;
-    final gridWidth = MediaQuery.of(context).size.width - 16; // left+right padding
-    final cellWidth = (gridWidth - spacing * (_columns - 1)) / _columns;
-    final cellHeight = cellWidth / 2.5 + spacing;
-    if (cellHeight <= 0) return;
-
-    final firstVisible = ((viewportTop / cellHeight) * _columns).floor();
-    final lastVisible =
-        ((viewportBottom / cellHeight) * _columns).ceil();
-
-    final total = vm.state.items.length;
-    final indices = <int>[];
-    for (var i = firstVisible.clamp(0, total); i < lastVisible.clamp(0, total); i++) {
-      indices.add(i);
-    }
-    if (indices.isEmpty && total > 0) {
-      // Safety: animate first screenful.
-      for (var i = 0; i < total && i < _columns * 6; i++) {
-        indices.add(i);
-      }
-    }
-
-    _revealExecutor.execute(indices, onFrame: () {
-      if (mounted) setState(() {});
-    });
-  }
+  void _stopFpsMonitor() {}
 
   // ---- flash dot helpers ----
 
@@ -309,7 +251,7 @@ class OverviewWidgetState extends State<OverviewWidget>
         if (!mounted) return;
         final ctrl = AnimationController(
           vsync: this,
-          duration: const Duration(milliseconds: 1000),
+          duration: const Duration(milliseconds: 4250),
         );
         _flashControllers[item.symbol] = ctrl;
         _flashColors[item.symbol] = color;
@@ -351,7 +293,23 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// from the very first visible candle.  Hidden on the chart.
   static const int _indicatorWarmup = kIndicatorWarmup;
 
+  /// Returns `true` if the user has full access (subscription or trial).
+  /// When access is denied, navigates to the [UpgradeScreen] and
+  /// returns `false`.
+  bool _requireAccess() {
+    final billing = widget.billingManager;
+    // No billing manager → no gating (non-Android / tests).
+    if (billing == null || billing.hasFullAccess) return true;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => UpgradeScreen(billingManager: billing),
+      ),
+    );
+    return false;
+  }
+
   Future<void> _onItemTapped(OverviewItem item) async {
+    if (!_requireAccess()) return;
     final now = DateTime.now().toUtc();
     final input = buildDetailChartInput(
       symbol: item.symbol,
@@ -465,6 +423,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             ),
           ),
           Expanded(child: _buildBody(state)),
+          _buildTrialBanner(),
         ],
       ),
     );
@@ -851,12 +810,23 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.fearGreedApi != null) _menuDivider(),
+        if (widget.marketStateApi != null)
+          _menuRow(
+            icon: Icons.pie_chart,
+            label: 'Market State',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              showMarketStateDialog(context, widget.marketStateApi!);
+            },
+          ),
+        if (widget.marketStateApi != null) _menuDivider(),
         if (widget.bubbleMapViewModel != null)
           _menuRow(
             icon: Icons.bubble_chart,
             label: 'Bubble Map',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
+              if (!_requireAccess()) return;
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => BubbleMapScreen(
@@ -875,6 +845,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             label: 'Macro Events',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
+              if (!_requireAccess()) return;
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MacroEventsScreen(
@@ -901,13 +872,43 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.newsViewModel != null) _menuDivider(),
+        if (widget.billingManager != null)
+          _menuRow(
+            icon: Icons.workspace_premium,
+            label: 'Upgrade to Pro',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => UpgradeScreen(
+                    billingManager: widget.billingManager!,
+                  ),
+                ),
+              );
+            },
+          ),
+        if (widget.billingManager != null) _menuDivider(),
         _menuRow(
           icon: Icons.info_outline,
           label: 'About',
           onTap: () => _showInfoDialog(
             title: 'About',
-            body: 'Simple market screener app showcasing a custom technical analysis algorithm. '
-                'Built, because I was lacking exactly such a set of tools for my own trading decisions. ',
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Simple market screener app showcasing a custom technical analysis algorithm. Crypto swiss army knife.'),
+                const SizedBox(height: 12),
+                const Text('Built, because I was lacking exactly such a set of tools for my own trading decisions.'),
+                const SizedBox(height: 12),
+                _linkParagraph(
+                  'Read this, if you are new to crypto:',
+                  'https://panocharts.com/blog.html#how_not_to_get_scammed',
+                ),
+                const SizedBox(height: 12),
+                const Text('Nothing here is financial advice. Use at your own risk. Always do your own research.'),
+              ],
+            ),
           ),
         ),
         _menuDivider(),
@@ -916,9 +917,25 @@ class OverviewWidgetState extends State<OverviewWidget>
           label: 'Help',
           onTap: () => _showInfoDialog(
             title: 'Help',
-            body:
-                'Pull down to refresh data. Tap on any chart to see detailed view with score breakdown and more info. '
-                'Scroll to load more items (max 150 tickers). Use settings to change sort, timeframe, and other options.',
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Pull down to refresh data. Tap on any chart to see detailed view with score breakdown and more info.'),
+                const SizedBox(height: 12),
+                const Text('Scroll to load more items (max 150 tickers). Use settings to change sort, timeframe, and other options.'),
+                const SizedBox(height: 12),
+                _linkParagraph(
+                  'More detailed help here:',
+                  'https://panocharts.com/help.html',
+                ),
+                const SizedBox(height: 12),
+                _linkParagraph(
+                  'There is also a Telegram support group:',
+                  'https://t.me/panocharts',
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -960,18 +977,86 @@ class OverviewWidgetState extends State<OverviewWidget>
     );
   }
 
-  void _showInfoDialog({required String title, required String body}) {
+  void _showInfoDialog({required String title, required Widget content}) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: Text(title),
-        content: Text(body),
+        content: SingleChildScrollView(child: content),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Builds a paragraph with leading text and a tappable URL below it.
+  Widget _linkParagraph(String text, String url) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(text),
+        const SizedBox(height: 4),
+        GestureDetector(
+          onTap: () => launchUrl(
+            Uri.parse(url),
+            mode: LaunchMode.externalApplication,
+          ),
+          child: Text(
+            url,
+            style: const TextStyle(
+              color: Color(0xFF00E6C0),
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ---- trial banner ----
+
+  /// Shows a bottom banner when the user is on a trial or when it has
+  /// expired.  Returns a zero-height [SizedBox] when no banner is needed.
+  Widget _buildTrialBanner() {
+    final billing = widget.billingManager;
+    if (billing == null || billing.status.active) {
+      return const SizedBox.shrink();
+    }
+    final days = billing.trialDaysRemaining;
+    final expired = !billing.hasFullAccess;
+
+    final String label;
+    final Color bg;
+    if (expired) {
+      label = 'Free trial expired — tap to upgrade';
+      bg = const Color(0xFFB00020);
+    } else {
+      label = '$days day${days == 1 ? '' : 's'} left in free trial';
+      bg = const Color(0xFF1A1A2E);
+    }
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => UpgradeScreen(billingManager: billing),
+          ),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        color: bg,
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white, fontSize: 12),
+        ),
       ),
     );
   }
@@ -1052,8 +1137,6 @@ class OverviewWidgetState extends State<OverviewWidget>
                     flashDotColor: _flashColors[item.symbol],
                   ),
                 );
-                // Apply staggered reveal animation.
-                child = _revealExecutor.buildChild(index, child);
                 return child;
               },
             ),

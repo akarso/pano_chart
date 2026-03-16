@@ -47,11 +47,20 @@ class SparklineFlashDotPainter extends CustomPainter {
       lastY = size.height - ratio * size.height;
     }
 
-    // Flash envelope: 0→1→0 mapped from progress 0→1.
-    // Peak brightness at progress 0.5.
-    final flash = progress <= 0.5
-        ? (progress / 0.5)
-        : ((1.0 - progress) / 0.5);
+    // Flash envelope mapped from progress 0→1 over 4250ms total:
+    //   0→0.0588  (  0–250ms)  glow up      0→1
+    //   0.0588→0.5294  (250–2250ms) full bright   1
+    //   0.5294→1.0  (2250–4250ms) fade out     1→0
+    const double rampEnd = 250 / 4250;   // ≈ 0.0588
+    const double holdEnd = 2250 / 4250;  // ≈ 0.5294
+    final double flash;
+    if (progress <= rampEnd) {
+      flash = progress / rampEnd;
+    } else if (progress <= holdEnd) {
+      flash = 1.0;
+    } else {
+      flash = (1.0 - progress) / (1.0 - holdEnd);
+    }
     final opacity = (flash * 255).round().clamp(0, 255);
     if (opacity <= 0) return;
 

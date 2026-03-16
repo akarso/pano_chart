@@ -31,12 +31,12 @@ func BuildSnapshot(
 		Symbol:            symbol.String(),
 		Timeframe:         timeframe.String(),
 		SidewaysScore:     scores["Sideways Consistency"],
-		CompressionScore:  0, // not yet computed; placeholder for future
-		BreakoutUpScore:   0, // not yet computed
-		BreakoutDownScore: 0, // not yet computed
+		CompressionScore:  scores["Compression"],
+		BreakoutUpScore:   scores["Breakout Up"],
+		BreakoutDownScore: scores["Breakout Down"],
 		TrendScore:        scores["Trend Predictability"],
-		Bias:              "neutral", // placeholder — no directional bias calc yet
-		ChannelType:       "",        // placeholder — structural subtype not computed yet
+		Bias:              "neutral", // populated by caller when available
+		ChannelType:       "",
 		Price:             price,
 		ATR:               atr,
 		Volume:            volume,

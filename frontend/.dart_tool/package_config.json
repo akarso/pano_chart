@@ -128,6 +128,30 @@
       "languageVersion": "3.0"
     },
     {
+      "name": "in_app_purchase",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/in_app_purchase-3.2.3",
+      "packageUri": "lib/",
+      "languageVersion": "3.5"
+    },
+    {
+      "name": "in_app_purchase_android",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/in_app_purchase_android-0.4.0+5",
+      "packageUri": "lib/",
+      "languageVersion": "3.7"
+    },
+    {
+      "name": "in_app_purchase_platform_interface",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/in_app_purchase_platform_interface-1.4.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.1"
+    },
+    {
+      "name": "in_app_purchase_storekit",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/in_app_purchase_storekit-0.4.4",
+      "packageUri": "lib/",
+      "languageVersion": "3.6"
+    },
+    {
       "name": "json_annotation",
       "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/json_annotation-4.9.0",
       "packageUri": "lib/",

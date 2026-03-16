@@ -49,7 +49,7 @@ void main() {
       executor.dispose();
     });
 
-    testWidgets('buildChild returns SizedBox.shrink before appear',
+    testWidgets('buildChild returns transparent Opacity before appear',
         (tester) async {
       late final SequentialVisualExecutor executor;
       await tester.pumpWidget(
@@ -64,8 +64,10 @@ void main() {
 
       executor.prepare(1);
       final widget = executor.buildChild(0, const Text('hello'));
-      // Should be a SizedBox.shrink since not yet appeared.
-      expect(widget, isA<SizedBox>());
+      // Should be an Opacity(opacity: 0) since not yet appeared — keeps
+      // layout stable while invisible.
+      expect(widget, isA<Opacity>());
+      expect((widget as Opacity).opacity, 0.0);
 
       executor.dispose();
     });
@@ -130,6 +132,80 @@ void main() {
 
       // Flush any pending timers from the cancelled generation.
       await tester.pumpAndSettle();
+
+      executor.dispose();
+    });
+
+    testWidgets('grow preserves frozen items and adds new ones',
+        (tester) async {
+      late final SequentialVisualExecutor executor;
+      await tester.pumpWidget(
+        _TestWidget(onCreate: (vsync) {
+          executor = SequentialVisualExecutor(
+            config: const SequentialEffectConfig(
+              appearStagger: Duration.zero,
+              animateStagger: Duration.zero,
+              animateDuration: Duration(milliseconds: 50),
+            ),
+            vsync: vsync,
+            effectBuilder: (child, p) => Opacity(opacity: p, child: child),
+          );
+        }),
+      );
+
+      // Prepare initial batch and animate to completion.
+      executor.prepare(3);
+      executor.execute([0, 1, 2]);
+      await tester.pumpAndSettle();
+      expect(executor.isComplete(0), isTrue);
+      expect(executor.isComplete(1), isTrue);
+      expect(executor.isComplete(2), isTrue);
+
+      // Grow to 5 items — existing 3 should stay frozen.
+      executor.grow(5);
+      expect(executor.isComplete(0), isTrue, reason: 'frozen item stays complete');
+      expect(executor.isComplete(1), isTrue);
+      expect(executor.isComplete(2), isTrue);
+      expect(executor.hasAppeared(3), isFalse, reason: 'new item not yet appeared');
+      expect(executor.hasAppeared(4), isFalse);
+
+      // Animate new items.
+      executor.execute([3, 4]);
+      await tester.pumpAndSettle();
+      expect(executor.isComplete(3), isTrue);
+      expect(executor.isComplete(4), isTrue);
+
+      // First batch still complete.
+      expect(executor.isComplete(0), isTrue);
+
+      executor.dispose();
+    });
+
+    testWidgets('disabled flag skips all animations', (tester) async {
+      late final SequentialVisualExecutor executor;
+      await tester.pumpWidget(
+        _TestWidget(onCreate: (vsync) {
+          executor = SequentialVisualExecutor(
+            config: const SequentialEffectConfig(),
+            vsync: vsync,
+            effectBuilder: (child, p) => Opacity(opacity: p, child: child),
+          );
+        }),
+      );
+
+      executor.disabled = true;
+      executor.prepare(3);
+      executor.execute([0, 1, 2]);
+
+      // Should be skipped immediately.
+      expect(executor.isComplete(0), isTrue);
+      expect(executor.isComplete(1), isTrue);
+      expect(executor.isComplete(2), isTrue);
+
+      // buildChild should return the child directly, no wrapper.
+      const child = Text('hello');
+      final result = executor.buildChild(0, child);
+      expect(result, same(child));
 
       executor.dispose();
     });

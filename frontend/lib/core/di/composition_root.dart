@@ -1,5 +1,9 @@
 import 'package:http/http.dart' as http;
 
+import '../../features/billing/api/subscription_api.dart';
+import '../../features/billing/billing_manager.dart';
+import '../../features/billing/infrastructure/http_subscription_api.dart';
+import '../../features/billing/trial_manager.dart';
 import '../../features/bubble_map/bubble_map_view_model.dart';
 import '../../features/candles/application/get_candle_series.dart';
 import '../../features/candles/application/get_candle_series.dart' as impl;
@@ -9,6 +13,7 @@ import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
 import '../../features/fear_greed/http_fear_greed_api.dart';
+import '../../features/market_state/http_market_state_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
@@ -61,10 +66,32 @@ class CompositionRoot {
     return HttpFearGreedApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
+  /// Creates a wired MarketStateApi.
+  MarketStateApi createMarketStateApi() {
+    return HttpMarketStateApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
   /// Creates a wired NewsViewModel backed by the news API.
   NewsViewModel createNewsViewModel() {
     final api = HttpNewsApi(client: httpClient, baseUrl: apiBaseUrl);
     final getNews = GetNewsImpl(api);
     return NewsViewModel(getNews);
+  }
+
+  /// Creates a [SubscriptionApi] for backend payment verification.
+  SubscriptionApi createSubscriptionApi() {
+    return HttpSubscriptionApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a [BillingManager] wired to the backend API.
+  BillingManager createBillingManager({
+    required String userId,
+    TrialManager? trialManager,
+  }) {
+    return BillingManager(
+      api: createSubscriptionApi(),
+      userId: userId,
+      trialManager: trialManager,
+    );
   }
 }

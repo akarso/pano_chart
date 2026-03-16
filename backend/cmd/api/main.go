@@ -13,15 +13,20 @@ import (
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
+	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/feargreed"
+	"pano_chart/backend/infrastructure/googleplay"
+	"pano_chart/backend/infrastructure/market"
 	"pano_chart/backend/infrastructure/news"
 	"pano_chart/backend/infrastructure/overview"
+	"pano_chart/backend/infrastructure/payment"
 	"pano_chart/backend/infrastructure/rankings"
 	"pano_chart/backend/infrastructure/snapshot"
+	"pano_chart/backend/infrastructure/solana"
 	"pano_chart/backend/infrastructure/symbol_universe"
 )
 
@@ -255,6 +260,81 @@ func main() {
 	newsRepo := news.NewFsNewsRepository(newsDir, 5*time.Minute)
 	newsUC := usecases.NewGetNews(newsRepo)
 
+	// --- Payment infrastructure (SQLite-backed) ---
+	paymentDBPath := os.Getenv("PAYMENT_DB_PATH")
+	if paymentDBPath == "" {
+		paymentDBPath = "./payment.sqlite"
+	}
+	paymentRepo, err := payment.NewSQLiteRepository(paymentDBPath)
+	if err != nil {
+		log.Fatalf("[main] FATAL: payment DB init failed: %v", err)
+	}
+	defer func() { _ = paymentRepo.Close() }()
+
+	providerRegistry := usecases.NewPaymentProviderRegistry()
+
+	// --- Google Play Billing provider ---
+	gpPackage := os.Getenv("GOOGLE_PLAY_PACKAGE")
+	gpSubID := os.Getenv("GOOGLE_PLAY_SUBSCRIPTION_ID")
+	gpSAPath := os.Getenv("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON")
+	gpToken := os.Getenv("GOOGLE_PLAY_ACCESS_TOKEN")
+
+	switch {
+	case gpPackage != "" && gpSubID != "" && gpSAPath != "":
+		// Preferred: service account with automatic token refresh.
+		saClient, saErr := googleplay.NewServiceAccountClient(gpSAPath)
+		if saErr != nil {
+			log.Fatalf("[main] FATAL: Google Play service account init failed: %v", saErr)
+		}
+		gpProvider := googleplay.NewProvider(googleplay.Config{
+			PackageName:    gpPackage,
+			SubscriptionID: gpSubID,
+		}, saClient)
+		providerRegistry.Register(gpProvider)
+		log.Printf("[main] Google Play provider registered via service account (pkg=%s, sub=%s)\n", gpPackage, gpSubID)
+
+	case gpPackage != "" && gpSubID != "" && gpToken != "":
+		// Fallback: raw access token (expires after ~1 h — for dev/testing).
+		gpProvider := googleplay.NewProvider(googleplay.Config{
+			PackageName:    gpPackage,
+			SubscriptionID: gpSubID,
+			AccessToken:    gpToken,
+		}, nil)
+		providerRegistry.Register(gpProvider)
+		log.Printf("[main] Google Play provider registered with static token (pkg=%s, sub=%s)\n", gpPackage, gpSubID)
+
+	default:
+		log.Println("[main] Google Play provider not configured (missing env vars)")
+	}
+
+	// --- Solana payment provider ---
+	solWallet := os.Getenv("SOLANA_WALLET_ADDRESS")
+	solRPC := os.Getenv("SOLANA_RPC_URL")
+	var solProvider *solana.Provider
+	if solWallet != "" {
+		solCfg := solana.Config{
+			WalletAddress:    solWallet,
+			PriceUSD:         4.99,
+			SubscriptionDays: 30,
+			RPCURL:           solRPC,
+		}
+		solProvider = solana.NewProvider(solCfg, nil)
+		providerRegistry.Register(solProvider)
+		log.Printf("[main] Solana provider registered (wallet=%s)\n", solWallet)
+	} else {
+		log.Println("[main] Solana provider not configured (SOLANA_WALLET_ADDRESS not set)")
+	}
+
+	subscriptionSvc := usecases.NewSubscriptionService(paymentRepo, paymentRepo)
+	verifyPurchaseUC := usecases.NewVerifyPurchase(providerRegistry, subscriptionSvc)
+	log.Printf("[main] Payment infrastructure initialized (db=%s)\n", paymentDBPath)
+
+	// --- Market state service ---
+	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
+	marketService := appmarket.NewMarketStateService(evalProvider)
+	marketHandler := adhttp.NewMarketHandler(marketService)
+	log.Println("[main] Market state service initialized")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -274,6 +354,15 @@ func main() {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
 	}
+	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseHandler(verifyPurchaseUC))
+	mux.Handle("/api/subscription/status", adhttp.NewSubscriptionStatusHandler(subscriptionSvc))
+	if solProvider != nil {
+		mux.Handle("/api/sol/price", adhttp.NewSolPriceHandler(solProvider, solWallet, 4.99))
+		log.Println("[main] /api/sol/price endpoint registered")
+	}
+	mux.Handle("/api/market/state", marketHandler)
+	log.Println("[main] /api/market/state endpoint registered")
+	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},

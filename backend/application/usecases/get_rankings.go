@@ -11,7 +11,7 @@ import (
 
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
-	"pano_chart/backend/domain/scoring"
+	"pano_chart/backend/domain/scoring" // also used for structural regime detection (compression/breakout)
 )
 
 // RankingsUseCase defines the boundary for the rankings v2 use case.
@@ -207,6 +207,15 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}
+
+			// Run structural regime detectors (compression → breakout)
+			// and inject into scores map. These do NOT affect TotalScore.
+			candles := cs.All()
+			compResult := scoring.DetectCompression(candles, scoring.DefaultCompressionConfig())
+			breakResult := scoring.DetectBreakout(candles, scoring.DefaultBreakoutConfig(), compResult.Score)
+			ranked[0].Scores["Compression"] = compResult.Score
+			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
+			ranked[0].Scores["Breakout Down"] = breakResult.DownScore
 
 			fetchResults[i] = fetchResult{
 				symbol:    sym,
