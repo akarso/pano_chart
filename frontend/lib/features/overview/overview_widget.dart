@@ -31,6 +31,7 @@ import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
+import '../detail/http_behavior_api.dart';
 import '../detail/http_setup_api.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
@@ -56,6 +57,7 @@ class OverviewWidget extends StatefulWidget {
   final BillingManager? billingManager;
   final SetupApi? setupApi;
   final FragilityApi? fragilityApi;
+  final BehaviorApi? behaviorApi;
 
   const OverviewWidget({
     Key? key,
@@ -75,6 +77,7 @@ class OverviewWidget extends StatefulWidget {
     this.billingManager,
     this.setupApi,
     this.fragilityApi,
+    this.behaviorApi,
   }) : super(key: key);
 
   @override
@@ -362,6 +365,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             getCandleSeries: widget.getCandleSeries,
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,
+            behaviorApi: widget.behaviorApi,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -865,6 +869,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     eventsViewModel: widget.eventsViewModel,
                     setupApi: widget.setupApi,
                     fragilityApi: widget.fragilityApi,
+                    behaviorApi: widget.behaviorApi,
                   ),
                 ),
               );

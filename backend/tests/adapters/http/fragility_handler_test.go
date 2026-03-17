@@ -204,8 +204,11 @@ func TestTokenRouter_RoutesToSetup(t *testing.T) {
 	fragility := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("fragility handler should not be called")
 	})
+	behavior := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("behavior handler should not be called")
+	})
 
-	router := httpAdapter.NewTokenRouter(setup, fragility)
+	router := httpAdapter.NewTokenRouter(setup, fragility, behavior)
 	req := httptest.NewRequest(http.MethodGet, "/api/token/BTCUSDT/setup", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -224,8 +227,11 @@ func TestTokenRouter_RoutesToFragility(t *testing.T) {
 		fragilityCalled = true
 		w.WriteHeader(http.StatusOK)
 	})
+	behavior := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("behavior handler should not be called")
+	})
 
-	router := httpAdapter.NewTokenRouter(setup, fragility)
+	router := httpAdapter.NewTokenRouter(setup, fragility, behavior)
 	req := httptest.NewRequest(http.MethodGet, "/api/token/BTCUSDT/fragility", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -242,8 +248,11 @@ func TestTokenRouter_UnknownEndpoint_Returns404(t *testing.T) {
 	fragility := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("fragility handler should not be called")
 	})
+	behavior := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("behavior handler should not be called")
+	})
 
-	router := httpAdapter.NewTokenRouter(setup, fragility)
+	router := httpAdapter.NewTokenRouter(setup, fragility, behavior)
 	req := httptest.NewRequest(http.MethodGet, "/api/token/BTCUSDT/unknown", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

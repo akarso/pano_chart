@@ -19,6 +19,7 @@ import '../../features/market_state/http_regime_api.dart';
 import '../../features/market_state/http_regime_history_api.dart';
 import '../../features/market_state/http_transition_api.dart';
 import '../../features/detail/http_fragility_api.dart';
+import '../../features/detail/http_behavior_api.dart';
 import '../../features/detail/http_setup_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
@@ -129,5 +130,10 @@ class CompositionRoot {
   /// Creates a wired [FragilityApi] for fetching position crowding scores.
   FragilityApi createFragilityApi() {
     return HttpFragilityApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [BehaviorApi] for fetching retail behavior scores.
+  BehaviorApi createBehaviorApi() {
+    return HttpBehaviorApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 }

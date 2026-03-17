@@ -13,6 +13,7 @@ import (
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/infra"
+	appbehavior "pano_chart/backend/application/behavior"
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
@@ -389,8 +390,16 @@ func main() {
 	riskProvider := apprisk.NewCandleBasedDataProvider(candleRepo)
 	riskService := apprisk.NewService(riskEngine, riskProvider)
 	fragilityHandler := adhttp.NewFragilityHandler(riskService)
-	tokenRouter := adhttp.NewTokenRouter(setupHandler, fragilityHandler)
+
+	// --- Behavior engine ---
+	behaviorEngine := appbehavior.NewEngine()
+	behaviorProvider := appbehavior.NewCandleBasedDataProvider(candleRepo, riskEngine)
+	behaviorService := appbehavior.NewService(behaviorEngine, behaviorProvider)
+	behaviorHandler := adhttp.NewBehaviorHandler(behaviorService)
+
+	tokenRouter := adhttp.NewTokenRouter(setupHandler, fragilityHandler, behaviorHandler)
 	log.Println("[main] Fragility risk engine initialized")
+	log.Println("[main] Behavior engine initialized")
 
 	// --- Handlers ---
 	mux := http.NewServeMux()

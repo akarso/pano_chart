@@ -34,6 +34,7 @@ Widget bootstrapApp({
   final newsViewModel = root.createNewsViewModel();
   final setupApi = root.createSetupApi();
   final fragilityApi = root.createFragilityApi();
+  final behaviorApi = root.createBehaviorApi();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -53,6 +54,7 @@ Widget bootstrapApp({
       billingManager: billingManager,
       setupApi: setupApi,
       fragilityApi: fragilityApi,
+      behaviorApi: behaviorApi,
     ),
   );
   return component.createApp();

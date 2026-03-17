@@ -15,7 +15,9 @@ import 'chart_navigation.dart';
 import 'detail_context.dart';
 import 'http_setup_api.dart';
 import 'http_fragility_api.dart';
+import 'http_behavior_api.dart';
 import 'fragility_data.dart';
+import 'behavior_data.dart';
 import 'setup_data.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
@@ -36,6 +38,9 @@ class DetailScreen extends StatefulWidget {
   /// API for fetching fragility / position crowding scores.
   final FragilityApi? fragilityApi;
 
+  /// API for fetching retail behavior scores.
+  final BehaviorApi? behaviorApi;
+
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
 
@@ -55,6 +60,7 @@ class DetailScreen extends StatefulWidget {
     this.eventsViewModel,
     this.setupApi,
     this.fragilityApi,
+    this.behaviorApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -87,6 +93,11 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _isLoadingFragility = false;
   bool _fragilityFetched = false;
 
+  // ---- behavior state ----
+  BehaviorData? _behaviorData;
+  bool _isLoadingBehavior = false;
+  bool _behaviorFetched = false;
+
   @override
   void initState() {
     super.initState();
@@ -100,6 +111,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadEvents();
     _loadSetupData();
     _loadFragilityData();
+    _loadBehaviorData();
   }
 
   /// Fetch candles for [tf] and swap the active series.
@@ -125,6 +137,8 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadSetupData(); // reload setup for new timeframe
       _fragilityFetched = false;
       _loadFragilityData(); // reload fragility for new timeframe
+      _behaviorFetched = false;
+      _loadBehaviorData(); // reload behavior for new timeframe
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -255,6 +269,31 @@ class _DetailScreenState extends State<DetailScreen> {
         setState(() {
           _isLoadingFragility = false;
           _fragilityFetched = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadBehaviorData() async {
+    final api = widget.behaviorApi;
+    if (api == null || _behaviorFetched) return;
+    setState(() => _isLoadingBehavior = true);
+    try {
+      final data = await api.fetch(
+        symbol: widget.symbol.value,
+        timeframe: _timeframe,
+      );
+      if (!mounted) return;
+      setState(() {
+        _behaviorData = data;
+        _isLoadingBehavior = false;
+        _behaviorFetched = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoadingBehavior = false;
+          _behaviorFetched = true;
         });
       }
     }
@@ -654,6 +693,18 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
             ],
+            if (_behaviorData != null) ...[
+              const SizedBox(height: 20),
+              _buildBehavior(_behaviorData!),
+            ] else if (_isLoadingBehavior) ...[
+              const SizedBox(height: 20),
+              const Center(
+                child: SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -907,6 +958,58 @@ class _DetailScreenState extends State<DetailScreen> {
             FragilityComponents.displayName(entry.key),
             entry.value,
             riskColor,
+          ),
+          const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildBehavior(BehaviorData data) {
+    Color colorFor(String key, double value) {
+      switch (key) {
+        case 'greed':
+          return Colors.greenAccent;
+        case 'fear':
+          return Colors.orangeAccent;
+        case 'patience':
+          return Colors.blueAccent;
+        case 'panic':
+          return Colors.redAccent;
+        default:
+          return Colors.white54;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Retail Behavior',
+              style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              data.summary,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        for (final entry in data.dimensions.entries) ...[
+          _scoreBar(
+            BehaviorData.dimensionLabel(entry.key),
+            entry.value,
+            colorFor(entry.key, entry.value),
           ),
           const SizedBox(height: 6),
         ],

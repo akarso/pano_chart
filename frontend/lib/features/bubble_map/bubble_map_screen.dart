@@ -12,6 +12,7 @@ import '../detail/chart_navigation.dart';
 import '../detail/detail_context.dart';
 import '../detail/detail_screen.dart';
 import '../detail/http_fragility_api.dart';
+import '../detail/http_behavior_api.dart';
 import '../detail/http_setup_api.dart';
 import '../events/events_view_model.dart';
 import 'bubble_map_state.dart';
@@ -33,6 +34,7 @@ class BubbleMapScreen extends StatefulWidget {
   final EventsViewModel? eventsViewModel;
   final SetupApi? setupApi;
   final FragilityApi? fragilityApi;
+  final BehaviorApi? behaviorApi;
 
   const BubbleMapScreen({
     Key? key,
@@ -41,6 +43,7 @@ class BubbleMapScreen extends StatefulWidget {
     this.eventsViewModel,
     this.setupApi,
     this.fragilityApi,
+    this.behaviorApi,
   }) : super(key: key);
 
   @override
@@ -231,6 +234,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             getCandleSeries: widget.getCandleSeries,
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,
+            behaviorApi: widget.behaviorApi,
             detailContext: DetailContext(
               rank: 0,
               totalScore: token.totalScore,
