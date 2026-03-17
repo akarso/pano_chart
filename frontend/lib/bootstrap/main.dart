@@ -33,6 +33,7 @@ Widget bootstrapApp({
   final regimeHistoryApi = root.createRegimeHistoryApi();
   final newsViewModel = root.createNewsViewModel();
   final setupApi = root.createSetupApi();
+  final fragilityApi = root.createFragilityApi();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -51,6 +52,7 @@ Widget bootstrapApp({
       newsViewModel: newsViewModel,
       billingManager: billingManager,
       setupApi: setupApi,
+      fragilityApi: fragilityApi,
     ),
   );
   return component.createApp();

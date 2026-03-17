@@ -14,6 +14,8 @@ import 'chart/interactive_chart.dart';
 import 'chart_navigation.dart';
 import 'detail_context.dart';
 import 'http_setup_api.dart';
+import 'http_fragility_api.dart';
+import 'fragility_data.dart';
 import 'setup_data.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
@@ -30,6 +32,9 @@ class DetailScreen extends StatefulWidget {
 
   /// API for fetching setup quality scores.
   final SetupApi? setupApi;
+
+  /// API for fetching fragility / position crowding scores.
+  final FragilityApi? fragilityApi;
 
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
@@ -49,6 +54,7 @@ class DetailScreen extends StatefulWidget {
     this.isFavourite = false,
     this.eventsViewModel,
     this.setupApi,
+    this.fragilityApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -76,6 +82,11 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _isLoadingSetup = false;
   bool _setupFetched = false;
 
+  // ---- fragility state ----
+  FragilityData? _fragilityData;
+  bool _isLoadingFragility = false;
+  bool _fragilityFetched = false;
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +99,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadExchangeConfigs();
     _loadEvents();
     _loadSetupData();
+    _loadFragilityData();
   }
 
   /// Fetch candles for [tf] and swap the active series.
@@ -111,6 +123,8 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadEvents(); // reload events for new date range
       _setupFetched = false;
       _loadSetupData(); // reload setup for new timeframe
+      _fragilityFetched = false;
+      _loadFragilityData(); // reload fragility for new timeframe
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -216,6 +230,31 @@ class _DetailScreenState extends State<DetailScreen> {
         setState(() {
           _isLoadingSetup = false;
           _setupFetched = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadFragilityData() async {
+    final api = widget.fragilityApi;
+    if (api == null || _fragilityFetched) return;
+    setState(() => _isLoadingFragility = true);
+    try {
+      final data = await api.fetch(
+        symbol: widget.symbol.value,
+        timeframe: _timeframe,
+      );
+      if (!mounted) return;
+      setState(() {
+        _fragilityData = data;
+        _isLoadingFragility = false;
+        _fragilityFetched = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoadingFragility = false;
+          _fragilityFetched = true;
         });
       }
     }
@@ -603,6 +642,18 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
               ),
             ],
+            if (_fragilityData != null) ...[
+              const SizedBox(height: 20),
+              _buildFragility(_fragilityData!),
+            ] else if (_isLoadingFragility) ...[
+              const SizedBox(height: 20),
+              const Center(
+                child: SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -771,6 +822,91 @@ class _DetailScreenState extends State<DetailScreen> {
             SetupData.displayName(entry.key),
             entry.value,
             colors[entry.key] ?? Colors.grey,
+          ),
+          const SizedBox(height: 6),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildFragility(FragilityData data) {
+    Color riskColor;
+    switch (data.riskLevel) {
+      case 'high':
+        riskColor = Colors.redAccent;
+        break;
+      case 'medium':
+        riskColor = Colors.orangeAccent;
+        break;
+      default:
+        riskColor = Colors.greenAccent;
+    }
+    final comps = {
+      'fundingExtremeness': data.components.fundingExtremeness,
+      'oiExpansion': data.components.oiExpansion,
+      'longShortImbalance': data.components.longShortImbalance,
+      'liquidationProximity': data.components.liquidationProximity,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Fragility',
+              style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              FragilityData.riskLabel(data.riskLevel),
+              style: TextStyle(
+                color: riskColor,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${(data.fragilityScore * 100).toStringAsFixed(0)}%',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (data.dominantSide != 'neutral') ...[          Row(
+            children: [
+              Text(
+                FragilityData.sideLabel(data.dominantSide),
+                style: TextStyle(
+                  color: riskColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                FragilityData.squeezeLabel(data.squeezeRisk),
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+        ],
+        for (final entry in comps.entries) ...[
+          _scoreBar(
+            FragilityComponents.displayName(entry.key),
+            entry.value,
+            riskColor,
           ),
           const SizedBox(height: 6),
         ],

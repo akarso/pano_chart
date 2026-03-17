@@ -17,6 +17,7 @@ import (
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
+	apprisk "pano_chart/backend/application/risk"
 	"pano_chart/backend/application/setups"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
@@ -383,6 +384,14 @@ func main() {
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
+	// --- Fragility / risk engine ---
+	riskEngine := apprisk.NewEngine()
+	riskProvider := apprisk.NewCandleBasedDataProvider(candleRepo)
+	riskService := apprisk.NewService(riskEngine, riskProvider)
+	fragilityHandler := adhttp.NewFragilityHandler(riskService)
+	tokenRouter := adhttp.NewTokenRouter(setupHandler, fragilityHandler)
+	log.Println("[main] Fragility risk engine initialized")
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +422,7 @@ func main() {
 	mux.Handle("/api/market/regime", regimeHandler)
 	mux.Handle("/api/market/regime/history", regimeHistoryHandler)
 	mux.Handle("/api/market/transition", transitionHandler)
-	mux.Handle("/api/token/", setupHandler)
+	mux.Handle("/api/token/", tokenRouter)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
 	log.Println("[main] /api/market/regime endpoint registered")
