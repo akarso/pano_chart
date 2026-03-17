@@ -32,6 +32,7 @@ Widget bootstrapApp({
   final transitionApi = root.createTransitionApi();
   final regimeHistoryApi = root.createRegimeHistoryApi();
   final newsViewModel = root.createNewsViewModel();
+  final setupApi = root.createSetupApi();
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -49,6 +50,7 @@ Widget bootstrapApp({
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
       billingManager: billingManager,
+      setupApi: setupApi,
     ),
   );
   return component.createApp();

@@ -18,6 +18,7 @@ import '../../features/market_state/http_market_state_api.dart';
 import '../../features/market_state/http_regime_api.dart';
 import '../../features/market_state/http_regime_history_api.dart';
 import '../../features/market_state/http_transition_api.dart';
+import '../../features/detail/http_setup_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
@@ -117,5 +118,10 @@ class CompositionRoot {
       userId: userId,
       trialManager: trialManager,
     );
+  }
+
+  /// Creates a wired [SetupApi] for fetching setup quality scores.
+  SetupApi createSetupApi() {
+    return HttpSetupApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 }

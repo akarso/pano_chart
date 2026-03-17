@@ -13,6 +13,8 @@ import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
 import 'chart_navigation.dart';
 import 'detail_context.dart';
+import 'http_setup_api.dart';
+import 'setup_data.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
 
@@ -25,6 +27,9 @@ class DetailScreen extends StatefulWidget {
   final DetailContext? detailContext;
   final bool isFavourite;
   final EventsViewModel? eventsViewModel;
+
+  /// API for fetching setup quality scores.
+  final SetupApi? setupApi;
 
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
@@ -43,6 +48,7 @@ class DetailScreen extends StatefulWidget {
     this.detailContext,
     this.isFavourite = false,
     this.eventsViewModel,
+    this.setupApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -65,6 +71,11 @@ class _DetailScreenState extends State<DetailScreen> {
   late int _warmupCount;
   bool _isLoadingTf = false;
 
+  // ---- setup quality state ----
+  SetupData? _setupData;
+  bool _isLoadingSetup = false;
+  bool _setupFetched = false;
+
   @override
   void initState() {
     super.initState();
@@ -76,6 +87,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadExchangePreference();
     _loadExchangeConfigs();
     _loadEvents();
+    _loadSetupData();
   }
 
   /// Fetch candles for [tf] and swap the active series.
@@ -97,6 +109,8 @@ class _DetailScreenState extends State<DetailScreen> {
         _isLoadingTf = false;
       });
       _loadEvents(); // reload events for new date range
+      _setupFetched = false;
+      _loadSetupData(); // reload setup for new timeframe
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -180,6 +194,31 @@ class _DetailScreenState extends State<DetailScreen> {
     final m = dt.month.toString().padLeft(2, '0');
     final d = dt.day.toString().padLeft(2, '0');
     return '$y-$m-$d';
+  }
+
+  Future<void> _loadSetupData() async {
+    final api = widget.setupApi;
+    if (api == null || _setupFetched) return;
+    setState(() => _isLoadingSetup = true);
+    try {
+      final data = await api.fetch(
+        symbol: widget.symbol.value,
+        timeframe: _timeframe,
+      );
+      if (!mounted) return;
+      setState(() {
+        _setupData = data;
+        _isLoadingSetup = false;
+        _setupFetched = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isLoadingSetup = false;
+          _setupFetched = true;
+        });
+      }
+    }
   }
 
   /// Reload the current chart data (same timeframe, fresh candles).
@@ -552,6 +591,18 @@ class _DetailScreenState extends State<DetailScreen> {
               const SizedBox(height: 20),
               _buildScoreBreakdown(ctx),
             ],
+            if (_setupData != null) ...[
+              const SizedBox(height: 20),
+              _buildSetupQuality(_setupData!),
+            ] else if (_isLoadingSetup) ...[
+              const SizedBox(height: 20),
+              const Center(
+                child: SizedBox(
+                  width: 20, height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -672,6 +723,57 @@ class _DetailScreenState extends State<DetailScreen> {
             ),
           ],
         ),
+      ],
+    );
+  }
+
+  Widget _buildSetupQuality(SetupData data) {
+    final colors = <String, Color>{
+      'compression_breakout': Colors.purple,
+      'trend_continuation': Colors.blue,
+      'range_reversion': Colors.teal,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Text(
+              'Setup Quality',
+              style: TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              SetupData.displayName(data.bestSetup),
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 12,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '${(data.score * 100).toStringAsFixed(0)}%',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        for (final entry in data.scores.entries) ...[
+          _scoreBar(
+            SetupData.displayName(entry.key),
+            entry.value,
+            colors[entry.key] ?? Colors.grey,
+          ),
+          const SizedBox(height: 6),
+        ],
       ],
     );
   }

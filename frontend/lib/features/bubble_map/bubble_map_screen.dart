@@ -11,6 +11,7 @@ import '../candles/application/get_candle_series.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_context.dart';
 import '../detail/detail_screen.dart';
+import '../detail/http_setup_api.dart';
 import '../events/events_view_model.dart';
 import 'bubble_map_state.dart';
 import 'bubble_map_view_model.dart';
@@ -29,12 +30,14 @@ class BubbleMapScreen extends StatefulWidget {
   final BubbleMapViewModel viewModel;
   final GetCandleSeries getCandleSeries;
   final EventsViewModel? eventsViewModel;
+  final SetupApi? setupApi;
 
   const BubbleMapScreen({
     Key? key,
     required this.viewModel,
     required this.getCandleSeries,
     this.eventsViewModel,
+    this.setupApi,
   }) : super(key: key);
 
   @override
@@ -223,6 +226,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             initialVisibleCount: kSparklineCandles,
             eventsViewModel: widget.eventsViewModel,
             getCandleSeries: widget.getCandleSeries,
+            setupApi: widget.setupApi,
             detailContext: DetailContext(
               rank: 0,
               totalScore: token.totalScore,
