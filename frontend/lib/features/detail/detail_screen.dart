@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/auto_refresh_timer.dart';
+import '../../core/polling_config.dart';
 import '../candles/api/candle_response.dart';
 import '../candles/application/get_candle_series.dart';
 import '../../domain/symbol.dart';
@@ -50,6 +52,9 @@ class DetailScreen extends StatefulWidget {
   /// Number of candles to fill the viewport width initially.
   final int initialVisibleCount;
 
+  /// Whether the user has pro access (enables auto-refresh).
+  final bool isProUser;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -64,6 +69,7 @@ class DetailScreen extends StatefulWidget {
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
+    this.isProUser = false,
   }) : super(key: key);
 
   @override
@@ -98,6 +104,12 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _isLoadingBehavior = false;
   bool _behaviorFetched = false;
 
+  // ---- auto-refresh (pro only) ----
+  AutoRefreshTimer? _autoRefreshTimer;
+
+  // ---- macro events 15m refresh timer ----
+  AutoRefreshTimer? _eventsRefreshTimer;
+
   @override
   void initState() {
     super.initState();
@@ -112,6 +124,15 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadSetupData();
     _loadFragilityData();
     _loadBehaviorData();
+    _startAutoRefresh();
+    _startEventsRefreshTimer();
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.dispose();
+    _eventsRefreshTimer?.dispose();
+    super.dispose();
   }
 
   /// Fetch candles for [tf] and swap the active series.
@@ -139,9 +160,67 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData(); // reload fragility for new timeframe
       _behaviorFetched = false;
       _loadBehaviorData(); // reload behavior for new timeframe
+      _startAutoRefresh(); // restart with new timeframe interval
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
+  }
+
+  // ---- auto-refresh (pro only) ----
+
+  /// Starts (or restarts) the chart auto-refresh timer for the current
+  /// timeframe.  No-op when the user is not on the pro tier.
+  void _startAutoRefresh() {
+    _autoRefreshTimer?.dispose();
+    _autoRefreshTimer = null;
+    if (!widget.isProUser) return;
+    final interval = kChartRefreshIntervals[_timeframe];
+    if (interval == null) return;
+    _autoRefreshTimer = AutoRefreshTimer(
+      interval: interval,
+      onTick: _autoRefreshChart,
+    );
+    _autoRefreshTimer!.start();
+  }
+
+  /// Re-fetches candles + all dependent panels silently.
+  Future<void> _autoRefreshChart() async {
+    final svc = widget.getCandleSeries;
+    if (svc == null || !mounted) return;
+    try {
+      final input = buildDetailChartInput(
+        symbol: widget.symbol.value,
+        timeframe: _timeframe,
+      );
+      final result = await svc.execute(input);
+      if (!mounted) return;
+      setState(() {
+        _series = result;
+        _warmupCount = kIndicatorWarmup;
+      });
+      _loadEvents();
+      _setupFetched = false;
+      _loadSetupData();
+      _fragilityFetched = false;
+      _loadFragilityData();
+      _behaviorFetched = false;
+      _loadBehaviorData();
+    } catch (_) {
+      // Silently ignore — next tick will retry.
+    }
+  }
+
+  // ---- macro events 15m refresh ----
+
+  /// Starts the 15-minute one-shot timer that re-fetches macro events
+  /// when the user stays on the detail chart for an extended period.
+  void _startEventsRefreshTimer() {
+    _eventsRefreshTimer?.dispose();
+    _eventsRefreshTimer = AutoRefreshTimer(
+      interval: kMacroEventsRefreshDuration,
+      onTick: () async => _loadEvents(),
+    );
+    _eventsRefreshTimer!.start();
   }
 
   Future<void> _loadChartConfig() async {

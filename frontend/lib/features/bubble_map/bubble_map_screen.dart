@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../../core/auto_refresh_timer.dart';
+import '../../core/polling_config.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
 import '../candles/application/get_candle_series.dart';
@@ -36,6 +38,9 @@ class BubbleMapScreen extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
 
+  /// Whether the user has pro access (enables auto-refresh).
+  final bool isProUser;
+
   const BubbleMapScreen({
     Key? key,
     required this.viewModel,
@@ -44,6 +49,7 @@ class BubbleMapScreen extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.isProUser = false,
   }) : super(key: key);
 
   @override
@@ -67,6 +73,9 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   double _viewWidth = 0;
   double _viewHeight = 0;
 
+  // ---- auto-refresh (pro only) ----
+  AutoRefreshTimer? _autoRefreshTimer;
+
   /// Bubble positions driven by physics (overrides packed positions while
   /// physics mode is active or frozen).
   List<PackedBubble>? _physicsBubbles;
@@ -88,10 +97,12 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
         setState(() {});
       }
     };
+    _startAutoRefresh();
   }
 
   @override
   void dispose() {
+    _autoRefreshTimer?.dispose();
     _stopPhysics();
     vm.onChanged = null;
     super.dispose();
@@ -198,6 +209,36 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
         _bodies.map((b) => b.angle).toList(growable: false);
   }
 
+  // ---- auto-refresh (pro only) ----
+
+  /// Starts (or restarts) the bubble map auto-refresh timer.
+  void _startAutoRefresh() {
+    _autoRefreshTimer?.dispose();
+    _autoRefreshTimer = null;
+    if (!widget.isProUser) return;
+    final interval = kChartRefreshIntervals[vm.state.timeframe];
+    if (interval == null) return;
+    _autoRefreshTimer = AutoRefreshTimer(
+      interval: interval,
+      onTick: _autoRefreshBubbles,
+    );
+    _autoRefreshTimer!.start();
+  }
+
+  /// Re-fetches bubble data for the current timeframe/page.
+  Future<void> _autoRefreshBubbles() async {
+    if (!mounted) return;
+    final w = _viewWidth;
+    final h = _viewHeight;
+    if (w <= 0 || h <= 0) return;
+    await vm.load(
+      timeframe: vm.state.timeframe,
+      pageIndex: vm.state.pageIndex,
+      width: w,
+      height: h,
+    );
+  }
+
   // ---- navigation ----
 
   Future<void> _onBubbleTap(PackedBubble bubble) async {
@@ -235,6 +276,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
+            isProUser: widget.isProUser,
             detailContext: DetailContext(
               rank: 0,
               totalScore: token.totalScore,
@@ -490,6 +532,8 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
       width: w,
       height: math.max(h, 0),
     );
+    // Restart auto-refresh with the (possibly new) timeframe interval.
+    _startAutoRefresh();
   }
 
   Widget _dropdown<T>({

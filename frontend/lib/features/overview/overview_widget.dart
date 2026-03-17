@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../../core/auto_refresh_timer.dart';
 import '../../core/overview_banner.dart';
+import '../../core/polling_config.dart';
 // import '../../core/sequential_visual_executor.dart'; // PR-034: kept for potential future use
 import '../../core/sparkline_flash_dot.dart';
 import '../../domain/symbol.dart';
@@ -117,10 +119,20 @@ class OverviewWidgetState extends State<OverviewWidget>
   final Map<String, Color> _flashColors = {};
   bool _isRefreshing = false;
 
+  /// True while an auto-triggered refresh (not manual pull) is in flight.
+  bool _isAutoRefreshing = false;
+
   // ---- staleness & banner ----
   final StalenessTracker _stalenessTracker = StalenessTracker();
 
+  // ---- auto-refresh (pro only) ----
+  AutoRefreshTimer? _autoRefreshTimer;
+
   PreferencesService? get _prefs => widget.prefs;
+
+  /// Whether auto-refresh is enabled (pro tier).
+  bool get _isProUser =>
+      widget.billingManager == null || widget.billingManager!.hasFullAccess;
 
   @override
   void initState() {
@@ -183,8 +195,15 @@ class OverviewWidgetState extends State<OverviewWidget>
         // Flash dots: compare with previous values.
         if (_isRefreshing) {
           _isRefreshing = false;
-          _triggerFlashDots(st.items);
+          _triggerFlashDots(
+            st.items,
+            staggerMs: _isAutoRefreshing ? kStaggerDelayMs : 10,
+          );
+          _isAutoRefreshing = false;
         }
+
+        // Start auto-refresh once initial data is available (pro only).
+        _maybeStartAutoRefresh(st.items.length);
       }
 
       setState(() {});
@@ -201,6 +220,7 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   void dispose() {
     vm.onChanged = null;
+    _autoRefreshTimer?.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _stalenessTracker.stop();
@@ -249,7 +269,10 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   /// After refresh, compares new sparkline last-values with old and
   /// fires flash dot animations for changed items.
-  void _triggerFlashDots(List<OverviewItem> items) {
+  ///
+  /// [staggerMs] controls the delay between sequential activations
+  /// (10 ms for manual pull-to-refresh, [kStaggerDelayMs] for auto-refresh).
+  void _triggerFlashDots(List<OverviewItem> items, {int staggerMs = 10}) {
     // Dispose old flash controllers.
     for (final ctrl in _flashControllers.values) {
       ctrl.dispose();
@@ -266,7 +289,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       if (curr == prev) continue;
 
       final color = curr > prev ? Colors.green : Colors.red;
-      final delay = Duration(milliseconds: 10 * order);
+      final delay = Duration(milliseconds: staggerMs * order);
 
       Future.delayed(delay, () {
         if (!mounted) return;
@@ -295,6 +318,29 @@ class OverviewWidgetState extends State<OverviewWidget>
       });
     }
     _previousLastValues = {};
+  }
+
+  // ---- auto-refresh helpers (pro only) ----
+
+  /// Initialises the auto-refresh timer the first time we have data.
+  /// Subsequent calls are no-ops (the timer is already running).
+  void _maybeStartAutoRefresh(int symbolCount) {
+    if (!_isProUser || _autoRefreshTimer != null || symbolCount == 0) return;
+    _autoRefreshTimer = AutoRefreshTimer(
+      interval: overviewAutoRefreshInterval(symbolCount),
+      onTick: _autoRefresh,
+    );
+    _autoRefreshTimer!.start();
+  }
+
+  /// Performs an auto-refresh cycle: captures sparkline values, refreshes
+  /// data (the flash-dot trigger happens in the [onChanged] listener),
+  /// then notifies staleness tracker.
+  Future<void> _autoRefresh() async {
+    _captureSparklineValues();
+    _isRefreshing = true;
+    _isAutoRefreshing = true;
+    await vm.refresh(_timeframe);
   }
 
   // ---- overlay helpers ----
@@ -366,6 +412,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
+            isProUser: _isProUser,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -655,6 +702,10 @@ class OverviewWidgetState extends State<OverviewWidget>
                     setState(() => _timeframe = v ?? '1h');
                     _prefs?.timeframe = _timeframe;
                     _stalenessTracker.setTimeframe(_timeframe);
+                    // Pause auto-refresh during reload; it resumes via
+                    // _maybeStartAutoRefresh once new data arrives.
+                    _autoRefreshTimer?.stop();
+                    _autoRefreshTimer = null;
                     vm.loadInitial(_timeframe);
                   },
                 ), ctrlFontSize),
@@ -870,6 +921,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     setupApi: widget.setupApi,
                     fragilityApi: widget.fragilityApi,
                     behaviorApi: widget.behaviorApi,
+                    isProUser: _isProUser,
                   ),
                 ),
               );
@@ -1132,7 +1184,12 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
 
     final spacing = _columns == 3 ? 4.0 : 8.0;
-    final banner = OverviewBanner(kind: _stalenessTracker.kind);
+    // Pro users never see the stale banner (auto-refresh handles it).
+    // The offline banner is shown for all tiers.
+    final bannerKind = _isProUser && _stalenessTracker.kind == OverviewBannerKind.stale
+        ? OverviewBannerKind.none
+        : _stalenessTracker.kind;
+    final banner = OverviewBanner(kind: bannerKind);
 
     return Column(
       children: [

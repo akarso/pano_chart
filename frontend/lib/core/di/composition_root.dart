@@ -48,9 +48,12 @@ class CompositionRoot {
   }
 
   /// Creates a wired OverviewViewModel backed by the rankings API.
+  ///
+  /// Eagerly loads all symbols in a single request (≈150 + stablecoin
+  /// padding) so the full universe is available immediately at startup.
   OverviewViewModel createOverviewViewModel() {
     final api = HttpRankingsApi(baseUrl: apiBaseUrl, client: httpClient);
-    final getRankings = GetRankingsImpl(api, pageSize: 30 + stablecoinPadding);
+    final getRankings = GetRankingsImpl(api, pageSize: 150 + stablecoinPadding);
     return OverviewViewModel(getRankings);
   }
 
