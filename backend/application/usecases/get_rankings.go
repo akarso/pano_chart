@@ -133,7 +133,7 @@ func NewGetRankings(
 		precision = 110
 	}
 	if defaultAlgo == "" {
-		defaultAlgo = SidewaysAlgoV1
+		defaultAlgo = SidewaysAlgoV5
 	}
 	wl := int64(workerLimit)
 	if wl <= 0 {
@@ -281,6 +281,13 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 	// 7. Compute per-component percentiles + badge assignment.
 	computeComponentPercentiles(results)
 	assignBadges(results)
+
+	// 8. Sign-adjust trend score for directional display.
+	//    Positive = uptrend, negative = downtrend.
+	//    Applied AFTER TotalScore, percentiles, and badges so they remain
+	//    based on absolute trendiness.  The frontend re-sorts locally using
+	//    the signed value so "trend up" puts uptrends first.
+	signAdjustTrend(results)
 
 	return results, nil
 }
@@ -479,5 +486,28 @@ func sortValue(r RankedResult, mode SortMode) float64 {
 			return r.TotalScore
 		}
 		return r.Scores[key]
+	}
+}
+
+// signAdjustTrend negates the "Trend Predictability" score for symbols whose
+// sparkline slopes downward (last close < first close).  The result is a
+// signed score: positive = uptrend, negative = downtrend.
+//
+// Call this AFTER TotalScore, percentiles, and badges have been computed so
+// those remain based on absolute trendiness.
+func signAdjustTrend(results []RankedResult) {
+	const key = "Trend Predictability"
+	for i := range results {
+		ts := results[i].Scores[key]
+		if ts == 0 {
+			continue
+		}
+		sp := results[i].Sparkline
+		if len(sp) < 2 {
+			continue
+		}
+		if sp[len(sp)-1] < sp[0] {
+			results[i].Scores[key] = -ts
+		}
 	}
 }

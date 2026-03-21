@@ -28,13 +28,23 @@ func NewMarketRegimeHandler(c RegimeCalculator) *MarketRegimeHandler {
 type regimeResponse struct {
 	Timeframe  string           `json:"timeframe"`
 	Regime     string           `json:"regime"`
-	Confidence float64          `json:"confidence"`
+	Prevalence float64          `json:"prevalence"`
+	Scores     regimeScoresDTO  `json:"scores"`
 	Metrics    regimeMetricsDTO `json:"metrics"`
+}
+
+type regimeScoresDTO struct {
+	Expansion   float64 `json:"expansion"`
+	Compression float64 `json:"compression"`
+	Trend       float64 `json:"trend"`
+	Sideways    float64 `json:"sideways"`
 }
 
 type regimeMetricsDTO struct {
 	TrendBreadth        float64 `json:"trendBreadth"`
+	SidewaysBreadth     float64 `json:"sidewaysBreadth"`
 	CompressionBreadth  float64 `json:"compressionBreadth"`
+	BreakoutBreadth     float64 `json:"breakoutBreadth"`
 	VolatilityExpansion float64 `json:"volatilityExpansion"`
 	Dispersion          float64 `json:"dispersion"`
 }
@@ -55,10 +65,18 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	resp := regimeResponse{
 		Timeframe:  summary.Timeframe,
 		Regime:     string(summary.Regime),
-		Confidence: roundTo(summary.Confidence, 4),
+		Prevalence: roundTo(summary.Prevalence, 4),
+		Scores: regimeScoresDTO{
+			Expansion:   roundTo(summary.Scores.Expansion, 4),
+			Compression: roundTo(summary.Scores.Compression, 4),
+			Trend:       roundTo(summary.Scores.Trend, 4),
+			Sideways:    roundTo(summary.Scores.Sideways, 4),
+		},
 		Metrics: regimeMetricsDTO{
 			TrendBreadth:        roundTo(summary.Metrics.TrendBreadth, 4),
+			SidewaysBreadth:     roundTo(summary.Metrics.SidewaysBreadth, 4),
 			CompressionBreadth:  roundTo(summary.Metrics.CompressionBreadth, 4),
+			BreakoutBreadth:     roundTo(summary.Metrics.BreakoutBreadth, 4),
 			VolatilityExpansion: roundTo(summary.Metrics.VolatilityExpansion, 4),
 			Dispersion:          roundTo(summary.Metrics.Dispersion, 4),
 		},

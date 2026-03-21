@@ -20,9 +20,17 @@ void main() {
       final json = {
         'timeframe': '4h',
         'regime': 'compression',
-        'confidence': 0.71,
+        'prevalence': 0.71,
+        'scores': {
+          'expansion': 0.05,
+          'compression': 0.71,
+          'trend': 0.14,
+          'sideways': 0.10,
+        },
         'metrics': {
           'trendBreadth': 0.18,
+          'sidewaysBreadth': 0.10,
+          'breakoutBreadth': 0.05,
           'compressionBreadth': 0.34,
           'volatilityExpansion': 0.82,
           'dispersion': 0.21,
@@ -32,8 +40,14 @@ void main() {
       final data = RegimeData.fromJson(json);
       expect(data.timeframe, '4h');
       expect(data.regime, 'compression');
-      expect(data.confidence, 0.71);
+      expect(data.prevalence, 0.71);
+      expect(data.scores.compression, 0.71);
+      expect(data.scores.expansion, 0.05);
+      expect(data.scores.trend, 0.14);
+      expect(data.scores.sideways, 0.10);
       expect(data.metrics.trendBreadth, 0.18);
+      expect(data.metrics.sidewaysBreadth, 0.10);
+      expect(data.metrics.breakoutBreadth, 0.05);
       expect(data.metrics.compressionBreadth, 0.34);
       expect(data.metrics.volatilityExpansion, 0.82);
       expect(data.metrics.dispersion, 0.21);
@@ -43,7 +57,13 @@ void main() {
       final json = {
         'timeframe': '1h',
         'regime': 'sideways',
-        'confidence': 1,
+        'prevalence': 1,
+        'scores': {
+          'expansion': 0,
+          'compression': 0,
+          'trend': 0,
+          'sideways': 1,
+        },
         'metrics': {
           'trendBreadth': 0,
           'compressionBreadth': 0,
@@ -53,7 +73,8 @@ void main() {
       };
 
       final data = RegimeData.fromJson(json);
-      expect(data.confidence, 1.0);
+      expect(data.prevalence, 1.0);
+      expect(data.scores.sideways, 1.0);
       expect(data.metrics.volatilityExpansion, 1.0);
     });
   });
@@ -69,7 +90,13 @@ void main() {
           jsonEncode({
             'timeframe': '4h',
             'regime': 'compression',
-            'confidence': 0.71,
+            'prevalence': 0.71,
+            'scores': {
+              'expansion': 0.05,
+              'compression': 0.71,
+              'trend': 0.14,
+              'sideways': 0.10,
+            },
             'metrics': {
               'trendBreadth': 0.18,
               'compressionBreadth': 0.34,
@@ -102,7 +129,13 @@ void main() {
           jsonEncode({
             'timeframe': '4h',
             'regime': 'sideways',
-            'confidence': 0.5,
+            'prevalence': 0.5,
+            'scores': {
+              'expansion': 0.1,
+              'compression': 0.1,
+              'trend': 0.3,
+              'sideways': 0.5,
+            },
             'metrics': {
               'trendBreadth': 0.1,
               'compressionBreadth': 0.1,
@@ -147,6 +180,12 @@ void main() {
 
   group('MarketPulseScreen with regime', () {
     testWidgets('shows regime card when regimeApi is provided', (tester) async {
+      // Increase surface so metrics card is visible below regime card
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'sideways',
@@ -164,9 +203,14 @@ void main() {
       final regimeApi = _FakeRegimeApi(const RegimeData(
         timeframe: '4h',
         regime: 'compression',
-        confidence: 0.71,
+        prevalence: 0.71,
+        scores: RegimeScores(
+          expansion: 0.05, compression: 0.71, trend: 0.14, sideways: 0.10,
+        ),
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
+          sidewaysBreadth: 0.10,
+          breakoutBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,
@@ -184,7 +228,7 @@ void main() {
 
       // Regime card shown instead of state card
       expect(find.text('COMPRESSION'), findsOneWidget);
-      expect(find.text('71.0% confidence  •  4h'), findsOneWidget);
+      expect(find.text('71% prevalence  •  4h'), findsOneWidget);
 
       // Metrics card shown
       expect(find.text('Market Metrics'), findsOneWidget);
@@ -227,6 +271,12 @@ void main() {
 
     testWidgets('shows volatility label "high" for expansion',
         (tester) async {
+      // Increase surface so metrics card is visible below regime card
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'sideways',
@@ -244,9 +294,17 @@ void main() {
       final regimeApi = _FakeRegimeApi(const RegimeData(
         timeframe: '4h',
         regime: 'expansion',
-        confidence: 1.5,
+        prevalence: 0.90,
+        scores: RegimeScores(
+          expansion: 0.90,
+          compression: 0.02,
+          trend: 0.05,
+          sideways: 0.03,
+        ),
         metrics: RegimeMetrics(
           trendBreadth: 0.0,
+          sidewaysBreadth: 0.0,
+          breakoutBreadth: 0.0,
           compressionBreadth: 0.0,
           volatilityExpansion: 1.5,
           dispersion: 0.08,

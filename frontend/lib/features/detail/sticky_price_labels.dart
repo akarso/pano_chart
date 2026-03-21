@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/format_price.dart';
 import '../candles/api/candle_response.dart';
 
 class StickyPriceLabels extends StatelessWidget {
@@ -40,10 +41,5 @@ class StickyPriceLabels extends StatelessWidget {
     return Stack(children: labels);
   }
 
-  String _formatPrice(double price) {
-    if (price >= 1000) return price.toStringAsFixed(0);
-    if (price >= 1) return price.toStringAsFixed(2);
-    if (price >= 0.01) return price.toStringAsFixed(4);
-    return price.toStringAsFixed(6);
-  }
+  String _formatPrice(double price) => formatPrice(price);
 }

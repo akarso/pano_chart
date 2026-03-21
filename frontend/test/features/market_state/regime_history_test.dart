@@ -178,9 +178,14 @@ void main() {
       final regimeApi = _FakeRegimeApi(const RegimeData(
         timeframe: '4h',
         regime: 'compression',
-        confidence: 0.71,
+        prevalence: 0.71,
+        scores: RegimeScores(
+          expansion: 0.05, compression: 0.71, trend: 0.14, sideways: 0.10,
+        ),
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
+          sidewaysBreadth: 0.10,
+          breakoutBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,

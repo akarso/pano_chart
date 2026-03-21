@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'behavior_oscillator_painter.dart';
 import 'chart_config.dart';
 
 /// Shows a bottom sheet letting the user toggle and configure
@@ -11,6 +12,7 @@ Future<ChartIndicatorConfig?> showIndicatorPanel(
   return showModalBottomSheet<ChartIndicatorConfig>(
     context: context,
     backgroundColor: const Color(0xFF1A1A2E),
+    isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
@@ -39,12 +41,17 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+    // Cap height at 85% of screen so the sheet never hides behind the keyboard
+    // or overflows on smaller devices.
+    final maxH = MediaQuery.sizeOf(context).height * 0.85;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxH),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             // drag handle
             Container(
               width: 36,
@@ -118,6 +125,85 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
             ),
 
             const SizedBox(height: 16),
+            const Divider(color: Colors.white12, height: 1),
+            const SizedBox(height: 12),
+
+            // ── Behavioral Indicators section ──
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Behavioral Indicators',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 40,
+                  child: Switch(
+                    value: _cfg.showBehaviorPanel,
+                    onChanged: (v) =>
+                        _update(_cfg.copyWith(showBehaviorPanel: v)),
+                    activeColor: const Color(0xFF4DD0E1),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // ── Greed ──
+            _IndicatorRow(
+              label: 'Greed',
+              color: BehaviorOscillatorPainter.greedColor,
+              enabled: _cfg.showBehaviorPanel && _cfg.showGreed,
+              period: _cfg.behaviorWindow,
+              minPeriod: 5,
+              maxPeriod: 50,
+              onToggle: (v) => _update(_cfg.copyWith(showGreed: v)),
+              onPeriod: (v) => _update(_cfg.copyWith(behaviorWindow: v)),
+            ),
+
+            // ── Fear ──
+            _IndicatorRow(
+              label: 'Fear',
+              color: BehaviorOscillatorPainter.fearColor,
+              enabled: _cfg.showBehaviorPanel && _cfg.showFear,
+              period: _cfg.behaviorWindow,
+              minPeriod: 5,
+              maxPeriod: 50,
+              onToggle: (v) => _update(_cfg.copyWith(showFear: v)),
+              onPeriod: (v) => _update(_cfg.copyWith(behaviorWindow: v)),
+            ),
+
+            // ── Patience ──
+            _IndicatorRow(
+              label: 'Patience',
+              color: BehaviorOscillatorPainter.patienceColor,
+              enabled: _cfg.showBehaviorPanel && _cfg.showPatience,
+              period: _cfg.behaviorWindow,
+              minPeriod: 5,
+              maxPeriod: 50,
+              onToggle: (v) => _update(_cfg.copyWith(showPatience: v)),
+              onPeriod: (v) => _update(_cfg.copyWith(behaviorWindow: v)),
+            ),
+
+            // ── Panic ──
+            _IndicatorRow(
+              label: 'Panic',
+              color: BehaviorOscillatorPainter.panicColor,
+              enabled: _cfg.showBehaviorPanel && _cfg.showPanic,
+              period: _cfg.behaviorWindow,
+              minPeriod: 5,
+              maxPeriod: 50,
+              onToggle: (v) => _update(_cfg.copyWith(showPanic: v)),
+              onPeriod: (v) => _update(_cfg.copyWith(behaviorWindow: v)),
+            ),
+
+            const SizedBox(height: 16),
 
             SizedBox(
               width: double.infinity,
@@ -135,6 +221,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

@@ -6,15 +6,20 @@ import (
 	"pano_chart/backend/domain"
 )
 
+const (
+	longATRPeriod  = 30 // candles for the long-term ATR baseline
+	shortATRPeriod = 7  // candles for the short-term ATR
+)
+
 // volatilityExpansion computes the ratio of short-term ATR to long-term ATR.
 // A ratio > 1.3 indicates expansion, ~1 is normal, < 0.8 is compression.
 func volatilityExpansion(candles []domain.Candle) float64 {
-	if len(candles) < 30 {
+	if len(candles) < longATRPeriod {
 		return 1
 	}
 
-	shortATR := atr(candles[len(candles)-7:])
-	longATR := atr(candles[len(candles)-30:])
+	shortATR := atr(candles[len(candles)-shortATRPeriod:])
+	longATR := atr(candles[len(candles)-longATRPeriod:])
 
 	if longATR == 0 {
 		return 1

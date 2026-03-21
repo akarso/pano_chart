@@ -4,7 +4,7 @@ import "time"
 
 // AlgoVersion is the hardcoded scoring engine version tag.
 // It must be updated whenever scoring logic changes materially.
-const AlgoVersion = "v5.0.0"
+const AlgoVersion = "v5.1.0"
 
 // EvaluationSnapshot captures all regime scores and market state
 // at the time of evaluation for a single symbol/timeframe cycle.

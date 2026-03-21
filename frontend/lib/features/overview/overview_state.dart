@@ -5,6 +5,9 @@ class OverviewItem {
   final double trendScore;
   final double sidewaysScore;
   final double gainScore;
+  final double compressionScore;
+  final double breakoutUpScore;
+  final double breakoutDownScore;
   final double volume;
   final List<double> sparkline;
   final String badgeComponent;
@@ -16,6 +19,9 @@ class OverviewItem {
     this.trendScore = 0.0,
     this.sidewaysScore = 0.0,
     this.gainScore = 0.0,
+    this.compressionScore = 0.0,
+    this.breakoutUpScore = 0.0,
+    this.breakoutDownScore = 0.0,
     this.volume = 0.0,
     this.sparkline = const [],
     this.badgeComponent = '',
@@ -44,7 +50,7 @@ class OverviewState {
     required this.page,
     required this.hasMore,
     required this.sort,
-    this.sidewaysAlgo = 'v1',
+    this.sidewaysAlgo = 'v5',
     this.sortDirection = 'up',
     required this.snapshot,
     required this.error,

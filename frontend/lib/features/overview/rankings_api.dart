@@ -7,7 +7,7 @@ abstract class RankingsApi {
     required String sort,
     required int page,
     required int pageSize,
-    String sidewaysAlgo = 'v1',
+    String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
   });
 }

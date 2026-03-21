@@ -142,8 +142,9 @@ void main() {
         (tester) async {
       await tester.pumpWidget(_app());
       await tester.pump();
-      // Two help_outline icons for 24h and reference explanations
-      expect(find.byIcon(Icons.help_outline), findsNWidgets(2));
+      // At least two help_outline icons (24h + reference); fieldset hints
+      // add more when the score breakdown is visible.
+      expect(find.byIcon(Icons.help_outline), findsAtLeast(2));
     });
 
     testWidgets('tapping 24h help icon shows dialog', (tester) async {
@@ -159,8 +160,8 @@ void main() {
     testWidgets('tapping reference help icon shows dialog', (tester) async {
       await tester.pumpWidget(_app());
       await tester.pump();
-      // Second help icon is for reference area
-      await tester.tap(find.byIcon(Icons.help_outline).last);
+      // Second help icon (index 1) is for reference area
+      await tester.tap(find.byIcon(Icons.help_outline).at(1));
       await tester.pumpAndSettle();
       expect(find.text('Reference Area'), findsOneWidget);
       expect(find.text('OK'), findsOneWidget);

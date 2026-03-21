@@ -108,14 +108,14 @@ class OverviewWidgetState extends State<OverviewWidget>
   static const double _scrollThreshold = 200.0;
 
   // ---- flash dot state ----
-  /// Previous sparkline last-values, keyed by symbol.
+  /// Previous sparkline arrays, keyed by symbol.
   /// Captured before refresh so we can compare after.
-  Map<String, double> _previousLastValues = {};
+  Map<String, List<double>> _previousSparklines = {};
   /// Per-symbol flash dot animation controllers.
   final Map<String, AnimationController> _flashControllers = {};
   /// Per-symbol flash progress (0→1→0 for the flash envelope).
   final Map<String, double> _flashProgress = {};
-  /// Per-symbol flash color (green / red).
+  /// Per-symbol flash color (green / red / neutral blue).
   final Map<String, Color> _flashColors = {};
   bool _isRefreshing = false;
 
@@ -194,12 +194,14 @@ class OverviewWidgetState extends State<OverviewWidget>
 
         // Flash dots: compare with previous values.
         if (_isRefreshing) {
+          final isAuto = _isAutoRefreshing;
           _isRefreshing = false;
+          _isAutoRefreshing = false;
           _triggerFlashDots(
             st.items,
-            staggerMs: _isAutoRefreshing ? kStaggerDelayMs : 10,
+            staggerMs: isAuto ? kStaggerDelayMs : 10,
+            forceFlash: isAuto,
           );
-          _isAutoRefreshing = false;
         }
 
         // Start auto-refresh once initial data is available (pro only).
@@ -256,23 +258,32 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   // ---- flash dot helpers ----
 
-  /// Captures the last sparkline value for each currently loaded item
+  /// Captures the full sparkline for each currently loaded item
   /// so we can compare after refresh.
   void _captureSparklineValues() {
-    _previousLastValues = {};
+    _previousSparklines = {};
     for (final item in vm.state.items) {
       if (item.sparkline.isNotEmpty) {
-        _previousLastValues[item.symbol] = item.sparkline.last;
+        _previousSparklines[item.symbol] = List<double>.of(item.sparkline);
       }
     }
   }
 
-  /// After refresh, compares new sparkline last-values with old and
-  /// fires flash dot animations for changed items.
+  /// After refresh, compares sparklines with their pre-refresh snapshots.
+  ///
+  /// Change detection: compares the full sparkline array, not just the last
+  /// value.  Even a window-slide (new candle added, old dropped) counts.
+  ///
+  /// For auto-refresh ([forceFlash] = true) items with no data change still
+  /// receive a subtle neutral pulse so the overview grid always looks "alive".
   ///
   /// [staggerMs] controls the delay between sequential activations
   /// (10 ms for manual pull-to-refresh, [kStaggerDelayMs] for auto-refresh).
-  void _triggerFlashDots(List<OverviewItem> items, {int staggerMs = 10}) {
+  void _triggerFlashDots(
+    List<OverviewItem> items, {
+    int staggerMs = 10,
+    bool forceFlash = false,
+  }) {
     // Dispose old flash controllers.
     for (final ctrl in _flashControllers.values) {
       ctrl.dispose();
@@ -283,12 +294,62 @@ class OverviewWidgetState extends State<OverviewWidget>
 
     for (var order = 0; order < items.length; order++) {
       final item = items[order];
-      final prev = _previousLastValues[item.symbol];
-      if (prev == null || item.sparkline.isEmpty) continue;
-      final curr = item.sparkline.last;
-      if (curr == prev) continue;
+      final prevSparkline = _previousSparklines[item.symbol];
+      if (item.sparkline.isEmpty) continue;
 
-      final color = curr > prev ? Colors.green : Colors.red;
+      // Determine whether anything changed.
+      bool changed = false;
+      if (prevSparkline == null) {
+        changed = true;
+      } else if (prevSparkline.length != item.sparkline.length) {
+        changed = true;
+      } else {
+        for (int i = 0; i < item.sparkline.length; i++) {
+          if (item.sparkline[i] != prevSparkline[i]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+
+      // Pick colour.
+      Color color;
+      if (changed && prevSparkline != null && prevSparkline.isNotEmpty) {
+        // Directional: compare last values.
+        final prevLast = prevSparkline.last;
+        final currLast = item.sparkline.last;
+        color = currLast > prevLast
+            ? Colors.green
+            : currLast < prevLast
+                ? Colors.red
+                : const Color(0xFF64B5F6); // neutral blue
+      } else if (changed) {
+        // Brand-new symbol — use sparkline's own direction.
+        final sl = item.sparkline;
+        color = sl.last > sl.first
+            ? Colors.green
+            : sl.last < sl.first
+                ? Colors.red
+                : const Color(0xFF64B5F6);
+      } else if (forceFlash) {
+        // No data change but auto-refresh wants a "heartbeat" pulse.
+        // Use sparkline's own last-candle direction for colour.
+        final sl = item.sparkline;
+        if (sl.length >= 2) {
+          final prev2 = sl[sl.length - 2];
+          color = sl.last > prev2
+              ? Colors.green
+              : sl.last < prev2
+                  ? Colors.red
+                  : const Color(0xFF64B5F6);
+        } else {
+          color = const Color(0xFF64B5F6);
+        }
+      } else {
+        // Manual refresh, nothing changed — skip.
+        continue;
+      }
+
       final delay = Duration(milliseconds: staggerMs * order);
 
       Future.delayed(delay, () {
@@ -317,7 +378,7 @@ class OverviewWidgetState extends State<OverviewWidget>
         ctrl.forward();
       });
     }
-    _previousLastValues = {};
+    _previousSparklines = {};
   }
 
   // ---- auto-refresh helpers (pro only) ----
@@ -419,6 +480,9 @@ class OverviewWidgetState extends State<OverviewWidget>
               trendScore: item.trendScore,
               sidewaysScore: item.sidewaysScore,
               gainScore: item.gainScore,
+              compressionScore: item.compressionScore,
+              breakoutUpScore: item.breakoutUpScore,
+              breakoutDownScore: item.breakoutDownScore,
               volume: item.volume,
             ),
           ),
@@ -1150,6 +1214,79 @@ class OverviewWidgetState extends State<OverviewWidget>
     );
   }
 
+  // ---- weak-signal disclaimer ----
+
+  /// Returns the regime-relevant score for a given sort mode.
+  static double _sortRelevantScore(OverviewItem item, String sort) {
+    switch (sort) {
+      case 'sideways':
+        return item.sidewaysScore;
+      case 'trend':
+        return item.trendScore.abs();
+      case 'compression':
+        return item.compressionScore;
+      case 'breakout':
+        return (item.breakoutUpScore > item.breakoutDownScore
+            ? item.breakoutUpScore
+            : item.breakoutDownScore);
+      default:
+        return item.totalScore;
+    }
+  }
+
+  /// Median of the sort-relevant score for the first [n] items.
+  /// Returns 0 when the list is empty so the banner never fires on an
+  /// empty grid.
+  static double _medianScore(List<OverviewItem> items, String sort, {int n = 5}) {
+    if (items.isEmpty) return 0.0;
+    final scores = items
+        .take(n)
+        .map((i) => _sortRelevantScore(i, sort))
+        .toList()
+      ..sort();
+    final mid = scores.length ~/ 2;
+    return scores.length.isOdd
+        ? scores[mid]
+        : (scores[mid - 1] + scores[mid]) / 2;
+  }
+
+  /// Threshold below which the top-ranked items are considered a weak signal.
+  static const _weakSignalThreshold = 0.30;
+
+  /// Sorts where the weak-signal disclaimer is irrelevant (not regime-based).
+  static const _nonRegimeSorts = {'volume', 'gain', 'losers'};
+
+  Widget _buildWeakSignalBanner(List<OverviewItem> items, String sort) {
+    if (items.isEmpty) return const SizedBox.shrink();
+    if (_nonRegimeSorts.contains(sort)) return const SizedBox.shrink();
+    if (_medianScore(items, sort) >= _weakSignalThreshold) {
+      return const SizedBox.shrink();
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: const Color(0xFF3A2A00).withAlpha(200),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 14),
+          SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              'Chosen regime weakly represented \u2014 results may be noisy',
+              style: TextStyle(
+                color: Colors.amber,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ---- main body ----
 
   Widget _buildBody(OverviewState state) {
@@ -1190,10 +1327,12 @@ class OverviewWidgetState extends State<OverviewWidget>
         ? OverviewBannerKind.none
         : _stalenessTracker.kind;
     final banner = OverviewBanner(kind: bannerKind);
+    final weakBanner = _buildWeakSignalBanner(visibleItems, state.sort);
 
     return Column(
       children: [
         banner,
+        weakBanner,
         Expanded(
           child: RefreshIndicator(
             onRefresh: _onRefresh,
@@ -1307,10 +1446,10 @@ SignalType _parseSignalType(String component) {
   }
 }
 
-Color _signalColor(SignalType signal) {
+Color _signalColor(SignalType signal, {double trendScore = 0}) {
   switch (signal) {
     case SignalType.trend:
-      return Colors.blue;
+      return trendScore >= 0 ? Colors.green : Colors.red;
     case SignalType.gain:
       return Colors.green;
     case SignalType.sideways:
@@ -1318,10 +1457,11 @@ Color _signalColor(SignalType signal) {
   }
 }
 
-String _signalLabel(SignalType signal, {bool abbreviate = false}) {
+String _signalLabel(SignalType signal, {bool abbreviate = false, double trendScore = 0}) {
   switch (signal) {
     case SignalType.trend:
-      return abbreviate ? 'T' : 'TREND';
+      final arrow = trendScore >= 0 ? '↑' : '↓';
+      return abbreviate ? '$arrow T' : '$arrow TREND';
     case SignalType.gain:
       return abbreviate ? 'G' : 'GAIN';
     case SignalType.sideways:
@@ -1508,11 +1648,11 @@ class _OverviewGridItem extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
-        color: _signalColor(signal).withAlpha((0.8 * 255).round()),
+        color: _signalColor(signal, trendScore: item.trendScore).withAlpha((0.8 * 255).round()),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        _signalLabel(signal, abbreviate: columns > 1),
+        _signalLabel(signal, abbreviate: columns > 1, trendScore: item.trendScore),
         style: TextStyle(
           fontSize: badgeFontSize,
           fontWeight: FontWeight.bold,

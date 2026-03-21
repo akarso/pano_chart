@@ -38,11 +38,29 @@ class OverviewViewModel {
           sorted.sort((a, b) => b.volume.compareTo(a.volume));
           break;
         case 'compression':
-        case 'breakout':
-          // Placeholder — no dedicated score field yet; use totalScore.
+          // Sign compression score by sparkline direction so up/down toggle
+          // surfaces compressed tokens with the matching directional bias.
+          double signedComp(OverviewItem item) {
+            final s = item.sparkline;
+            if (s.length < 2 || s.first == 0) return item.compressionScore;
+            return s.last >= s.first
+                ? item.compressionScore
+                : -item.compressionScore;
+          }
           sorted.sort((a, b) => desc
-              ? b.totalScore.compareTo(a.totalScore)
-              : a.totalScore.compareTo(b.totalScore));
+              ? signedComp(b).compareTo(signedComp(a))
+              : signedComp(a).compareTo(signedComp(b)));
+          break;
+        case 'breakout':
+          // Up → highest breakoutUpScore first.
+          // Down → highest breakoutDownScore first.
+          if (desc) {
+            sorted.sort((a, b) =>
+                b.breakoutUpScore.compareTo(a.breakoutUpScore));
+          } else {
+            sorted.sort((a, b) =>
+                b.breakoutDownScore.compareTo(a.breakoutDownScore));
+          }
           break;
         default:
           sorted.sort((a, b) => b.totalScore.compareTo(a.totalScore));
@@ -109,9 +127,13 @@ class OverviewViewModel {
             'trendScore': e.trendScore,
             'sidewaysScore': e.sidewaysScore,
             'gainScore': e.gainScore,
+            'compressionScore': e.compressionScore,
+            'breakoutUpScore': e.breakoutUpScore,
+            'breakoutDownScore': e.breakoutDownScore,
             'volume': e.volume,
             'sparkline': e.sparkline,
             'badgeComponent': e.badgeComponent,
+            'sidewaysPercentile': e.sidewaysPercentile,
           }).toList(),
           'hasMore': result.hasMore,
           'snapshot': result.snapshot,
@@ -147,9 +169,13 @@ class OverviewViewModel {
                       trendScore: (e['trendScore'] as num).toDouble(),
                       sidewaysScore: (e['sidewaysScore'] as num).toDouble(),
                       gainScore: (e['gainScore'] as num).toDouble(),
+                      compressionScore: (e['compressionScore'] as num?)?.toDouble() ?? 0.0,
+                      breakoutUpScore: (e['breakoutUpScore'] as num?)?.toDouble() ?? 0.0,
+                      breakoutDownScore: (e['breakoutDownScore'] as num?)?.toDouble() ?? 0.0,
                       volume: (e['volume'] as num).toDouble(),
                       sparkline: (e['sparkline'] as List).map((v) => (v as num).toDouble()).toList(),
                       badgeComponent: e['badgeComponent'] as String? ?? '',
+                      sidewaysPercentile: (e['sidewaysPercentile'] as num?)?.toDouble() ?? 0.0,
                     ))
                 .toList();
             _setState(_state.copyWith(
@@ -185,10 +211,11 @@ class OverviewViewModel {
 
       if (currentGen != _generation) return;
 
+      final sortedItems = _sortItems(result.items, _state.sort, direction: _state.sortDirection);
       _setState(
         _state.copyWith(
           isLoading: false,
-          items: result.items,
+          items: sortedItems,
           page: 1,
           hasMore: result.hasMore,
           snapshot: result.snapshot,

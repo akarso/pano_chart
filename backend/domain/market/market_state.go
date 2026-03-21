@@ -10,8 +10,10 @@ const (
 	StateTrend       State = "trend"
 )
 
-// Breadth holds the fraction of symbols classified into each regime.
-// All values are in [0, 1] and sum to 1.
+// Breadth holds the proportionally-weighted breadth for each regime.
+// Each symbol distributes its scores continuously across the four
+// buckets, so the values reflect the true market character.
+// All values are in [0, 1] and sum to ~1.
 type Breadth struct {
 	Sideways    float64
 	Compression float64

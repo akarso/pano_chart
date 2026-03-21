@@ -23,7 +23,7 @@ abstract class GetOverview {
     required int page,
     required String sort,
     String? snapshot,
-    String sidewaysAlgo = 'v1',
+    String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
   });
 }

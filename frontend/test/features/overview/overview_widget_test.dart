@@ -111,4 +111,123 @@ void main() {
 
     expect(find.text('No data'), findsOneWidget);
   });
+
+  group('weak-signal banner', () {
+    testWidgets('shows disclaimer when sort-relevant scores are below threshold',
+        (WidgetTester tester) async {
+      final items = List.generate(
+        5,
+        (i) => OverviewItem(
+          symbol: 'SYM${i}USDT',
+          totalScore: 0.15,
+          sidewaysScore: 0.15, // below 0.30 threshold for sideways sort
+          sparkline: const [100.0, 101.0],
+        ),
+      );
+
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: items, hasMore: false),
+      ));
+      vm.changeSortSilent('sideways');
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(viewModel: vm, getCandleSeries: _FakeGetCandleSeries()),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('weakly represented'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('hides disclaimer when sort-relevant scores are above threshold',
+        (WidgetTester tester) async {
+      final items = List.generate(
+        5,
+        (i) => OverviewItem(
+          symbol: 'SYM${i}USDT',
+          totalScore: 0.80,
+          sidewaysScore: 0.80, // above threshold
+          sparkline: const [100.0, 101.0],
+        ),
+      );
+
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: items, hasMore: false),
+      ));
+      vm.changeSortSilent('sideways');
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(viewModel: vm, getCandleSeries: _FakeGetCandleSeries()),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('weakly represented'),
+        findsNothing,
+      );
+    });
+
+    testWidgets('checks trend score when sorting by trend',
+        (WidgetTester tester) async {
+      // High totalScore but low trendScore → banner should show.
+      final items = List.generate(
+        5,
+        (i) => OverviewItem(
+          symbol: 'SYM${i}USDT',
+          totalScore: 0.80,
+          sidewaysScore: 0.75,
+          trendScore: 0.10, // weak trend despite high total
+          sparkline: const [100.0, 101.0],
+        ),
+      );
+
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: items, hasMore: false),
+      ));
+      vm.changeSortSilent('trend');
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(viewModel: vm, getCandleSeries: _FakeGetCandleSeries()),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('weakly represented'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('suppressed for volume/gain/losers sorts',
+        (WidgetTester tester) async {
+      final items = List.generate(
+        5,
+        (i) => OverviewItem(
+          symbol: 'SYM${i}USDT',
+          totalScore: 0.10, // very weak
+          sparkline: const [100.0, 101.0],
+        ),
+      );
+
+      for (final sort in ['volume', 'gain', 'losers']) {
+        final vm = OverviewViewModel(_FakeGetOverview(
+          result: OverviewResult(items: items, hasMore: false),
+        ));
+        vm.changeSortSilent(sort);
+
+        await tester.pumpWidget(_wrap(
+          OverviewWidget(
+              viewModel: vm, getCandleSeries: _FakeGetCandleSeries()),
+        ));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('weakly represented'),
+          findsNothing,
+          reason: 'banner should be hidden for sort=$sort',
+        );
+      }
+    });
+  });
 }

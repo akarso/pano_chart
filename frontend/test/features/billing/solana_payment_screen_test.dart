@@ -89,7 +89,7 @@ void main() {
       // Let the future resolve.
       await tester.pumpAndSettle();
 
-      expect(find.text('\$4.99 / month'), findsOneWidget);
+      expect(find.text('€4.99 / month'), findsOneWidget);
       expect(find.textContaining('0.038385 SOL'), findsOneWidget);
       expect(find.text('TestWallet123abc'), findsOneWidget);
     });

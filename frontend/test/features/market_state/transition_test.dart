@@ -164,9 +164,14 @@ void main() {
       final regimeApi = _FakeRegimeApi(const RegimeData(
         timeframe: '4h',
         regime: 'compression',
-        confidence: 0.71,
+        prevalence: 0.71,
+        scores: RegimeScores(
+          expansion: 0.05, compression: 0.71, trend: 0.14, sideways: 0.10,
+        ),
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
+          sidewaysBreadth: 0.10,
+          breakoutBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,
@@ -199,7 +204,7 @@ void main() {
 
       // Transition card is shown
       expect(find.text('Transition Probabilities'), findsOneWidget);
-      expect(find.text('12 candles'), findsOneWidget);
+      expect(find.text('Age: 12 candles'), findsOneWidget);
       expect(find.text('42%'), findsOneWidget);
       expect(find.text('28%'), findsOneWidget);
       expect(find.text('30%'), findsOneWidget);
@@ -267,9 +272,14 @@ void main() {
       final regimeApi = _FakeRegimeApi(const RegimeData(
         timeframe: '4h',
         regime: 'sideways',
-        confidence: 0.5,
+        prevalence: 0.50,
+        scores: RegimeScores(
+          expansion: 0.10, compression: 0.10, trend: 0.10, sideways: 0.70,
+        ),
         metrics: RegimeMetrics(
           trendBreadth: 0.1,
+          sidewaysBreadth: 0.5,
+          breakoutBreadth: 0.05,
           compressionBreadth: 0.1,
           volatilityExpansion: 1.0,
           dispersion: 0.02,

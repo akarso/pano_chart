@@ -15,6 +15,14 @@ class ChartIndicatorConfig {
   final bool showAtr;
   final int atrPeriod;
 
+  // ── Behavioral indicators ──
+  final bool showBehaviorPanel;
+  final bool showGreed;
+  final bool showFear;
+  final bool showPatience;
+  final bool showPanic;
+  final int behaviorWindow;
+
   const ChartIndicatorConfig({
     this.showEmaFast = true,
     this.emaFastPeriod = 20,
@@ -24,6 +32,12 @@ class ChartIndicatorConfig {
     this.rsiPeriod = 14,
     this.showAtr = false,
     this.atrPeriod = 14,
+    this.showBehaviorPanel = false,
+    this.showGreed = true,
+    this.showFear = true,
+    this.showPatience = true,
+    this.showPanic = true,
+    this.behaviorWindow = 20,
   });
 
   ChartIndicatorConfig copyWith({
@@ -35,6 +49,12 @@ class ChartIndicatorConfig {
     int? rsiPeriod,
     bool? showAtr,
     int? atrPeriod,
+    bool? showBehaviorPanel,
+    bool? showGreed,
+    bool? showFear,
+    bool? showPatience,
+    bool? showPanic,
+    int? behaviorWindow,
   }) {
     return ChartIndicatorConfig(
       showEmaFast: showEmaFast ?? this.showEmaFast,
@@ -45,6 +65,12 @@ class ChartIndicatorConfig {
       rsiPeriod: rsiPeriod ?? this.rsiPeriod,
       showAtr: showAtr ?? this.showAtr,
       atrPeriod: atrPeriod ?? this.atrPeriod,
+      showBehaviorPanel: showBehaviorPanel ?? this.showBehaviorPanel,
+      showGreed: showGreed ?? this.showGreed,
+      showFear: showFear ?? this.showFear,
+      showPatience: showPatience ?? this.showPatience,
+      showPanic: showPanic ?? this.showPanic,
+      behaviorWindow: behaviorWindow ?? this.behaviorWindow,
     );
   }
 
@@ -57,6 +83,12 @@ class ChartIndicatorConfig {
         'rsiPeriod': rsiPeriod,
         'showAtr': showAtr,
         'atrPeriod': atrPeriod,
+        'showBehaviorPanel': showBehaviorPanel,
+        'showGreed': showGreed,
+        'showFear': showFear,
+        'showPatience': showPatience,
+        'showPanic': showPanic,
+        'behaviorWindow': behaviorWindow,
       };
 
   factory ChartIndicatorConfig.fromJson(Map<String, dynamic> j) {
@@ -69,6 +101,12 @@ class ChartIndicatorConfig {
       rsiPeriod: j['rsiPeriod'] as int? ?? 14,
       showAtr: j['showAtr'] as bool? ?? false,
       atrPeriod: j['atrPeriod'] as int? ?? 14,
+      showBehaviorPanel: j['showBehaviorPanel'] as bool? ?? false,
+      showGreed: j['showGreed'] as bool? ?? true,
+      showFear: j['showFear'] as bool? ?? true,
+      showPatience: j['showPatience'] as bool? ?? true,
+      showPanic: j['showPanic'] as bool? ?? true,
+      behaviorWindow: j['behaviorWindow'] as int? ?? 20,
     );
   }
 
@@ -102,7 +140,13 @@ class ChartIndicatorConfig {
           showRsi == other.showRsi &&
           rsiPeriod == other.rsiPeriod &&
           showAtr == other.showAtr &&
-          atrPeriod == other.atrPeriod;
+          atrPeriod == other.atrPeriod &&
+          showBehaviorPanel == other.showBehaviorPanel &&
+          showGreed == other.showGreed &&
+          showFear == other.showFear &&
+          showPatience == other.showPatience &&
+          showPanic == other.showPanic &&
+          behaviorWindow == other.behaviorWindow;
 
   @override
   int get hashCode => Object.hash(
@@ -110,5 +154,8 @@ class ChartIndicatorConfig {
         showEmaSlow, emaSlowPeriod,
         showRsi, rsiPeriod,
         showAtr, atrPeriod,
+        showBehaviorPanel, showGreed,
+        showFear, showPatience,
+        showPanic, behaviorWindow,
       );
 }

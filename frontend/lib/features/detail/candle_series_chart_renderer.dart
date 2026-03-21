@@ -102,13 +102,6 @@ class CandleChartPainter extends CustomPainter {
     }
   }
 
-  String _formatPrice(double price) {
-    if (price >= 1000) return price.toStringAsFixed(0);
-    if (price >= 1) return price.toStringAsFixed(2);
-    if (price >= 0.01) return price.toStringAsFixed(4);
-    return price.toStringAsFixed(6);
-  }
-
   @override
   bool shouldRepaint(covariant CandleChartPainter oldDelegate) {
     return !identical(series, oldDelegate.series);

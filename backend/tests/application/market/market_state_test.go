@@ -149,30 +149,36 @@ func TestService_MajorityCompression(t *testing.T) {
 func TestService_BreadthRatios(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		evals: []domain.EvaluationSnapshot{
-			{SidewaysScore: 0.5, TrendScore: 0.1},
-			{SidewaysScore: 0.5, TrendScore: 0.2},
-			{TrendScore: 0.8},
-			{BreakoutUpScore: 0.9},
+			{SidewaysScore: 0.9, TrendScore: 0.1}, // sideways-heavy
+			{SidewaysScore: 0.9, TrendScore: 0.1}, // sideways-heavy
+			{TrendScore: 0.8},                     // trend-dominated
+			{BreakoutUpScore: 0.9},                // breakout-dominated
 		},
 	})
 	summary, err := svc.Calculate("1h")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.Breadth.Sideways != 0.5 {
-		t.Errorf("expected Sideways breadth 0.5, got %f", summary.Breadth.Sideways)
+
+	// Continuous proportional breadth — no field should be exactly zero.
+	if summary.Breadth.Sideways <= 0 {
+		t.Errorf("expected positive Sideways breadth, got %f", summary.Breadth.Sideways)
 	}
-	if summary.Breadth.Trend != 0.25 {
-		t.Errorf("expected Trend breadth 0.25, got %f", summary.Breadth.Trend)
+	if summary.Breadth.Trend <= 0 {
+		t.Errorf("expected positive Trend breadth, got %f", summary.Breadth.Trend)
 	}
-	if summary.Breadth.Breakout != 0.25 {
-		t.Errorf("expected Breakout breadth 0.25, got %f", summary.Breadth.Breakout)
+	if summary.Breadth.Breakout <= 0 {
+		t.Errorf("expected positive Breakout breadth, got %f", summary.Breadth.Breakout)
 	}
-	if summary.Breadth.Compression != 0.0 {
-		t.Errorf("expected Compression breadth 0, got %f", summary.Breadth.Compression)
+	// All four fields should approximately sum to 1.0.
+	sum := summary.Breadth.Sideways + summary.Breadth.Compression + summary.Breadth.Breakout + summary.Breadth.Trend
+	if sum < 0.99 || sum > 1.01 {
+		t.Errorf("expected breadth sum ≈ 1.0, got %f", sum)
 	}
-	if summary.Confidence != 0.5 {
-		t.Errorf("expected confidence 0.5, got %f", summary.Confidence)
+	// Sideways-heavy tokens should push sideways breadth highest.
+	if summary.Breadth.Sideways <= summary.Breadth.Breakout {
+		t.Errorf("expected sideways > breakout, got sideways=%f breakout=%f",
+			summary.Breadth.Sideways, summary.Breadth.Breakout)
 	}
 }
 

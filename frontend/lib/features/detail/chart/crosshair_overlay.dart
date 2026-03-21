@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/format_price.dart';
 import '../../candles/api/candle_response.dart';
 
 /// Immutable snapshot of crosshair state passed to the overlay.
@@ -340,12 +341,7 @@ class CrosshairOverlay extends StatelessWidget {
 
   // ── Helpers ──
 
-  static String _fmtPrice(double price) {
-    if (price >= 1000) return price.toStringAsFixed(0);
-    if (price >= 1) return price.toStringAsFixed(2);
-    if (price >= 0.01) return price.toStringAsFixed(4);
-    return price.toStringAsFixed(6);
-  }
+  static String _fmtPrice(double price) => formatPrice(price);
 
   static String _fmtVol(double vol) {
     if (vol >= 1e9) return '${(vol / 1e9).toStringAsFixed(1)}B';

@@ -8,6 +8,7 @@ import '../../events/event_marker_builder.dart';
 import '../../events/events_view_model.dart';
 import '../chart_navigation.dart';
 import 'axis_layer.dart';
+import 'behavior_oscillator_painter.dart';
 import 'candle_painter.dart';
 import 'chart_config.dart';
 import 'crosshair_overlay.dart';
@@ -76,6 +77,9 @@ class _InteractiveChartState extends State<InteractiveChart> {
   List<double>? _rsi;
   List<double>? _atr;
 
+  // ── behavioral indicators ──
+  BehaviorIndicators? _behavior;
+
   // ── limits ──
   static const double _minCandleWidth = 2.0;
   static const double _maxCandleWidth = 40.0;
@@ -116,19 +120,29 @@ class _InteractiveChartState extends State<InteractiveChart> {
   }
 
   void _recomputeIndicators() {
-    final closes = widget.series.candles.map((c) => c.close).toList();
+    final candles = widget.series.candles;
+    final closes = candles.map((c) => c.close).toList();
     final cfg = widget.config;
 
     _emaFast = cfg.showEmaFast ? computeEma(closes, cfg.emaFastPeriod) : null;
     _emaSlow = cfg.showEmaSlow ? computeEma(closes, cfg.emaSlowPeriod) : null;
     _rsi = cfg.showRsi ? computeRsi(closes, cfg.rsiPeriod) : null;
 
+    final highs = candles.map((c) => c.high).toList();
+    final lows = candles.map((c) => c.low).toList();
+
     if (cfg.showAtr) {
-      final highs = widget.series.candles.map((c) => c.high).toList();
-      final lows = widget.series.candles.map((c) => c.low).toList();
       _atr = computeAtr(highs, lows, closes, cfg.atrPeriod);
     } else {
       _atr = null;
+    }
+
+    if (cfg.showBehaviorPanel) {
+      final volumes = candles.map((c) => c.volume).toList();
+      _behavior =
+          computeBehaviorIndicators(closes, highs, lows, volumes, cfg.behaviorWindow);
+    } else {
+      _behavior = null;
     }
   }
 
@@ -305,11 +319,34 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
     // Compute height splits.
     final hasOscillator = _rsi != null || _atr != null;
-    final priceH = hasOscillator ? widget.height * 0.62 : widget.height * 0.78;
-    final volumeH = hasOscillator ? widget.height * 0.14 : widget.height * 0.22;
-    final oscH = hasOscillator ? widget.height * 0.22 : 0.0;
+    final hasBehavior = _behavior != null;
+    final panelCount = (hasOscillator ? 1 : 0) + (hasBehavior ? 1 : 0);
+    late final double priceH;
+    late final double volumeH;
+    late final double oscH;
+    late final double behH;
+    switch (panelCount) {
+      case 0:
+        priceH = widget.height * 0.78;
+        volumeH = widget.height * 0.22;
+        oscH = 0;
+        behH = 0;
+        break;
+      case 1:
+        priceH = widget.height * 0.58;
+        volumeH = widget.height * 0.14;
+        oscH = hasOscillator ? widget.height * 0.26 : 0.0;
+        behH = hasBehavior ? widget.height * 0.26 : 0.0;
+        break;
+      default: // 2 panels
+        priceH = widget.height * 0.46;
+        volumeH = widget.height * 0.12;
+        oscH = widget.height * 0.20;
+        behH = widget.height * 0.20;
+        break;
+    }
     final xAxisH = 18.0;
-    final totalH = priceH + volumeH + oscH + xAxisH + 20; // extra bottom padding for gesture zone
+    final totalH = priceH + volumeH + oscH + behH + xAxisH + 20;
 
     return SizedBox(
       height: totalH,
@@ -324,8 +361,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
             // Cache layout dimensions for gesture zone detection.
             _layoutVw = vw;
-            _layoutTotalH = priceH + volumeH + oscH + xAxisH;
-            _layoutChartBottom = priceH + volumeH + oscH;
+            _layoutTotalH = priceH + volumeH + oscH + behH + xAxisH;
+            _layoutChartBottom = priceH + volumeH + oscH + behH;
 
             // On first build, set candleWidth to match sparkline ratio
             // and scroll to show the last initialVisibleCount candles.
@@ -407,7 +444,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH + volumeH + oscH + xAxisH,
+                      height: priceH + volumeH + oscH + behH + xAxisH,
                       child: ChartEventOverlay(
                         markers: _buildEventMarkers(chartW),
                         onNavigateToEvent: widget.onNavigateToEvent,
@@ -483,10 +520,41 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       ),
                     ),
 
+                  // ── Behavioral oscillator layer ──
+                  if (hasBehavior)
+                    Positioned(
+                      left: 0,
+                      top: priceH + volumeH + oscH,
+                      width: chartW,
+                      height: behH,
+                      child: RepaintBoundary(
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: Color(0x33FFFFFF), width: 0.5),
+                            ),
+                          ),
+                          child: CustomPaint(
+                            size: Size(chartW, behH),
+                            painter: BehaviorOscillatorPainter(
+                              greed: widget.config.showGreed ? _behavior!.greed : null,
+                              fear: widget.config.showFear ? _behavior!.fear : null,
+                              patience: widget.config.showPatience ? _behavior!.patience : null,
+                              panic: widget.config.showPanic ? _behavior!.panic : null,
+                              startIndex: start,
+                              endIndex: end,
+                              candleWidth: _candleWidth,
+                              scrollPixelOffset: pixOff,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
                   // ── X-axis time labels ──
                   Positioned(
                     left: 0,
-                    top: priceH + volumeH + oscH,
+                    top: priceH + volumeH + oscH + behH,
                     width: chartW,
                     height: xAxisH,
                     child: IgnorePointer(
@@ -507,7 +575,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   if (widget.referenceStartIndex != null)
                     Positioned(
                       left: 0,
-                      top: priceH + volumeH + oscH - 2,
+                      top: priceH + volumeH + oscH + behH - 2,
                       width: chartW,
                       height: 3,
                       child: IgnorePointer(
@@ -530,7 +598,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH + volumeH + oscH,
+                      height: priceH + volumeH + oscH + behH,
                       child: IgnorePointer(
                         child: CrosshairOverlay(
                           state: _crosshair!,
@@ -538,7 +606,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           timeframe: widget.series.timeframe,
                           priceHeight: priceH,
                           volumeHeight: volumeH,
-                          oscillatorHeight: oscH,
+                          oscillatorHeight: oscH + behH,
                           chartWidth: chartW,
                           priceLo: priceLo,
                           priceHi: priceHi,
@@ -577,6 +645,62 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         ),
                       ),
                     ),
+
+                  // ── Behavioral indicator labels ──
+                  if (hasBehavior) ...[
+                    if (widget.config.showGreed)
+                      Positioned(
+                        right: _yAxisW + 4,
+                        top: priceH + volumeH + oscH + 2,
+                        child: Text(
+                          'Greed',
+                          style: TextStyle(
+                            color: BehaviorOscillatorPainter.greedColor.withOpacity(0.55),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (widget.config.showFear)
+                      Positioned(
+                        right: _yAxisW + 4,
+                        top: priceH + volumeH + oscH + 14,
+                        child: Text(
+                          'Fear',
+                          style: TextStyle(
+                            color: BehaviorOscillatorPainter.fearColor.withOpacity(0.55),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (widget.config.showPatience)
+                      Positioned(
+                        right: _yAxisW + 4,
+                        top: priceH + volumeH + oscH + 26,
+                        child: Text(
+                          'Patience',
+                          style: TextStyle(
+                            color: BehaviorOscillatorPainter.patienceColor.withOpacity(0.55),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    if (widget.config.showPanic)
+                      Positioned(
+                        right: _yAxisW + 4,
+                        top: priceH + volumeH + oscH + 38,
+                        child: Text(
+                          'Panic',
+                          style: TextStyle(
+                            color: BehaviorOscillatorPainter.panicColor.withOpacity(0.55),
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
 
                   // ── Hard candle limit label ──
                   if (atHardLimit)

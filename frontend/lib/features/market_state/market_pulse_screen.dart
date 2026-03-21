@@ -33,6 +33,8 @@ class MarketPulseScreen extends StatefulWidget {
   State<MarketPulseScreen> createState() => _MarketPulseScreenState();
 }
 
+const _supportedTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+
 class _MarketPulseScreenState extends State<MarketPulseScreen> {
   MarketStateData? _stateData;
   CompositeIndexData? _compositeData;
@@ -41,6 +43,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   RegimeHistoryData? _regimeHistoryData;
   String? _error;
   bool _loading = true;
+  String _timeframe = '4h';
 
   @override
   void initState() {
@@ -55,14 +58,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     });
     try {
       final futures = <Future>[
-        widget.marketStateApi.fetch(timeframe: '4h'),
-        widget.compositeIndexApi.fetch(timeframe: '4h', limit: 200),
+        widget.marketStateApi.fetch(timeframe: _timeframe),
+        widget.compositeIndexApi.fetch(timeframe: _timeframe, limit: 200),
         if (widget.regimeApi != null)
-          widget.regimeApi!.fetch(timeframe: '4h'),
+          widget.regimeApi!.fetch(timeframe: _timeframe),
         if (widget.transitionApi != null)
-          widget.transitionApi!.fetch(timeframe: '4h'),
+          widget.transitionApi!.fetch(timeframe: _timeframe),
         if (widget.regimeHistoryApi != null)
-          widget.regimeHistoryApi!.fetch(timeframe: '4h'),
+          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
       ];
       final results = await Future.wait(futures);
       if (!mounted) return;
@@ -110,6 +113,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         ),
         title: const Text('Market Pulse'),
         centerTitle: true,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _timeframe,
+                isDense: true,
+                icon: const Icon(Icons.expand_more, color: Colors.white70, size: 18),
+                dropdownColor: const Color(0xFF1A1A1A),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                items: _supportedTimeframes
+                    .map((tf) => DropdownMenuItem(
+                          value: tf,
+                          child: Text(tf),
+                        ))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null && v != _timeframe) {
+                    setState(() => _timeframe = v);
+                    _loadAll();
+                  }
+                },
+              ),
+            ),
+          ),
+        ],
       ),
       body: _buildBody(),
     );
@@ -177,7 +206,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Widget _buildRegimeCard(RegimeData data) {
     final color = _regimeColor(data.regime);
-    final pct = (data.confidence * 100).toStringAsFixed(1);
+    final pct = (data.prevalence * 100).toStringAsFixed(0);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -204,11 +233,52 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% confidence  •  ${data.timeframe}',
+            '$pct% prevalence  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
+          const SizedBox(height: 16),
+          _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
+          const SizedBox(height: 6),
+          _regimeScoreBar('Sideways', data.scores.sideways, Colors.blueGrey),
+          const SizedBox(height: 6),
+          _regimeScoreBar('Compression', data.scores.compression, Colors.amber),
+          const SizedBox(height: 6),
+          _regimeScoreBar('Expansion', data.scores.expansion, Colors.redAccent),
         ],
       ),
+    );
+  }
+
+  Widget _regimeScoreBar(String label, double value, Color color) {
+    final pct = (value * 100).toStringAsFixed(0);
+    return Row(
+      children: [
+        SizedBox(
+          width: 90,
+          child: Text(label,
+              style: const TextStyle(fontSize: 12, color: Colors.white54)),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: value,
+              backgroundColor: Colors.white10,
+              valueColor: AlwaysStoppedAnimation<Color>(color.withAlpha(180)),
+              minHeight: 6,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 32,
+          child: Text(
+            '$pct%',
+            style: const TextStyle(fontSize: 11, color: Colors.white38),
+            textAlign: TextAlign.right,
+          ),
+        ),
+      ],
     );
   }
 
@@ -228,13 +298,30 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Market Metrics',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              const Text(
+                'Market Metrics',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: () => _showInfoDialog(
+                  title: 'Market Metrics',
+                  body: 'Volatility — short-term ATR / long-term ATR ratio.\n'
+                      '  • < 0.8 low  •  0.8–1.3 normal  •  > 1.3 high\n\n'
+                      'Dispersion — how differently assets move from each other.\n'
+                      '  • < 2% low  •  2–5% moderate  •  > 5% high\n\n'
+                      'Trend Breadth — average directional strength across all tokens (0–100%).\n\n'
+                      'Compression Breadth — average range-contraction signal across all tokens (0–100%).',
+                ),
+                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           _metricRow('Volatility', volLabel,
@@ -247,6 +334,18 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
             'Trend Breadth',
             '${(m.trendBreadth * 100).toStringAsFixed(1)}%',
             Colors.tealAccent,
+          ),
+          const SizedBox(height: 8),
+          _metricRow(
+            'Sideways Breadth',
+            '${(m.sidewaysBreadth * 100).toStringAsFixed(1)}%',
+            Colors.blueGrey,
+          ),
+          const SizedBox(height: 8),
+          _metricRow(
+            'Breakout Breadth',
+            '${(m.breakoutBreadth * 100).toStringAsFixed(1)}%',
+            Colors.redAccent,
           ),
           const SizedBox(height: 8),
           _metricRow(
@@ -310,16 +409,35 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Transition Probabilities',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+              Row(
+                children: [
+                  const Text(
+                    'Transition Probabilities',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => _showInfoDialog(
+                      title: 'Transition Probabilities',
+                      body: 'Estimated likelihood of the market transitioning '
+                          'to each regime given the current conditions.\n\n'
+                          'Based on compression breadth, volatility slope, '
+                          'and regime age (older regimes build more '
+                          'breakout pressure).\n\n'
+                          'Values are 0–100% and sum to ~100%.\n\n'
+                          'Regime Age shows how long the current regime '
+                          'has persisted, in both candles and real time.',
+                    ),
+                    child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                  ),
+                ],
               ),
               Text(
-                data.horizon,
+                'Age: ${data.horizon}',
                 style: const TextStyle(color: Colors.grey, fontSize: 11),
               ),
             ],
@@ -383,13 +501,30 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Regime History',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+              Row(
+                children: [
+                  const Text(
+                    'Regime History',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  GestureDetector(
+                    onTap: () => _showInfoDialog(
+                      title: 'Regime History',
+                      body: 'Timeline of detected market regimes.\n\n'
+                          'Age — how many candle periods the current regime '
+                          'has been active.\n\n'
+                          'The coloured bar shows the most recent regime '
+                          'periods (up to 20) with duration proportional to '
+                          'candle count.',
+                    ),
+                    child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                  ),
+                ],
               ),
               Text(
                 'Age: ${data.currentAge} candles',
@@ -551,19 +686,27 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '${data.symbolCount} symbols  •  base 100',
+            '${data.symbolCount} symbols  •  base 100${_timeRangeLabel(data.points)}',
             style: const TextStyle(color: Colors.grey, fontSize: 11),
           ),
           const SizedBox(height: 12),
           SizedBox(
-            height: 180,
+            height: 200,
             child: hasPoints
-                ? CustomPaint(
-                    size: Size.infinite,
-                    painter: _CompositeChartPainter(
-                      points: data.points,
-                      lineColor: changeColor,
-                    ),
+                ? Column(
+                    children: [
+                      Expanded(
+                        child: CustomPaint(
+                          size: Size.infinite,
+                          painter: _CompositeChartPainter(
+                            points: data.points,
+                            lineColor: changeColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      _buildTimeLabels(data.points),
+                    ],
                   )
                 : const Center(
                     child: Text(
@@ -579,6 +722,48 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   // ---------- Breadth Card ----------
 
+  /// Builds evenly-spaced time labels beneath the chart.
+  Widget _buildTimeLabels(List<IndexPoint> points) {
+    if (points.length < 2) return const SizedBox.shrink();
+    // Pick ~4 label positions: first, 1/3, 2/3, last.
+    final indices = [
+      0,
+      points.length ~/ 3,
+      (points.length * 2) ~/ 3,
+      points.length - 1,
+    ];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    String fmt(int ts) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true).toLocal();
+      final m = months[dt.month - 1];
+      final d = dt.day;
+      final h = dt.hour.toString().padLeft(2, '0');
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$m $d $h:$min';
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: indices.map((i) {
+        return Text(
+          fmt(points[i].timestamp),
+          style: const TextStyle(color: Colors.white38, fontSize: 9),
+        );
+      }).toList(),
+    );
+  }
+
+  /// Produces a human-readable time range suffix like "  •  ~33 days".
+  String _timeRangeLabel(List<IndexPoint> points) {
+    if (points.length < 2) return '';
+    final spanSec = points.last.timestamp - points.first.timestamp;
+    if (spanSec <= 0) return '';
+    final hours = spanSec / 3600;
+    if (hours < 24) return '  \u2022  ~${hours.round()}h';
+    final days = hours / 24;
+    if (days < 2) return '  \u2022  ~${hours.round()}h';
+    return '  \u2022  ~${days.round()}d';
+  }
+
   Widget _buildBreadthCard(MarketStateData data) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -589,13 +774,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Market Breadth',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              const Text(
+                'Market Breadth',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: () => _showInfoDialog(
+                  title: 'Market Breadth',
+                  body: 'Proportionally-weighted distribution of regime '
+                      'character across the full token universe.\n\n'
+                      'Each bar shows the average score weight for that '
+                      'regime (0–100%). All four bars sum to ~100%.\n\n'
+                      '• Sideways — range-bound, low conviction\n'
+                      '• Compression — narrowing ranges\n'
+                      '• Breakout — price escaping a range\n'
+                      '• Trend — strong directional move',
+                ),
+                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           _breadthRow('Sideways', data.breadth.sideways, Colors.blueGrey),
@@ -643,6 +847,22 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   // ---------- Helpers ----------
+
+  void _showInfoDialog({required String title, required String body}) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(body),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Color _stateColor(String state) {
     switch (state) {

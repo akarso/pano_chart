@@ -264,6 +264,41 @@ void main() {
 
       expect(find.text('GO'), findsOneWidget);
     });
+
+    testWidgets('timeframe dropdown includes 1m', (tester) async {
+      final stateApi = _FakeStateApi(MarketStateData(
+        timeframe: '4h',
+        state: 'trend',
+        confidence: 0.8,
+        breadth: const MarketBreadth(
+          sideways: 0.1,
+          compression: 0.05,
+          breakout: 0.05,
+          trend: 0.8,
+        ),
+        symbolCount: 50,
+      ));
+      final compositeApi = _FakeCompositeApi(CompositeIndexData(
+        timeframe: '4h',
+        symbolCount: 40,
+        points: const [],
+      ));
+
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: stateApi,
+          compositeIndexApi: compositeApi,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Open the timeframe dropdown
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+
+      // Verify 1m is available
+      expect(find.text('1m').last, findsOneWidget);
+    });
   });
 }
 

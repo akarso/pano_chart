@@ -175,7 +175,7 @@ func TestTransitionService_Calculate(t *testing.T) {
 	provider := &fakeTransitionRegimeProvider{
 		summary: mkt.RegimeSummary{
 			Regime:     mkt.RegimeCompression,
-			Confidence: 0.8,
+			Prevalence: 0.8,
 			Metrics: mkt.RegimeMetrics{
 				CompressionBreadth:  0.4,
 				VolatilityExpansion: 1.2, // volSlope = 0.2
@@ -196,8 +196,8 @@ func TestTransitionService_Calculate(t *testing.T) {
 	if result.CurrentRegime != mkt.RegimeCompression {
 		t.Errorf("regime: got %q, want %q", result.CurrentRegime, mkt.RegimeCompression)
 	}
-	if result.Horizon != "12 candles" {
-		t.Errorf("horizon: got %q, want %q", result.Horizon, "12 candles")
+	if result.Horizon != "12 candles (~2d)" {
+		t.Errorf("horizon: got %q, want %q", result.Horizon, "12 candles (~2d)")
 	}
 
 	// Verify probabilities sum to 1.
@@ -248,7 +248,7 @@ func TestMarketTransitionHandler_success(t *testing.T) {
 				Sideways:  0.28,
 				Expansion: 0.30,
 			},
-			Horizon: "12 candles",
+			Horizon: "12 candles (~2d)",
 		},
 	}
 	handler := adhttp.NewMarketTransitionHandler(calc)
@@ -283,7 +283,7 @@ func TestMarketTransitionHandler_success(t *testing.T) {
 	if resp.Probabilities.Trend != 0.42 {
 		t.Errorf("trend: got %f, want 0.42", resp.Probabilities.Trend)
 	}
-	if resp.Horizon != "12 candles" {
+	if resp.Horizon != "12 candles (~2d)" {
 		t.Errorf("horizon: got %q", resp.Horizon)
 	}
 }
@@ -293,7 +293,7 @@ func TestMarketTransitionHandler_defaultTimeframe(t *testing.T) {
 		result: mkt.MarketTransition{
 			CurrentRegime: mkt.RegimeSideways,
 			Probabilities: mkt.TransitionProbabilities{Trend: 0.2, Sideways: 0.7, Expansion: 0.1},
-			Horizon:       "12 candles",
+			Horizon:       "12 candles (~2d)",
 		},
 	}
 	handler := adhttp.NewMarketTransitionHandler(calc)

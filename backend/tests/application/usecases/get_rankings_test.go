@@ -8,6 +8,7 @@ import (
 
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	"pano_chart/backend/domain/scoring"
 )
 
 // --- Fakes for GetRankings dependencies ---
@@ -211,4 +212,91 @@ func TestGetRankings_PercentileInZeroOneRange(t *testing.T) {
 	if results[len(results)-1].Percentile != 0.0 {
 		t.Errorf("bottom symbol expected percentile 0.0, got %.4f", results[len(results)-1].Percentile)
 	}
+}
+
+// TestGetRankings_TrendScoreSignedByDirection verifies that the "Trend
+// Predictability" score in the response is negative for downtrending symbols
+// and positive for uptrending symbols, enabling directional sorting on the
+// frontend.
+func TestGetRankings_TrendScoreSignedByDirection(t *testing.T) {
+	upSym := domain.NewSymbolUnsafe("UPUSDT")
+	downSym := domain.NewSymbolUnsafe("DOWNUSDT")
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Uptrending: 100 → 130 (sparkline goes up)
+	upCandles, _ := domain.NewCandleSeries(upSym, tf, []domain.Candle{
+		mustNewCandleAt(upSym, tf, base, 100),
+		mustNewCandleAt(upSym, tf, base.Add(time.Hour), 115),
+		mustNewCandleAt(upSym, tf, base.Add(2*time.Hour), 130),
+	})
+	// Downtrending: 130 → 100 (sparkline goes down)
+	downCandles, _ := domain.NewCandleSeries(downSym, tf, []domain.Candle{
+		mustNewCandleAt(downSym, tf, base, 130),
+		mustNewCandleAt(downSym, tf, base.Add(time.Hour), 115),
+		mustNewCandleAt(downSym, tf, base.Add(2*time.Hour), 100),
+	})
+
+	candleRepo := NewFakeCandleRepository(map[domain.Symbol]domain.CandleSeries{
+		upSym:   upCandles,
+		downSym: downCandles,
+	}, nil)
+
+	trendCalc := &scoring.TrendPredictabilityScoreCalculator{}
+	weights := []usecases.ScoreWeight{{Calculator: trendCalc, Weight: 1.0}}
+	ranker := usecases.NewDefaultRankSymbols(weights)
+
+	universe := &fakeUniverse{symbols: []domain.Symbol{upSym, downSym}}
+	volumes := &fakeVolumes{vols: map[string]float64{
+		"UPUSDT": 500, "DOWNUSDT": 500,
+	}}
+
+	uc := usecases.NewGetRankings(
+		universe, ranker, volumes, candleRepo,
+		"http://fake/exchangeInfo", "http://fake/ticker",
+		3, usecases.SidewaysAlgoV1, weights, 4, nil,
+	)
+
+	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.SortByTrend,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	for _, r := range results {
+		ts := r.Scores["Trend Predictability"]
+		sym := r.Symbol.String()
+		switch sym {
+		case "UPUSDT":
+			if ts <= 0 {
+				t.Errorf("UPUSDT: expected positive trend score, got %.6f", ts)
+			}
+		case "DOWNUSDT":
+			if ts >= 0 {
+				t.Errorf("DOWNUSDT: expected negative trend score, got %.6f", ts)
+			}
+		}
+	}
+
+	// Verify TotalScore is NOT affected by sign (both use abs internally).
+	upTotal := findResult(results, "UPUSDT").TotalScore
+	downTotal := findResult(results, "DOWNUSDT").TotalScore
+	if math.Abs(upTotal-downTotal) > 1e-9 {
+		t.Errorf("TotalScore should be identical for symmetric trends: up=%.6f down=%.6f",
+			upTotal, downTotal)
+	}
+}
+
+func findResult(results []usecases.RankedResult, sym string) usecases.RankedResult {
+	for _, r := range results {
+		if r.Symbol.String() == sym {
+			return r
+		}
+	}
+	panic("symbol not found: " + sym)
 }

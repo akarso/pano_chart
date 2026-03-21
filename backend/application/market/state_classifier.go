@@ -1,24 +1,30 @@
 package market
 
 import (
+	"math"
+
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
 
-// classify determines the dominant regime for a single symbol's evaluation.
-// Thresholds are intentionally conservative.
-func classify(e domain.EvaluationSnapshot) mkt.State {
-	if e.BreakoutUpScore > 0.7 || e.BreakoutDownScore > 0.7 {
-		return mkt.StateBreakout
+// scoreWeights returns a proportional distribution across regimes for a single
+// symbol. The raw scores are normalised so they sum to 1, giving each token a
+// continuous "vote" rather than a binary bucket.
+func scoreWeights(e domain.EvaluationSnapshot) mkt.Breadth {
+	breakout := math.Max(e.BreakoutUpScore, e.BreakoutDownScore)
+	compression := e.CompressionScore
+	trend := e.TrendScore
+	sideways := e.SidewaysScore
+
+	total := breakout + compression + trend + sideways
+	if total == 0 {
+		return mkt.Breadth{Sideways: 1}
 	}
 
-	if e.CompressionScore > 0.7 {
-		return mkt.StateCompression
+	return mkt.Breadth{
+		Sideways:    sideways / total,
+		Compression: compression / total,
+		Breakout:    breakout / total,
+		Trend:       trend / total,
 	}
-
-	if e.TrendScore > 0.65 {
-		return mkt.StateTrend
-	}
-
-	return mkt.StateSideways
 }

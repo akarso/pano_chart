@@ -107,7 +107,7 @@ func main() {
 	// --- Sideways algorithm selection ---
 	sidewaysAlgo := usecases.SidewaysAlgoMode(os.Getenv("SIDEWAYS_ALGO"))
 	if sidewaysAlgo == "" {
-		sidewaysAlgo = usecases.SidewaysAlgoV1 // default
+		sidewaysAlgo = usecases.SidewaysAlgoV5 // default
 	}
 	var sidewaysCalc scoring.SymbolScoreCalculator
 	switch sidewaysAlgo {
@@ -117,9 +117,17 @@ func main() {
 		sidewaysCalc = &scoring.SidewaysV3ScoreCalculator{
 			Config: scoring.DefaultSidewaysV3Config("1h"),
 		}
+	case usecases.SidewaysAlgoV4:
+		sidewaysCalc = &scoring.SidewaysV4ScoreCalculator{}
+	case usecases.SidewaysAlgoV5:
+		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
+		}
 	default:
-		sidewaysAlgo = usecases.SidewaysAlgoV1
-		sidewaysCalc = &scoring.SidewaysConsistencyScoreCalculator{}
+		sidewaysAlgo = usecases.SidewaysAlgoV5
+		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
+		}
 	}
 
 	// --- Use cases ---
@@ -368,6 +376,20 @@ func main() {
 	regimeHistoryService := regimehistory.NewService(regimeHistoryRepo)
 	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
 	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
+
+	// --- Regime history backfill (runs once when DB is empty) ---
+	backfiller := metrics.NewBackfiller(candleProvider, regimeTracker)
+	for _, bfTF := range []string{"1h", "4h", "1d"} {
+		hist, histErr := regimeHistoryService.GetHistory(bfTF, 1)
+		if histErr != nil || len(hist.Periods) == 0 {
+			log.Printf("[main] Backfilling regime history for %s...", bfTF)
+			if bfErr := backfiller.Run(context.Background(), bfTF, 100); bfErr != nil {
+				log.Printf("[main] Backfill %s failed: %v", bfTF, bfErr)
+			} else {
+				log.Printf("[main] Backfill %s complete", bfTF)
+			}
+		}
+	}
 
 	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
 	log.Println("[main] Market regime detector initialized")

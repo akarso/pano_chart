@@ -9,7 +9,7 @@ class GetRankingsImpl implements GetOverview {
   final RankingsApi api;
   final int pageSize;
 
-  GetRankingsImpl(this.api, {this.pageSize = 30});
+  GetRankingsImpl(this.api, {this.pageSize = 200});
 
   @override
   Future<OverviewResult> call({
@@ -17,7 +17,7 @@ class GetRankingsImpl implements GetOverview {
     required int page,
     required String sort,
     String? snapshot,
-    String sidewaysAlgo = 'v1',
+    String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
   }) async {
     final dto = await api.fetchRankings(
@@ -36,6 +36,9 @@ class GetRankingsImpl implements GetOverview {
           trendScore: e.scores.trend,
           sidewaysScore: e.scores.sideways,
           gainScore: e.scores.gain,
+          compressionScore: e.scores.compression,
+          breakoutUpScore: e.scores.breakoutUp,
+          breakoutDownScore: e.scores.breakoutDown,
           volume: e.volume,
           sparkline: e.sparkline,
           badgeComponent: e.badgeComponent,

@@ -3,11 +3,17 @@ class RankingScoresDto {
   final double trend;
   final double sideways;
   final double gain;
+  final double compression;
+  final double breakoutUp;
+  final double breakoutDown;
 
   const RankingScoresDto({
     required this.trend,
     required this.sideways,
     required this.gain,
+    this.compression = 0.0,
+    this.breakoutUp = 0.0,
+    this.breakoutDown = 0.0,
   });
 
   factory RankingScoresDto.fromJson(Map<String, dynamic> json) {
@@ -15,6 +21,9 @@ class RankingScoresDto {
       trend: (json['Trend Predictability'] as num?)?.toDouble() ?? 0.0,
       sideways: (json['Sideways Consistency'] as num?)?.toDouble() ?? 0.0,
       gain: (json['Gain/Loss'] as num?)?.toDouble() ?? 0.0,
+      compression: (json['Compression'] as num?)?.toDouble() ?? 0.0,
+      breakoutUp: (json['Breakout Up'] as num?)?.toDouble() ?? 0.0,
+      breakoutDown: (json['Breakout Down'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }

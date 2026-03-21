@@ -71,8 +71,8 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// --- Parse pageSize (optional, default 30, clamp 1–100) ---
 	pageSize := ParsePositiveIntOrDefault(r.URL.Query().Get("pageSize"), 30)
-	if pageSize > 100 {
-		pageSize = 100
+	if pageSize > 200 {
+		pageSize = 200
 	}
 
 	// --- Parse symbols (optional, comma-separated) ---

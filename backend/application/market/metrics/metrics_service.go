@@ -10,6 +10,9 @@ import (
 )
 
 // EvaluationProvider supplies per-symbol evaluation snapshots.
+// It is retained in the constructor signature for backwards compatibility
+// but is no longer used by CalculateRegime; breadth is now derived directly
+// from candle data via proxyBreadth.
 type EvaluationProvider interface {
 	GetLatestEvaluations(timeframe string) ([]domain.EvaluationSnapshot, error)
 }
@@ -55,21 +58,14 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 		return mkt.RegimeSummary{}, err
 	}
 
-	// Fetch evaluations for breadth.
-	evals, err := s.evalProvider.GetLatestEvaluations(timeframe)
-	if err != nil {
-		return mkt.RegimeSummary{}, err
-	}
-
-	trendBreadth, compressionBreadth := breadthFromEvaluations(evals)
-
-	// Fetch candles for volatility and dispersion.
+	// Fetch candles for all metrics (volatility, dispersion, breadth).
 	symbols, err := s.candleProvider.Symbols(ctx)
 	if err != nil {
 		return mkt.RegimeSummary{}, err
 	}
 
 	type candleResult struct {
+		series  domain.CandleSeries // kept for real scoring
 		candles []domain.Candle
 		ret     float64 // period return
 	}
@@ -87,7 +83,7 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			cs, fetchErr := s.candleProvider.GetLastNCandles(sym, tf, 30)
+			cs, fetchErr := s.candleProvider.GetLastNCandles(sym, tf, metricsWindow)
 			if fetchErr != nil || cs.Len() < 2 {
 				return
 			}
@@ -100,7 +96,7 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 			}
 
 			mu.Lock()
-			results = append(results, candleResult{candles: candles, ret: ret})
+			results = append(results, candleResult{series: cs, candles: candles, ret: ret})
 			mu.Unlock()
 		}()
 	}
@@ -129,14 +125,26 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 		disp = dispersion(returns, marketReturn)
 	}
 
+	// Compute breadth using the real domain/scoring calculators —
+	// the same algorithms used by the overview/rankings pipeline.
+	seriesList := make([]domain.CandleSeries, 0, len(results))
+	for _, r := range results {
+		if r.series.Len() >= 2 {
+			seriesList = append(seriesList, r.series)
+		}
+	}
+	breadth := scoreBreadth(seriesList, timeframe)
+
 	metrics := mkt.RegimeMetrics{
-		TrendBreadth:        trendBreadth,
-		CompressionBreadth:  compressionBreadth,
+		TrendBreadth:        breadth.trend,
+		SidewaysBreadth:     breadth.sideways,
+		CompressionBreadth:  breadth.compression,
+		BreakoutBreadth:     breadth.breakout,
 		VolatilityExpansion: volExpansion,
 		Dispersion:          disp,
 	}
 
-	regime, confidence := detectRegime(trendBreadth, compressionBreadth, volExpansion)
+	regime, prevalence, scores := detectRegime(breadth, volExpansion)
 
 	// Notify observer (e.g. regime history tracker) — fire-and-forget.
 	if s.observer != nil {
@@ -146,30 +154,8 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 	return mkt.RegimeSummary{
 		Timeframe:  timeframe,
 		Regime:     regime,
-		Confidence: confidence,
+		Prevalence: prevalence,
+		Scores:     scores,
 		Metrics:    metrics,
 	}, nil
-}
-
-// breadthFromEvaluations computes the fraction of symbols classified as
-// trend or compression from their evaluation scores.
-func breadthFromEvaluations(evals []domain.EvaluationSnapshot) (trendBreadth, compressionBreadth float64) {
-	if len(evals) == 0 {
-		return 0, 0
-	}
-
-	trendCount := 0
-	compressionCount := 0
-
-	for _, e := range evals {
-		if e.TrendScore > 0.65 {
-			trendCount++
-		}
-		if e.CompressionScore > 0.7 {
-			compressionCount++
-		}
-	}
-
-	total := float64(len(evals))
-	return float64(trendCount) / total, float64(compressionCount) / total
 }

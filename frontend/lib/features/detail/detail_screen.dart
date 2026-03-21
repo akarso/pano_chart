@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/auto_refresh_timer.dart';
+import '../../core/format_price.dart';
 import '../../core/polling_config.dart';
 import '../candles/api/candle_response.dart';
 import '../candles/application/get_candle_series.dart';
@@ -633,7 +634,7 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         body: SingleChildScrollView(
-          physics: const NeverScrollableScrollPhysics(),
+          physics: const ClampingScrollPhysics(),
           padding: EdgeInsets.only(
             left: 16, right: 16, top: 8,
             bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
@@ -735,7 +736,7 @@ class _DetailScreenState extends State<DetailScreen> {
                   ],
                   const Spacer(),
                   Text(
-                    candles.last.close.toStringAsFixed(2),
+                    formatPrice(candles.last.close),
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 16,
@@ -746,7 +747,11 @@ class _DetailScreenState extends State<DetailScreen> {
             ],
             if (ctx != null) ...[
               const SizedBox(height: 20),
+              _scoringWindowInfo(),
+              const SizedBox(height: 6),
               _buildScoreBreakdown(ctx),
+              const SizedBox(height: 20),
+              _buildPriceAction(ctx),
             ],
             if (_setupData != null) ...[
               const SizedBox(height: 20),
@@ -908,57 +913,6 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _buildSetupQuality(SetupData data) {
-    final colors = <String, Color>{
-      'compression_breakout': Colors.purple,
-      'trend_continuation': Colors.blue,
-      'range_reversion': Colors.teal,
-    };
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text(
-              'Setup Quality',
-              style: TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
-            const Spacer(),
-            Text(
-              SetupData.displayName(data.bestSetup),
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              '${(data.score * 100).toStringAsFixed(0)}%',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        for (final entry in data.scores.entries) ...[
-          _scoreBar(
-            SetupData.displayName(entry.key),
-            entry.value,
-            colors[entry.key] ?? Colors.grey,
-          ),
-          const SizedBox(height: 6),
-        ],
-      ],
-    );
-  }
-
   Widget _buildFragility(FragilityData data) {
     Color riskColor;
     switch (data.riskLevel) {
@@ -977,6 +931,11 @@ class _DetailScreenState extends State<DetailScreen> {
       'longShortImbalance': data.components.longShortImbalance,
       'liquidationProximity': data.components.liquidationProximity,
     };
+    // Normalize sub-components to fragilityScore (same approach as
+    // Metrics Breakdown → totalScore and Setup Quality → score).
+    final total = data.fragilityScore.clamp(0.0, 1.0);
+    final compSum = comps.values.fold(0.0, (a, b) => a + b);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -990,6 +949,21 @@ class _DetailScreenState extends State<DetailScreen> {
                 fontSize: 14,
               ),
             ),
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () => _showInfoDialog(
+                title: 'Fragility',
+                body: 'How vulnerable the current price level is to '
+                    'sudden dislocations.\n\n'
+                    '• Funding Extremeness — distance of funding rate from neutral\n'
+                    '• OI Expansion — open-interest growth vs baseline\n'
+                    '• Long/Short Imbalance — skew in positioning\n'
+                    '• Liquidation Proximity — how close price is to '
+                    'liquidation clusters\n\n'
+                    'High fragility suggests a stop-hunt or squeeze is more likely.',
+              ),
+              child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+            ),
             const Spacer(),
             Text(
               FragilityData.riskLabel(data.riskLevel),
@@ -1000,7 +974,7 @@ class _DetailScreenState extends State<DetailScreen> {
             ),
             const SizedBox(width: 6),
             Text(
-              '${(data.fragilityScore * 100).toStringAsFixed(0)}%',
+              '${(total * 100).toStringAsFixed(0)}%',
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -1032,14 +1006,13 @@ class _DetailScreenState extends State<DetailScreen> {
           ),
           const SizedBox(height: 8),
         ],
-        for (final entry in comps.entries) ...[
-          _scoreBar(
-            FragilityComponents.displayName(entry.key),
-            entry.value,
+        for (final entry in comps.entries)
+          _metricBar(
+            '${FragilityComponents.displayName(entry.key)}:',
+            compSum > 0 ? (entry.value / compSum) * total : 0.0,
+            '${(compSum > 0 ? (entry.value / compSum) * total * 100 : 0.0).toStringAsFixed(0)}%',
             riskColor,
           ),
-          const SizedBox(height: 6),
-        ],
       ],
     );
   }
@@ -1073,6 +1046,20 @@ class _DetailScreenState extends State<DetailScreen> {
                 fontSize: 14,
               ),
             ),
+            const SizedBox(width: 4),
+            GestureDetector(
+              onTap: () => _showInfoDialog(
+                title: 'Retail Behavior',
+                body: 'Inferred crowd-sentiment dimensions derived from '
+                    'funding rates, open-interest dynamics, and '
+                    'order-flow imbalances.\n\n'
+                    '• Greed — aggressive long positioning\n'
+                    '• Fear — defensive / hedging bias\n'
+                    '• Patience — low activity, wait-and-see\n'
+                    '• Panic — capitulation signals',
+              ),
+              child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+            ),
             const Spacer(),
             Text(
               data.summary,
@@ -1084,71 +1071,192 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         const SizedBox(height: 8),
-        for (final entry in data.dimensions.entries) ...[
-          _scoreBar(
-            BehaviorData.dimensionLabel(entry.key),
+        for (final entry in data.dimensions.entries)
+          _metricBar(
+            '${BehaviorData.dimensionLabel(entry.key)}:',
             entry.value,
+            '${(entry.value * 100).toStringAsFixed(0)}%',
             colorFor(entry.key, entry.value),
           ),
-          const SizedBox(height: 6),
-        ],
       ],
     );
+  }
+
+  /// Tiny info line above the score fieldsets explaining the scoring window.
+  Widget _scoringWindowInfo() {
+    final dur = candleDuration(_timeframe) * kSparklineCandles;
+    final label = _humanDuration(dur);
+    return Text(
+      'Scores computed over the last $kSparklineCandles candles ($_timeframe ≈ $label) — green line on chart.',
+      style: const TextStyle(
+        color: Colors.white38,
+        fontSize: 10,
+        fontStyle: FontStyle.italic,
+      ),
+    );
+  }
+
+  static String _humanDuration(Duration d) {
+    if (d.inDays > 0) {
+      final days = d.inDays;
+      final hours = d.inHours % 24;
+      if (hours == 0) return '$days d';
+      return '$days d ${hours}h';
+    }
+    if (d.inHours > 0) {
+      final hours = d.inHours;
+      final mins = d.inMinutes % 60;
+      if (mins == 0) return '${hours}h';
+      return '${hours}h ${mins}m';
+    }
+    return '${d.inMinutes}m';
   }
 
   Widget _buildScoreBreakdown(DetailContext ctx) {
+    // Normalize directional metrics to totalScore (not 100%).
+    // A weak total score (e.g. 0.30) compresses all bars, conveying that
+    // the overall signal confidence is low — same approach as Setup Quality.
+    final rawTrend = ctx.trendScore.abs();
+    final rawSideways = ctx.sidewaysScore.abs();
+    final rawCompression = ctx.compressionScore.abs();
+    final rawBreakoutUp = ctx.breakoutUpScore.abs();
+    final rawBreakoutDown = ctx.breakoutDownScore.abs();
+    final metricSum = rawTrend + rawSideways + rawCompression + rawBreakoutUp + rawBreakoutDown;
+    final total = ctx.totalScore.clamp(0.0, 1.0);
+    final trendPct = metricSum > 0 ? (rawTrend / metricSum) * total : 0.0;
+    final sidewaysPct = metricSum > 0 ? (rawSideways / metricSum) * total : 0.0;
+    final compressionPct = metricSum > 0 ? (rawCompression / metricSum) * total : 0.0;
+    final breakoutUpPct = metricSum > 0 ? (rawBreakoutUp / metricSum) * total : 0.0;
+    final breakoutDownPct = metricSum > 0 ? (rawBreakoutDown / metricSum) * total : 0.0;
+
+    // Direction coloring: trend uses sign, compression uses sign heuristic,
+    // breakout up = green, breakout down = red, sideways = gray.
+    final trendColor = ctx.trendScore >= 0 ? Colors.green : Colors.red;
+    final compressionColor = Colors.amber;
+    const sidewaysColor = Colors.grey;
+
+    return _fieldset('Metrics Breakdown', [
+      _metricBar('Trend:', trendPct, '${(trendPct * 100).toStringAsFixed(0)}%', trendColor),
+      _metricBar('Sideways:', sidewaysPct, '${(sidewaysPct * 100).toStringAsFixed(0)}%', sidewaysColor),
+      _metricBar('Compression:', compressionPct, '${(compressionPct * 100).toStringAsFixed(0)}%', compressionColor),
+      _metricBar('Breakout Up:', breakoutUpPct, '${(breakoutUpPct * 100).toStringAsFixed(0)}%', Colors.green),
+      _metricBar('Breakout Down:', breakoutDownPct, '${(breakoutDownPct * 100).toStringAsFixed(0)}%', Colors.red),
+    ], hint: 'Proportional weight of each regime detector '
+        'normalised to overall conviction (total score).\n\n'
+        '• Trend — directional strength (slope × R²)\n'
+        '• Sideways — range-bound, low-volatility character\n'
+        '• Compression — narrowing Bollinger bandwidth\n'
+        '• Breakout Up / Down — price escaping a compression zone');
+  }
+
+  Widget _buildPriceAction(DetailContext ctx) {
+    final gain = ctx.gainScore;
+    final pct = (gain * 100).abs();
+    final color = gain >= 0 ? Colors.green : Colors.red;
+    final label = gain >= 0 ? 'Gainer' : 'Loser';
+    return _fieldset('Price Action', [
+      _metricBar('$label:', gain.abs().clamp(0.0, 1.0), '${pct.toStringAsFixed(0)}%', color),
+    ], hint: 'Net return detected over the scoring window.\n\n'
+        'Gainer — positive price change.\n'
+        'Loser — negative price change.\n\n'
+        'Bar width shows magnitude relative to 100%.');
+  }
+
+  Widget _buildSetupQuality(SetupData data) {
+    final totalPct = data.score; // 0..1
+    final totalDisplay = '${(totalPct * 100).toStringAsFixed(0)}%';
+    final colors = <String, Color>{
+      'compression_breakout': Colors.purple,
+      'trend_continuation': Colors.blue,
+      'range_reversion': Colors.teal,
+    };
+
+    // Normalize sub-scores to the total quality percentage
+    final subSum = data.scores.values.fold(0.0, (a, b) => a + b);
+
+    return _fieldset('Setup Quality — $totalDisplay', [
+      for (final entry in data.scores.entries)
+        _metricBar(
+          '${SetupData.displayName(entry.key)}:',
+          subSum > 0 ? (entry.value / subSum) * totalPct : 0.0,
+          '${(subSum > 0 ? (entry.value / subSum) * totalPct * 100 : 0.0).toStringAsFixed(0)}%',
+          colors[entry.key] ?? Colors.grey,
+        ),
+    ], hint: 'Tradability assessment — how well the current '
+        'price structure matches known setup archetypes.\n\n'
+        '• Compression Breakout — tight range about to break\n'
+        '• Trend Continuation — pullback within a strong trend\n'
+        '• Range Reversion — mean-reversion at range edges');
+  }
+
+  // ---- shared fieldset & metric bar helpers ----
+
+  Widget _fieldset(String title, List<Widget> children, {String? hint}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Score Breakdown',
-          style: TextStyle(
-            color: Colors.white70,
-            fontWeight: FontWeight.w600,
-            fontSize: 14,
-          ),
+        Row(
+          children: [
+            Text(
+              title,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+            if (hint != null) ...[
+              const SizedBox(width: 4),
+              GestureDetector(
+                onTap: () => _showInfoDialog(title: title, body: hint),
+                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+              ),
+            ],
+          ],
         ),
         const SizedBox(height: 8),
-        _scoreBar('Sideways', ctx.sidewaysScore, Colors.orange),
-        const SizedBox(height: 6),
-        _scoreBar('Trend', ctx.trendScore, Colors.blue),
-        const SizedBox(height: 6),
-        _scoreBar('Gain', ctx.gainScore, Colors.green),
+        ...children,
       ],
     );
   }
 
-  Widget _scoreBar(String label, double value, Color color) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 70,
-          child: Text(
+  Widget _metricBar(String label, double fraction, String display, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
             label,
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
-        ),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: value.clamp(0.0, 1.0),
-              backgroundColor: Colors.white12,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-              minHeight: 10,
-            ),
+          const SizedBox(height: 3),
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: LinearProgressIndicator(
+                    value: fraction.clamp(0.0, 1.0),
+                    backgroundColor: Colors.white12,
+                    valueColor: AlwaysStoppedAnimation<Color>(color),
+                    minHeight: 10,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 40,
+                child: Text(
+                  display,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 36,
-          child: Text(
-            value.toStringAsFixed(2),
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
-            textAlign: TextAlign.right,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

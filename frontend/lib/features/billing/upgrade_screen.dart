@@ -102,7 +102,7 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
   }
 
   Widget _buildUpgradeContent(ProductDetails? product, bool busy) {
-    final price = product?.price ?? '\$4.99 / month';
+    final price = product?.price ?? '€4.99 / month';
     final trialDays = _billing.trialDaysRemaining;
     final trialExpired = !_billing.hasFullAccess && !_billing.status.active;
     return Column(

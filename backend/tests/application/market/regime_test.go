@@ -79,39 +79,42 @@ func tsR(idx int) time.Time {
 	return base.Add(time.Duration(idx) * 4 * time.Hour)
 }
 
-// makeCompressingCandles builds 30 candles where initial candles have wider ranges
-// and the last 7 have very tight ranges, resulting in shortATR/longATR < 0.9.
+// makeCompressingCandles builds 110 candles forming a symmetric triangle:
+// price oscillates between converging upper and lower boundaries so that
+// swing highs decline and swing lows rise — triggering DetectCompression.
+// The bandwidth is scaled so that the range exceeds MinStructuralRange (0.5%),
+// avoiding the small-range penalty.
 func makeCompressingCandles(sym domain.Symbol, tf domain.Timeframe, basePrice float64) []fakeRegimeCandle {
-	candles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 23; i++ {
-		p := basePrice + float64(i)*0.1
+	candles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
+		t := float64(i) / 109.0 // 0..1
+		// Bandwidth shrinks from 10% to 1% of basePrice.
+		bandWidth := basePrice * 0.10 * (1.0 - 0.9*t)
+		// Oscillate close between upper and lower regions, period ~14 candles.
+		phase := math.Sin(float64(i) * math.Pi / 7.0)
+		offset := phase * bandWidth * 0.4
+		p := basePrice + offset
+		spread := bandWidth * 0.25
 		candles[i] = fakeRegimeCandle{
 			symbol: sym, timeframe: tf, ts: tsR(i),
-			open: p, high: p + 20, low: p - 20, close: p,
-		}
-	}
-	// Last 7 candles: very tight range
-	for i := 23; i < 30; i++ {
-		p := basePrice + float64(i)*0.01
-		candles[i] = fakeRegimeCandle{
-			symbol: sym, timeframe: tf, ts: tsR(i),
-			open: p, high: p + 1, low: p - 1, close: p,
+			open: p - spread*0.1, high: p + spread,
+			low: p - spread, close: p + spread*0.1,
 		}
 	}
 	return candles
 }
 
-// makeExpandingCandles builds 30 candles where the last 7 have much larger ranges.
+// makeExpandingCandles builds 110 candles where the last 7 have much larger ranges.
 func makeExpandingCandles(sym domain.Symbol, tf domain.Timeframe, basePrice float64) []fakeRegimeCandle {
-	candles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 23; i++ {
+	candles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 103; i++ {
 		p := basePrice + float64(i)*0.1
 		candles[i] = fakeRegimeCandle{
 			symbol: sym, timeframe: tf, ts: tsR(i),
 			open: p, high: p + 1, low: p - 1, close: p,
 		}
 	}
-	for i := 23; i < 30; i++ {
+	for i := 103; i < 110; i++ {
 		p := basePrice + float64(i)*5
 		candles[i] = fakeRegimeCandle{
 			symbol: sym, timeframe: tf, ts: tsR(i),
@@ -121,180 +124,38 @@ func makeExpandingCandles(sym domain.Symbol, tf domain.Timeframe, basePrice floa
 	return candles
 }
 
+// makeTrendingCandles builds 110 candles with a strong directional move
+// (>10% return) and moderate volatility (shortATR/longATR between 0.9–1.3).
+func makeTrendingCandles(sym domain.Symbol, tf domain.Timeframe, basePrice float64) []fakeRegimeCandle {
+	candles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
+		// Strong uptrend: +0.5% per candle → ~55% total return over 110 candles.
+		p := basePrice * (1 + 0.005*float64(i))
+		// Consistent moderate range so ATR ratio stays near 1.0.
+		candles[i] = fakeRegimeCandle{
+			symbol: sym, timeframe: tf, ts: tsR(i),
+			open: p * 0.995, high: p * 1.01, low: p * 0.99, close: p,
+		}
+	}
+	return candles
+}
+
+// makeFlatCandles builds 110 flat candles for sideways testing.
+func makeFlatCandles(sym domain.Symbol, tf domain.Timeframe, basePrice float64) []fakeRegimeCandle {
+	candles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
+		candles[i] = fakeRegimeCandle{
+			symbol: sym, timeframe: tf, ts: tsR(i),
+			open: basePrice, high: basePrice + 10, low: basePrice - 10, close: basePrice,
+		}
+	}
+	return candles
+}
+
 // --- Regime Detector Tests ---
 
 func TestDetectRegime_Compression(t *testing.T) {
-	// High compression breadth + low volatility → compression
-	sym := makeSymR("BTCUSDT")
-	tf := makeTimeframeR("4h")
-
-	provider := &fakeRegimeCandleProvider{
-		symbols: []domain.Symbol{sym},
-		candles: map[string][]fakeRegimeCandle{
-			"BTCUSDT:4h": makeCompressingCandles(sym, tf, 50000),
-		},
-	}
-
-	// 40% compression breadth
-	evals := make([]domain.EvaluationSnapshot, 10)
-	for i := 0; i < 4; i++ {
-		evals[i] = domain.EvaluationSnapshot{CompressionScore: 0.8}
-	}
-	for i := 4; i < 10; i++ {
-		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.9}
-	}
-
-	evalProvider := &fakeRegimeEvalProvider{evals: evals}
-	compositeService := metrics.NewCompositeIndexService(provider, 5)
-	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
-
-	result, err := svc.CalculateRegime(context.Background(), "4h")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.Regime != mkt.RegimeCompression {
-		t.Errorf("expected compression, got %s", result.Regime)
-	}
-	if result.Metrics.CompressionBreadth < 0.30 {
-		t.Errorf("expected compressionBreadth >= 0.30, got %f", result.Metrics.CompressionBreadth)
-	}
-}
-
-func TestDetectRegime_Trend(t *testing.T) {
-	sym := makeSymR("BTCUSDT")
-	tf := makeTimeframeR("4h")
-
-	// Candles where recent volatility is moderately higher than long-term
-	// so shortATR/longATR > 1.0 but not > 1.3 (which would be expansion).
-	candles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 23; i++ {
-		p := 50000 + float64(i)*10
-		candles[i] = fakeRegimeCandle{
-			symbol: sym, timeframe: tf, ts: tsR(i),
-			open: p, high: p + 20, low: p - 20, close: p,
-		}
-	}
-	// Last 7: moderately wider ranges (3x the early ones)
-	for i := 23; i < 30; i++ {
-		p := 50000 + float64(i)*10
-		candles[i] = fakeRegimeCandle{
-			symbol: sym, timeframe: tf, ts: tsR(i),
-			open: p, high: p + 60, low: p - 60, close: p,
-		}
-	}
-
-	provider := &fakeRegimeCandleProvider{
-		symbols: []domain.Symbol{sym},
-		candles: map[string][]fakeRegimeCandle{
-			"BTCUSDT:4h": candles,
-		},
-	}
-
-	// 50% trend breadth
-	evals := make([]domain.EvaluationSnapshot, 10)
-	for i := 0; i < 5; i++ {
-		evals[i] = domain.EvaluationSnapshot{TrendScore: 0.8}
-	}
-	for i := 5; i < 10; i++ {
-		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.9}
-	}
-
-	evalProvider := &fakeRegimeEvalProvider{evals: evals}
-	compositeService := metrics.NewCompositeIndexService(provider, 5)
-	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
-
-	result, err := svc.CalculateRegime(context.Background(), "4h")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.Regime != mkt.RegimeTrend {
-		t.Errorf("expected trend, got %s", result.Regime)
-	}
-	if result.Metrics.TrendBreadth < 0.40 {
-		t.Errorf("expected trendBreadth >= 0.40, got %f", result.Metrics.TrendBreadth)
-	}
-}
-
-func TestDetectRegime_Expansion(t *testing.T) {
-	sym := makeSymR("BTCUSDT")
-	tf := makeTimeframeR("4h")
-
-	provider := &fakeRegimeCandleProvider{
-		symbols: []domain.Symbol{sym},
-		candles: map[string][]fakeRegimeCandle{
-			"BTCUSDT:4h": makeExpandingCandles(sym, tf, 50000),
-		},
-	}
-
-	// Low breadth → no trend or compression
-	evals := make([]domain.EvaluationSnapshot, 10)
-	for i := range evals {
-		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.9}
-	}
-
-	evalProvider := &fakeRegimeEvalProvider{evals: evals}
-	compositeService := metrics.NewCompositeIndexService(provider, 5)
-	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
-
-	result, err := svc.CalculateRegime(context.Background(), "4h")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.Regime != mkt.RegimeExpansion {
-		t.Errorf("expected expansion, got %s", result.Regime)
-	}
-	if result.Metrics.VolatilityExpansion <= 1.3 {
-		t.Errorf("expected volatilityExpansion > 1.3, got %f", result.Metrics.VolatilityExpansion)
-	}
-}
-
-func TestDetectRegime_Sideways(t *testing.T) {
-	sym := makeSymR("BTCUSDT")
-	tf := makeTimeframeR("4h")
-
-	// Moderate candles — not expanding, not compressed
-	candles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 30; i++ {
-		p := 50000.0
-		candles[i] = fakeRegimeCandle{
-			symbol: sym, timeframe: tf, ts: tsR(i),
-			open: p, high: p + 10, low: p - 10, close: p,
-		}
-	}
-
-	provider := &fakeRegimeCandleProvider{
-		symbols: []domain.Symbol{sym},
-		candles: map[string][]fakeRegimeCandle{
-			"BTCUSDT:4h": candles,
-		},
-	}
-
-	evals := make([]domain.EvaluationSnapshot, 10)
-	for i := range evals {
-		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.9}
-	}
-
-	evalProvider := &fakeRegimeEvalProvider{evals: evals}
-	compositeService := metrics.NewCompositeIndexService(provider, 5)
-	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
-
-	result, err := svc.CalculateRegime(context.Background(), "4h")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if result.Regime != mkt.RegimeSideways {
-		t.Errorf("expected sideways, got %s", result.Regime)
-	}
-	if result.Confidence != 0.5 {
-		t.Errorf("expected confidence 0.5, got %f", result.Confidence)
-	}
-}
-
-func TestDetectRegime_EmptyEvaluations(t *testing.T) {
+	// Compressing candles → high compression breadth from real DetectCompression + low vol
 	sym := makeSymR("BTCUSDT")
 	tf := makeTimeframeR("4h")
 
@@ -314,7 +175,130 @@ func TestDetectRegime_EmptyEvaluations(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// No evaluations → zero breadth → sideways
+	if result.Regime != mkt.RegimeCompression {
+		t.Errorf("expected compression, got %s (metrics: comp=%.4f, trend=%.4f, vol=%.4f)",
+			result.Regime, result.Metrics.CompressionBreadth,
+			result.Metrics.TrendBreadth, result.Metrics.VolatilityExpansion)
+	}
+	if result.Metrics.CompressionBreadth < 0.20 {
+		t.Errorf("expected compressionBreadth >= 0.20, got %f", result.Metrics.CompressionBreadth)
+	}
+}
+
+func TestDetectRegime_Trend(t *testing.T) {
+	// Strongly trending candles → high trend breadth from real TrendPredictability + moderate vol
+	sym := makeSymR("BTCUSDT")
+	tf := makeTimeframeR("4h")
+
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": makeTrendingCandles(sym, tf, 50000),
+		},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Regime != mkt.RegimeTrend {
+		t.Errorf("expected trend, got %s (metrics: trend=%.4f, comp=%.4f, vol=%.4f)",
+			result.Regime, result.Metrics.TrendBreadth,
+			result.Metrics.CompressionBreadth, result.Metrics.VolatilityExpansion)
+	}
+	if result.Metrics.TrendBreadth < 0.25 {
+		t.Errorf("expected trendBreadth >= 0.25, got %f", result.Metrics.TrendBreadth)
+	}
+}
+
+func TestDetectRegime_Expansion(t *testing.T) {
+	sym := makeSymR("BTCUSDT")
+	tf := makeTimeframeR("4h")
+
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": makeExpandingCandles(sym, tf, 50000),
+		},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Regime != mkt.RegimeExpansion {
+		t.Errorf("expected expansion, got %s", result.Regime)
+	}
+	if result.Metrics.VolatilityExpansion <= 1.3 {
+		t.Errorf("expected volatilityExpansion > 1.3, got %f", result.Metrics.VolatilityExpansion)
+	}
+}
+
+func TestDetectRegime_Sideways(t *testing.T) {
+	// Flat candles: zero return → zero trend breadth; consistent ATR → zero
+	// compression breadth.  Volatility ≈ 1.0 (short == long).  → sideways.
+	sym := makeSymR("BTCUSDT")
+	tf := makeTimeframeR("4h")
+
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": makeFlatCandles(sym, tf, 50000),
+		},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Regime != mkt.RegimeSideways {
+		t.Errorf("expected sideways, got %s (metrics: trend=%.4f, comp=%.4f, vol=%.4f)",
+			result.Regime, result.Metrics.TrendBreadth,
+			result.Metrics.CompressionBreadth, result.Metrics.VolatilityExpansion)
+	}
+	// Sideways prevalence should be the dominant score and > 0.
+	if result.Prevalence < 0.1 {
+		t.Errorf("expected sideways prevalence > 0.1, got %f", result.Prevalence)
+	}
+	// Scores should sum to ~1.0.
+	sum := result.Scores.Expansion + result.Scores.Compression +
+		result.Scores.Trend + result.Scores.Sideways
+	if math.Abs(sum-1.0) > 0.01 {
+		t.Errorf("expected scores to sum to ~1.0, got %f", sum)
+	}
+}
+
+func TestDetectRegime_NoSymbols(t *testing.T) {
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{},
+		candles: map[string][]fakeRegimeCandle{},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No symbols → zero candles → zero breadth → sideways
 	if result.Regime != mkt.RegimeSideways {
 		t.Errorf("expected sideways, got %s", result.Regime)
 	}
@@ -339,8 +323,8 @@ func TestDetectRegime_Dispersion(t *testing.T) {
 	tf := makeTimeframeR("4h")
 
 	// BTC goes up significantly
-	btcCandles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 30; i++ {
+	btcCandles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
 		p := 50000 + float64(i)*500
 		btcCandles[i] = fakeRegimeCandle{
 			symbol: sym1, timeframe: tf, ts: tsR(i),
@@ -349,8 +333,8 @@ func TestDetectRegime_Dispersion(t *testing.T) {
 	}
 
 	// ETH goes down significantly
-	ethCandles := make([]fakeRegimeCandle, 30)
-	for i := 0; i < 30; i++ {
+	ethCandles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
 		p := 3000 - float64(i)*50
 		ethCandles[i] = fakeRegimeCandle{
 			symbol: sym2, timeframe: tf, ts: tsR(i),
@@ -366,10 +350,7 @@ func TestDetectRegime_Dispersion(t *testing.T) {
 		},
 	}
 
-	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{
-		{SidewaysScore: 0.9},
-		{SidewaysScore: 0.9},
-	}}
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
 	compositeService := metrics.NewCompositeIndexService(provider, 5)
 	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
 
@@ -399,9 +380,17 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 		summary: mkt.RegimeSummary{
 			Timeframe:  "4h",
 			Regime:     mkt.RegimeCompression,
-			Confidence: 0.71,
+			Prevalence: 0.71,
+			Scores: mkt.RegimeScores{
+				Expansion:   0.05,
+				Compression: 0.71,
+				Trend:       0.14,
+				Sideways:    0.10,
+			},
 			Metrics: mkt.RegimeMetrics{
 				TrendBreadth:        0.18,
+				SidewaysBreadth:     0.10,
+				BreakoutBreadth:     0.05,
 				CompressionBreadth:  0.34,
 				VolatilityExpansion: 0.82,
 				Dispersion:          0.21,
@@ -421,9 +410,17 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 	var resp struct {
 		Timeframe  string  `json:"timeframe"`
 		Regime     string  `json:"regime"`
-		Confidence float64 `json:"confidence"`
-		Metrics    struct {
+		Prevalence float64 `json:"prevalence"`
+		Scores     struct {
+			Expansion   float64 `json:"expansion"`
+			Compression float64 `json:"compression"`
+			Trend       float64 `json:"trend"`
+			Sideways    float64 `json:"sideways"`
+		} `json:"scores"`
+		Metrics struct {
 			TrendBreadth        float64 `json:"trendBreadth"`
+			SidewaysBreadth     float64 `json:"sidewaysBreadth"`
+			BreakoutBreadth     float64 `json:"breakoutBreadth"`
 			CompressionBreadth  float64 `json:"compressionBreadth"`
 			VolatilityExpansion float64 `json:"volatilityExpansion"`
 			Dispersion          float64 `json:"dispersion"`
@@ -440,11 +437,20 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 	if resp.Regime != "compression" {
 		t.Errorf("expected regime compression, got %s", resp.Regime)
 	}
-	if resp.Confidence != 0.71 {
-		t.Errorf("expected confidence 0.71, got %f", resp.Confidence)
+	if resp.Prevalence != 0.71 {
+		t.Errorf("expected prevalence 0.71, got %f", resp.Prevalence)
+	}
+	if resp.Scores.Compression != 0.71 {
+		t.Errorf("expected scores.compression 0.71, got %f", resp.Scores.Compression)
 	}
 	if resp.Metrics.TrendBreadth != 0.18 {
 		t.Errorf("expected trendBreadth 0.18, got %f", resp.Metrics.TrendBreadth)
+	}
+	if resp.Metrics.SidewaysBreadth != 0.10 {
+		t.Errorf("expected sidewaysBreadth 0.10, got %f", resp.Metrics.SidewaysBreadth)
+	}
+	if resp.Metrics.BreakoutBreadth != 0.05 {
+		t.Errorf("expected breakoutBreadth 0.05, got %f", resp.Metrics.BreakoutBreadth)
 	}
 	if resp.Metrics.CompressionBreadth != 0.34 {
 		t.Errorf("expected compressionBreadth 0.34, got %f", resp.Metrics.CompressionBreadth)
@@ -504,9 +510,17 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 		summary: mkt.RegimeSummary{
 			Timeframe:  "4h",
 			Regime:     mkt.RegimeTrend,
-			Confidence: 0.123456789,
+			Prevalence: 0.123456789,
+			Scores: mkt.RegimeScores{
+				Expansion:   0.111111111,
+				Compression: 0.222222222,
+				Trend:       0.444444444,
+				Sideways:    0.222222222,
+			},
 			Metrics: mkt.RegimeMetrics{
 				TrendBreadth:        0.987654321,
+				SidewaysBreadth:     0.444444444,
+				BreakoutBreadth:     0.666666666,
 				CompressionBreadth:  0.111111111,
 				VolatilityExpansion: 1.555555555,
 				Dispersion:          0.333333333,
@@ -520,9 +534,17 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	var resp struct {
-		Confidence float64 `json:"confidence"`
-		Metrics    struct {
+		Prevalence float64 `json:"prevalence"`
+		Scores     struct {
+			Expansion   float64 `json:"expansion"`
+			Compression float64 `json:"compression"`
+			Trend       float64 `json:"trend"`
+			Sideways    float64 `json:"sideways"`
+		} `json:"scores"`
+		Metrics struct {
 			TrendBreadth        float64 `json:"trendBreadth"`
+			SidewaysBreadth     float64 `json:"sidewaysBreadth"`
+			BreakoutBreadth     float64 `json:"breakoutBreadth"`
 			CompressionBreadth  float64 `json:"compressionBreadth"`
 			VolatilityExpansion float64 `json:"volatilityExpansion"`
 			Dispersion          float64 `json:"dispersion"`
@@ -538,8 +560,11 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 			t.Errorf("%s: expected %f, got %f", name, want, got)
 		}
 	}
-	check("confidence", resp.Confidence, 0.1235)
+	check("prevalence", resp.Prevalence, 0.1235)
+	check("scores.trend", resp.Scores.Trend, 0.4444)
 	check("trendBreadth", resp.Metrics.TrendBreadth, 0.9877)
+	check("sidewaysBreadth", resp.Metrics.SidewaysBreadth, 0.4444)
+	check("breakoutBreadth", resp.Metrics.BreakoutBreadth, 0.6667)
 	check("compressionBreadth", resp.Metrics.CompressionBreadth, 0.1111)
 	check("volatilityExpansion", resp.Metrics.VolatilityExpansion, 1.5556)
 	check("dispersion", resp.Metrics.Dispersion, 0.3333)

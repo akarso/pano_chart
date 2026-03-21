@@ -8,6 +8,9 @@ class DetailContext {
   final double trendScore;
   final double sidewaysScore;
   final double gainScore;
+  final double compressionScore;
+  final double breakoutUpScore;
+  final double breakoutDownScore;
   final double volume;
 
   const DetailContext({
@@ -16,6 +19,9 @@ class DetailContext {
     required this.trendScore,
     required this.sidewaysScore,
     required this.gainScore,
+    this.compressionScore = 0.0,
+    this.breakoutUpScore = 0.0,
+    this.breakoutDownScore = 0.0,
     required this.volume,
   });
 }

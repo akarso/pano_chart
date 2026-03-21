@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 
 	"pano_chart/backend/domain"
 )
@@ -134,6 +135,47 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 		}
 	}
 
+	// --- 0d. Temporal overlap gate: highs and lows must coexist in time ---
+	// In a true sideways market, peaks and troughs span the same time
+	// region (price oscillates between support and resistance).
+	// In a staircase (_/‾), lows cluster early and highs cluster late
+	// with no temporal overlap — that's a trend, not sideways.
+	// Only apply when we have enough highs AND lows to measure.
+	overlapRatio := 1.0 // default: neutral (no penalty) when data is sparse
+	if len(highsIdx) >= 2 && len(lowsIdx) >= 2 {
+		overlapRatio = temporalOverlapScore(highsIdx, lowsIdx, len(candles))
+		if overlapRatio < 0.15 {
+			return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+		}
+	}
+
+	// --- 0e. Band drift gate: reject channels whose boundaries aren't horizontal ---
+	// A sideways channel has flat support/resistance. If the peak band or
+	// trough band drifts by more than 2× the channel width over the series,
+	// it's a trending staircase, not a range.
+	// Uses Theil-Sen (median pairwise slope) so a single spike doesn't
+	// cause a false rejection.
+	if len(highsIdx) >= 2 && len(lowsIdx) >= 2 {
+		hv := make([]float64, len(highsIdx))
+		for i, idx := range highsIdx {
+			hv[i] = candles[idx].High()
+		}
+		lv := make([]float64, len(lowsIdx))
+		for i, idx := range lowsIdx {
+			lv[i] = candles[idx].Low()
+		}
+		approxWidth := mean(hv) - mean(lv)
+		if approxWidth > 0 {
+			peakSlope := math.Abs(theilSenSlope(highsIdx, hv))
+			troughSlope := math.Abs(theilSenSlope(lowsIdx, lv))
+			maxBandSlope := math.Max(peakSlope, troughSlope)
+			totalDrift := maxBandSlope * float64(len(candles))
+			if totalDrift/approxWidth > 2.0 {
+				return SidewaysResult{Score: 0, Components: map[string]float64{"CCS": 0, "OQS": 0, "DCS": 0, "VOS": 0, "SRM": 1}, SpikeDetected: false}
+			}
+		}
+	}
+
 	// --- 1. Detect local extrema ---
 	// (already done above)
 
@@ -164,16 +206,18 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	CCS := clamp((parallelScore+deviationScore+widthStabilityScore)/3, 0, 1)
 
 	// --- 4. Compute OQS ---
-	altScore := alternationScore(extremaIdx)
+	altScore := alternationScore(highsIdx, lowsIdx, extremaIdx)
 	evennessScoreVal := evennessScore(extremaIdx, candles)
 	brScore := boundaryRespectScoreV5(candles, highsIdx, lowsIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
-	OQS := clamp((altScore+evennessScoreVal+brScore)/3, 0, 1)
+	OQS := clamp((altScore+evennessScoreVal+brScore+overlapRatio)/4, 0, 1)
 
-	// --- 5. Compute DCS ---
+	// --- 5. Compute DCS (total-drift Gaussian) ---
+	// Measure how much the peak band and trough band drift over the
+	// full series. A true sideways channel has near-zero drift;
+	// a staircase (_/‾) has massive drift even if per-candle slope looks small.
 	fullSlope, _ := linearRegression(candles)
 	channelWidth := mean(widths)
-	normSlope := math.Abs(fullSlope) / (channelWidth + 1e-6)
-	DCS := 1 - clamp(normSlope, 0, 1)
+	DCS := driftControlScore(fullSlope, highsIdx, lowsIdx, candles, channelWidth)
 
 	// --- 6. Compute VOS (ATR-based Gaussian) ---
 	maxHigh, minLow, _ := extremesAndMean(candles)
@@ -400,20 +444,30 @@ func mean(vals []float64) float64 {
 	return sum / float64(len(vals))
 }
 
-func alternationScore(extrema []int) float64 {
-	//return 1
-	if len(extrema) < 2 {
+// alternationScore checks whether highs and lows alternate (H-L-H-L)
+// in the combined extrema sequence. Consecutive same-type extrema (H-H or
+// L-L) are penalised. Returns 1.0 for perfect alternation, decays toward
+// 0 with repeated same-type runs.
+func alternationScore(highsIdx, lowsIdx []int, extrema []int) float64 {
+	if len(extrema) < 3 {
 		return 1
 	}
+	// Build a lookup set for highs.
+	highSet := make(map[int]bool, len(highsIdx))
+	for _, idx := range highsIdx {
+		highSet[idx] = true
+	}
+	// Walk the ordered extrema, penalise consecutive same-type.
 	penalty := 0.0
-	for i := 2; i < len(extrema); i++ {
-		delta1 := extrema[i-1] - extrema[i-2]
-		delta2 := extrema[i] - extrema[i-1]
-		if (delta1 > 0 && delta2 > 0) || (delta1 < 0 && delta2 < 0) {
+	prevIsHigh := highSet[extrema[0]]
+	for i := 1; i < len(extrema); i++ {
+		curIsHigh := highSet[extrema[i]]
+		if curIsHigh == prevIsHigh {
 			penalty += 1
 		}
+		prevIsHigh = curIsHigh
 	}
-	k := 2.0 // scaling factor for exponential decay
+	k := 2.0
 	return math.Exp(-penalty / k)
 }
 
@@ -535,15 +589,15 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
 	CCS := clamp((parallelScore+deviationScore+widthStabilityScore)/3, 0, 1)
-	altScore := alternationScore(extremaIdx)
+	altScore := alternationScore(highsIdx, lowsIdx, extremaIdx)
 	evennessScoreVal := evennessScore(extremaIdx, candles)
 	brScore := boundaryRespectScoreV5(candles, highsIdx, lowsIdx, upperSlope, upperIntercept, lowerSlope, lowerIntercept)
-	OQS := clamp((altScore+evennessScoreVal+brScore)/3, 0, 1)
+	overlapRatio := temporalOverlapScore(highsIdx, lowsIdx, len(candles))
+	OQS := clamp((altScore+evennessScoreVal+brScore+overlapRatio)/4, 0, 1)
 
 	fullSlope, _ := linearRegression(candles)
 	channelWidth := mean(widths)
-	normSlope := math.Abs(fullSlope) / (channelWidth + 1e-6)
-	DCS := 1 - clamp(normSlope, 0, 1)
+	DCS := driftControlScore(fullSlope, highsIdx, lowsIdx, candles, channelWidth)
 	return CCS, OQS, DCS
 }
 
@@ -597,18 +651,132 @@ func hasDistinctClusters(vals []float64) bool {
 	return false
 }
 
-// func isMAFlat(ma []float64, epsilon float64) bool {
-// 	if len(ma) == 0 {
-// 		return false
-// 	}
-// 	m := mean(ma)
-// 	for _, v := range ma {
-// 		if math.Abs(v-m) > epsilon {
-// 			return false
-// 		}
-// 	}
-// 	return true
-// }
+//	func isMAFlat(ma []float64, epsilon float64) bool {
+//		if len(ma) == 0 {
+//			return false
+//		}
+//		m := mean(ma)
+//		for _, v := range ma {
+//			if math.Abs(v-m) > epsilon {
+//				return false
+//			}
+//		}
+//		return true
+//	}
+//
+// slopeOfValues computes the linear regression slope of (x=indices[i], y=values[i]).
+func slopeOfValues(indices []int, values []float64) float64 {
+	n := float64(len(indices))
+	if n < 2 {
+		return 0
+	}
+	var sumX, sumY, sumXY, sumXX float64
+	for i, idx := range indices {
+		x := float64(idx)
+		y := values[i]
+		sumX += x
+		sumY += y
+		sumXY += x * y
+		sumXX += x * x
+	}
+	return (n*sumXY - sumX*sumY) / (n*sumXX - sumX*sumX + 1e-6)
+}
+
+// theilSenSlope computes the median of all pairwise slopes.
+// Unlike OLS regression, a single spike outlier cannot dominate the result.
+func theilSenSlope(indices []int, values []float64) float64 {
+	if len(indices) < 2 {
+		return 0
+	}
+	var slopes []float64
+	for i := 0; i < len(indices); i++ {
+		for j := i + 1; j < len(indices); j++ {
+			dx := float64(indices[j] - indices[i])
+			if dx > 0 {
+				slopes = append(slopes, (values[j]-values[i])/dx)
+			}
+		}
+	}
+	if len(slopes) == 0 {
+		return 0
+	}
+	sort.Float64s(slopes)
+	return slopes[len(slopes)/2]
+}
+
+// driftControlScore computes a Gaussian-based DCS that accounts for total
+// drift of the overall series AND of individual peak/trough bands.
+// In a true sideways channel bands are flat → DCS ≈ 1.
+// In a staircase (_/‾) the bands shift by multiple channel widths → DCS ≈ 0.
+func driftControlScore(fullSlope float64, highsIdx, lowsIdx []int, candles []domain.Candle, channelWidth float64) float64 {
+	maxAbsSlope := math.Abs(fullSlope)
+
+	if len(highsIdx) >= 2 {
+		hv := make([]float64, len(highsIdx))
+		for i, idx := range highsIdx {
+			hv[i] = candles[idx].High()
+		}
+		s := math.Abs(slopeOfValues(highsIdx, hv))
+		if s > maxAbsSlope {
+			maxAbsSlope = s
+		}
+	}
+	if len(lowsIdx) >= 2 {
+		lv := make([]float64, len(lowsIdx))
+		for i, idx := range lowsIdx {
+			lv[i] = candles[idx].Low()
+		}
+		s := math.Abs(slopeOfValues(lowsIdx, lv))
+		if s > maxAbsSlope {
+			maxAbsSlope = s
+		}
+	}
+
+	// Total drift over the series in channel-width units.
+	totalDrift := maxAbsSlope * float64(len(candles))
+	normDrift := totalDrift / (channelWidth + 1e-6)
+	// Gaussian decay: 0.5 channels → 0.88, 1.0 → 0.61, 2.0 → 0.14, 3.0 → 0.01
+	return math.Exp(-normDrift * normDrift / 2.0)
+}
+
+// temporalOverlapScore measures how much the time spans of detected
+// highs and lows overlap. Returns 0–1 where 1 means both sets span the
+// same portion of the series and 0 means they are temporally disjoint
+// (e.g. the staircase _/‾ pattern).
+func temporalOverlapScore(highsIdx, lowsIdx []int, n int) float64 {
+	if len(highsIdx) < 2 || len(lowsIdx) < 2 || n <= 0 {
+		return 0
+	}
+	hMin, hMax := highsIdx[0], highsIdx[len(highsIdx)-1]
+	lMin, lMax := lowsIdx[0], lowsIdx[len(lowsIdx)-1]
+
+	overlapStart := hMin
+	if lMin > overlapStart {
+		overlapStart = lMin
+	}
+	overlapEnd := hMax
+	if lMax < overlapEnd {
+		overlapEnd = lMax
+	}
+	overlap := overlapEnd - overlapStart
+	if overlap < 0 {
+		overlap = 0
+	}
+
+	unionStart := hMin
+	if lMin < unionStart {
+		unionStart = lMin
+	}
+	unionEnd := hMax
+	if lMax > unionEnd {
+		unionEnd = lMax
+	}
+	union := unionEnd - unionStart
+	if union <= 0 {
+		return 0
+	}
+	return float64(overlap) / float64(union)
+}
 
 func min3(a, b, c float64) float64 {
 	return math.Min(a, math.Min(b, c))

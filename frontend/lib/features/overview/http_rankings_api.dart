@@ -22,7 +22,7 @@ class HttpRankingsApi implements RankingsApi {
     required String sort,
     required int page,
     required int pageSize,
-    String sidewaysAlgo = 'v1',
+    String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
   }) async {
     var url = '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=$sidewaysAlgo';

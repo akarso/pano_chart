@@ -58,7 +58,7 @@ class BubbleMapViewModel {
         timeframe: timeframe,
         page: pageIndex + 1, // API is 1-based
         sort: 'volume',
-        sidewaysAlgo: 'v1',
+        sidewaysAlgo: 'v5',
       );
 
       if (gen != _generation) return; // stale response
@@ -127,6 +127,9 @@ class BubbleMapViewModel {
               trendScore: i.trendScore,
               sidewaysScore: i.sidewaysScore,
               gainScore: i.gainScore,
+              compressionScore: i.compressionScore,
+              breakoutUpScore: i.breakoutUpScore,
+              breakoutDownScore: i.breakoutDownScore,
               badgeComponent: i.badgeComponent,
             ))
         .toList();

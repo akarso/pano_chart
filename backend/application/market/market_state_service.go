@@ -17,6 +17,11 @@ func NewMarketStateService(p EvaluationProvider) *MarketStateService {
 }
 
 // Calculate produces a market state summary for the given timeframe.
+//
+// Breadth is computed using proportional weighting: every symbol distributes
+// its scores continuously across all four regimes (sideways, compression,
+// breakout, trend).  This eliminates the zero-breadth problem that occurred
+// with binary classification thresholds.
 func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	evaluations, err := s.provider.GetLatestEvaluations(timeframe)
 	if err != nil {
@@ -33,43 +38,45 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		}, nil
 	}
 
-	counts := map[mkt.State]int{
-		mkt.StateSideways:    0,
-		mkt.StateCompression: 0,
-		mkt.StateBreakout:    0,
-		mkt.StateTrend:       0,
-	}
-
+	// Accumulate proportional breadth across all tokens.
+	var breadth mkt.Breadth
 	for _, e := range evaluations {
-		state := classify(e)
-		counts[state]++
+		w := scoreWeights(e)
+		breadth.Sideways += w.Sideways
+		breadth.Compression += w.Compression
+		breadth.Breakout += w.Breakout
+		breadth.Trend += w.Trend
 	}
 
 	total := float64(len(evaluations))
+	breadth.Sideways /= total
+	breadth.Compression /= total
+	breadth.Breakout /= total
+	breadth.Trend /= total
 
-	breadth := mkt.Breadth{
-		Sideways:    float64(counts[mkt.StateSideways]) / total,
-		Compression: float64(counts[mkt.StateCompression]) / total,
-		Breakout:    float64(counts[mkt.StateBreakout]) / total,
-		Trend:       float64(counts[mkt.StateTrend]) / total,
-	}
-
+	// Dominant state = highest weighted breadth.
+	// Check order: sideways → trend → compression → breakout so that
+	// higher-priority regimes win on ties (>= comparison).
 	dominant := mkt.StateSideways
-	max := 0
+	maxWeight := breadth.Sideways
 
-	for st, c := range counts {
-		if c > max {
-			max = c
-			dominant = st
-		}
+	if breadth.Trend >= maxWeight {
+		dominant = mkt.StateTrend
+		maxWeight = breadth.Trend
 	}
-
-	confidence := float64(max) / total
+	if breadth.Compression >= maxWeight {
+		dominant = mkt.StateCompression
+		maxWeight = breadth.Compression
+	}
+	if breadth.Breakout >= maxWeight {
+		dominant = mkt.StateBreakout
+		maxWeight = breadth.Breakout
+	}
 
 	return mkt.Summary{
 		Timeframe:   timeframe,
 		State:       dominant,
-		Confidence:  confidence,
+		Confidence:  maxWeight,
 		Breadth:     breadth,
 		SymbolCount: len(evaluations),
 	}, nil

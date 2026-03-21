@@ -239,7 +239,7 @@ func TestRankingsV2Handler_Pagination_SecondPageAndOverflow(t *testing.T) {
 	uc.AssertExpectations(t)
 }
 
-func TestRankingsV2Handler_PageSizeClampedTo100(t *testing.T) {
+func TestRankingsV2Handler_PageSizeClampedTo200(t *testing.T) {
 	uc := &rankingsUseCaseMock{}
 	handler := h.NewRankingsV2Handler(uc)
 
@@ -273,9 +273,9 @@ func TestRankingsV2Handler_PageSizeClampedTo100(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, 150, body.TotalItems)
-	assert.Equal(t, 2, body.TotalPages) // 150 / 100
-	assert.Equal(t, 100, body.PageSize)
-	assert.Len(t, body.Results, 100)
+	assert.Equal(t, 1, body.TotalPages) // 150 / 200
+	assert.Equal(t, 200, body.PageSize)
+	assert.Len(t, body.Results, 150)
 
 	uc.AssertExpectations(t)
 }

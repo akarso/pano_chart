@@ -87,7 +87,7 @@ class PreferencesService {
   String get sort => _prefs.getString(_keySort) ?? 'volume';
   set sort(String v) => _prefs.setString(_keySort, v);
 
-  String get sidewaysAlgo => _prefs.getString(_keySidewaysAlgo) ?? 'v1';
+  String get sidewaysAlgo => _prefs.getString(_keySidewaysAlgo) ?? 'v5';
   set sidewaysAlgo(String v) => _prefs.setString(_keySidewaysAlgo, v);
 
   String get sortDirection => _prefs.getString(_keySortDirection) ?? 'up';

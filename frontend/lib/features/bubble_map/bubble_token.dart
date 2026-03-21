@@ -7,6 +7,9 @@ class BubbleToken {
   final double trendScore;
   final double sidewaysScore;
   final double gainScore;
+  final double compressionScore;
+  final double breakoutUpScore;
+  final double breakoutDownScore;
   final String badgeComponent;
 
   const BubbleToken({
@@ -17,6 +20,9 @@ class BubbleToken {
     this.trendScore = 0.0,
     this.sidewaysScore = 0.0,
     this.gainScore = 0.0,
+    this.compressionScore = 0.0,
+    this.breakoutUpScore = 0.0,
+    this.breakoutDownScore = 0.0,
     this.badgeComponent = '',
   });
 

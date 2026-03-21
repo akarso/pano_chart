@@ -14,6 +14,13 @@ void main() {
       expect(cfg.rsiPeriod, 14);
       expect(cfg.showAtr, false);
       expect(cfg.atrPeriod, 14);
+      // Behavioral defaults
+      expect(cfg.showBehaviorPanel, false);
+      expect(cfg.showGreed, true);
+      expect(cfg.showFear, true);
+      expect(cfg.showPatience, true);
+      expect(cfg.showPanic, true);
+      expect(cfg.behaviorWindow, 20);
     });
 
     test('copyWith preserves unchanged fields', () {
@@ -25,6 +32,20 @@ void main() {
       expect(copy.showEmaFast, true);
       expect(copy.emaFastPeriod, 20);
       expect(copy.showRsi, true);
+      expect(copy.showBehaviorPanel, false);
+    });
+
+    test('copyWith behavioral fields', () {
+      const cfg = ChartIndicatorConfig();
+      final copy = cfg.copyWith(
+        showBehaviorPanel: true,
+        showGreed: false,
+        behaviorWindow: 30,
+      );
+      expect(copy.showBehaviorPanel, true);
+      expect(copy.showGreed, false);
+      expect(copy.behaviorWindow, 30);
+      expect(copy.showFear, true);
     });
 
     test('equality', () {
@@ -39,6 +60,8 @@ void main() {
       expect(base.copyWith(showEmaFast: false), isNot(base));
       expect(base.copyWith(emaFastPeriod: 10), isNot(base));
       expect(base.copyWith(showRsi: false), isNot(base));
+      expect(base.copyWith(showBehaviorPanel: true), isNot(base));
+      expect(base.copyWith(behaviorWindow: 30), isNot(base));
     });
 
     test('JSON round-trip', () {
@@ -51,6 +74,12 @@ void main() {
         rsiPeriod: 7,
         showAtr: true,
         atrPeriod: 21,
+        showBehaviorPanel: true,
+        showGreed: false,
+        showFear: true,
+        showPatience: false,
+        showPanic: true,
+        behaviorWindow: 30,
       );
       final json = original.toJson();
       final restored = ChartIndicatorConfig.fromJson(json);

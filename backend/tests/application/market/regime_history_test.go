@@ -334,7 +334,7 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	provider := &fakeTransitionRegimeProvider{
 		summary: mkt.RegimeSummary{
 			Regime:     mkt.RegimeCompression,
-			Confidence: 0.8,
+			Prevalence: 0.8,
 			Metrics: mkt.RegimeMetrics{
 				CompressionBreadth:  0.4,
 				VolatilityExpansion: 1.2,
@@ -352,8 +352,8 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	}
 
 	// With 20 candles history, horizon should reflect that.
-	if result.Horizon != "20 candles" {
-		t.Errorf("horizon: got %q, want %q", result.Horizon, "20 candles")
+	if result.Horizon != "20 candles (~3.3d)" {
+		t.Errorf("horizon: got %q, want %q", result.Horizon, "20 candles (~3.3d)")
 	}
 
 	// Probabilities should be non-negative and sum to 1.

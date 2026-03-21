@@ -74,27 +74,48 @@ void main() {
     });
   });
 
-  group('DetailScreen v2 — score breakdown', () {
-    testWidgets('shows sideways score bar', (tester) async {
+  group('DetailScreen v2 — metrics breakdown', () {
+    testWidgets('shows sideways metric bar', (tester) async {
       await tester.pumpWidget(_app());
       await tester.pumpAndSettle();
-      // The score label in the breakdown row (not the header "Sideways v2")
-      expect(find.text('Sideways'), findsOneWidget);
-      expect(find.textContaining('0.82'), findsOneWidget);
+      // Label above bar with colon suffix
+      expect(find.text('Sideways:'), findsOneWidget);
+      // (0.82 / 0.94) * 0.78 ≈ 68%  (gain is separate in Price Action)
+      expect(find.text('68%'), findsOneWidget);
     });
 
-    testWidgets('shows trend score bar', (tester) async {
+    testWidgets('shows trend metric bar', (tester) async {
       await tester.pumpWidget(_app());
       await tester.pumpAndSettle();
-      expect(find.textContaining('Trend'), findsOneWidget);
-      expect(find.textContaining('0.12'), findsOneWidget);
+      expect(find.text('Trend:'), findsOneWidget);
+      // (0.12 / 0.94) * 0.78 ≈ 10%
+      expect(find.text('10%'), findsOneWidget);
     });
 
-    testWidgets('shows gain score bar', (tester) async {
+    testWidgets('shows price action (gain)', (tester) async {
       await tester.pumpWidget(_app());
       await tester.pumpAndSettle();
-      expect(find.textContaining('Gain'), findsOneWidget);
-      expect(find.textContaining('0.04'), findsOneWidget);
+      // Gain is now in "Price Action" fieldset as a percentage
+      expect(find.text('Price Action'), findsOneWidget);
+      // 0.04 → 4%
+      expect(find.text('4%'), findsOneWidget);
+    });
+
+    testWidgets('shows Metrics Breakdown header', (tester) async {
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+      expect(find.text('Metrics Breakdown'), findsOneWidget);
+    });
+
+    testWidgets('shows scoring window info above metrics', (tester) async {
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+      // 110 candles × 1h = 110h ≈ "4 d 14h"
+      expect(
+        find.textContaining('Scores computed over the last 110 candles'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('1h'), findsWidgets);
     });
   });
 

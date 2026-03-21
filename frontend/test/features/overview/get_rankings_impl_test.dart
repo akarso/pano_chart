@@ -17,7 +17,7 @@ void main() {
         RankingItemDto(
           symbol: 'BTCUSDT',
           totalScore: 2.75,
-          scores: RankingScoresDto(trend: 1.0, sideways: 0.5, gain: 1.25),
+          scores: RankingScoresDto(trend: 1.0, sideways: 0.5, gain: 1.25, compression: 0.3, breakoutUp: 0.1, breakoutDown: 0.05),
           volume: 5000.0,
           sparkline: [42000.0, 42100.0],
           badgeComponent: 'trend',
@@ -47,6 +47,9 @@ void main() {
     expect(result.items[0].volume, 5000.0);
     expect(result.items[0].sparkline, [42000.0, 42100.0]);
     expect(result.items[0].badgeComponent, 'trend');
+    expect(result.items[0].compressionScore, 0.3);
+    expect(result.items[0].breakoutUpScore, 0.1);
+    expect(result.items[0].breakoutDownScore, 0.05);
 
     expect(result.items[1].symbol, 'ETHUSDT');
     expect(result.items[1].trendScore, -0.5);

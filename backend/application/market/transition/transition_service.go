@@ -67,10 +67,15 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		regimeAge,
 	)
 
+	horizon := fmt.Sprintf("%d candles", regimeAge)
+	if h := HumanDuration(summary.Timeframe, regimeAge); h != "" {
+		horizon = fmt.Sprintf("%d candles (~%s)", regimeAge, h)
+	}
+
 	return mkt.MarketTransition{
 		Timeframe:     summary.Timeframe,
 		CurrentRegime: summary.Regime,
 		Probabilities: probs,
-		Horizon:       fmt.Sprintf("%d candles", regimeAge),
+		Horizon:       horizon,
 	}, nil
 }

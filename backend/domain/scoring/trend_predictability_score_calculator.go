@@ -1,9 +1,10 @@
-
 package scoring
 
 import (
-	"pano_chart/backend/domain"
 	"fmt"
+	"math"
+
+	"pano_chart/backend/domain"
 )
 
 // TrendPredictabilityScoreCalculator scores based on linear trend and fit.
@@ -68,5 +69,61 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 		return 0, nil // flat line
 	}
 	slopeNorm := b / rangeClose
-	return slopeNorm * R2, nil
+
+	// Cluster gate: if close prices form two distinct price levels —
+	// like a step function (-|_) — the movement is a regime shift, not
+	// a trend.  We reuse the same gap-detection logic as the sideways-v5
+	// hasDistinctClusters but require each side to hold ≥ 25% of the
+	// candles, ensuring we catch real bimodal distributions (plateaus)
+	// rather than false-positiving on evenly-spaced linear data.
+	if closePricesClustered(closes) {
+		return 0, nil
+	}
+
+	// Raw score = |slopeNorm| * R².  slopeNorm ≈ 1/(N-1) for a perfect
+	// linear trend, so the raw value is typically 0..0.01 — far below
+	// the 0..1 range of other calculators (sideways, gain).  Multiplying
+	// by (N-1) rescales so a perfect linear trend → ~1.0, giving trend
+	// a fair weight when combined with other regime scores.
+	raw := math.Abs(slopeNorm) * R2
+	normalised := raw * float64(n-1)
+	if normalised > 1 {
+		normalised = 1
+	}
+	return normalised, nil
+}
+
+// closePricesClustered detects bimodal close-price distributions (step
+// functions / regime shifts).  It sorts the closes and looks for a gap
+// > 10% of the total range that splits the series into two groups, each
+// containing at least 25% of the candles.
+func closePricesClustered(vals []float64) bool {
+	n := len(vals)
+	if n < 8 {
+		return false
+	}
+	sorted := make([]float64, n)
+	copy(sorted, vals)
+	// sort.Float64s equivalent — insertion sort is fine for ≤ ~200 items.
+	for i := 1; i < n; i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] > key {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+	valRange := sorted[n-1] - sorted[0]
+	if valRange == 0 {
+		return false
+	}
+	minGroupSize := n / 4 // each plateau must hold ≥ 25% of candles
+	for i := 1; i < n; i++ {
+		gap := sorted[i] - sorted[i-1]
+		if i >= minGroupSize && (n-i) >= minGroupSize && gap > 0.10*valRange {
+			return true
+		}
+	}
+	return false
 }

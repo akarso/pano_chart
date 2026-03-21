@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import '../../../core/format_price.dart';
 import '../../candles/api/candle_response.dart';
 
 /// Widget-based Y-axis price labels that auto-scale to the visible range.
@@ -110,12 +111,7 @@ class YAxisLabels extends StatelessWidget {
     apply(lo, hi);
   }
 
-  static String _formatPrice(double price) {
-    if (price >= 1000) return price.toStringAsFixed(0);
-    if (price >= 1) return price.toStringAsFixed(2);
-    if (price >= 0.01) return price.toStringAsFixed(4);
-    return price.toStringAsFixed(6);
-  }
+  static String _formatPrice(double price) => formatPrice(price);
 }
 
 /// Widget-based X-axis time labels adaptive to the timeframe.
