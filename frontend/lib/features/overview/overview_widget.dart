@@ -28,6 +28,8 @@ import '../billing/billing_manager.dart';
 import '../billing/upgrade_screen.dart';
 import '../news/news_list_screen.dart';
 import '../news/news_view_model.dart';
+import '../social/social_feed_screen.dart';
+import '../social/social_feed_view_model.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
@@ -60,6 +62,7 @@ class OverviewWidget extends StatefulWidget {
   final SetupApi? setupApi;
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
+  final SocialFeedViewModel? socialFeedViewModel;
 
   const OverviewWidget({
     Key? key,
@@ -80,6 +83,7 @@ class OverviewWidget extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.socialFeedViewModel,
   }) : super(key: key);
 
   @override
@@ -1025,6 +1029,22 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.newsViewModel != null) _menuDivider(),
+        if (widget.socialFeedViewModel != null)
+          _menuRow(
+            icon: Icons.rss_feed,
+            label: 'Social Feed',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => SocialFeedScreen(
+                    viewModel: widget.socialFeedViewModel!,
+                  ),
+                ),
+              );
+            },
+          ),
+        if (widget.socialFeedViewModel != null) _menuDivider(),
         if (widget.billingManager != null)
           _menuRow(
             icon: Icons.workspace_premium,

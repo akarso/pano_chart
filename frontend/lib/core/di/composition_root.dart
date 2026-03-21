@@ -28,6 +28,9 @@ import '../../features/news/news_view_model.dart';
 import '../../features/overview/get_rankings_impl.dart';
 import '../../features/overview/http_rankings_api.dart';
 import '../../features/overview/overview_view_model.dart';
+import '../../features/social/api/social_api.dart';
+import '../../features/social/infrastructure/http_social_api.dart';
+import '../../features/social/social_feed_view_model.dart';
 
 /// Composition root responsible for explicitly wiring dependencies.
 class CompositionRoot {
@@ -138,5 +141,16 @@ class CompositionRoot {
   /// Creates a wired [BehaviorApi] for fetching retail behavior scores.
   BehaviorApi createBehaviorApi() {
     return HttpBehaviorApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [SocialApi].
+  SocialApi createSocialApi() {
+    return HttpSocialApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [SocialFeedViewModel].
+  SocialFeedViewModel createSocialFeedViewModel({required String userId}) {
+    final api = createSocialApi();
+    return SocialFeedViewModel(api, userId: userId);
   }
 }

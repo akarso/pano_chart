@@ -7,6 +7,7 @@ import '../core/di/composition_root.dart';
 import '../features/billing/billing_manager.dart';
 import '../features/billing/trial_manager.dart';
 import '../features/overview/overview_widget.dart';
+import '../features/social/social_feed_view_model.dart';
 import '../infrastructure/preferences_service.dart';
 import '../infrastructure/stablecoin_config.dart';
 
@@ -16,6 +17,7 @@ Widget bootstrapApp({
   PreferencesService? prefs,
   StablecoinConfig stablecoins = const StablecoinConfig({}),
   BillingManager? billingManager,
+  SocialFeedViewModel? socialFeedViewModel,
 }) {
   final root = CompositionRoot(
     apiBaseUrl: config.apiBaseUrl,
@@ -35,6 +37,7 @@ Widget bootstrapApp({
   final setupApi = root.createSetupApi();
   final fragilityApi = root.createFragilityApi();
   final behaviorApi = root.createBehaviorApi();
+  final socialVm = socialFeedViewModel;
   final component = AppComponent(
     config,
     home: OverviewWidget(
@@ -55,6 +58,7 @@ Widget bootstrapApp({
       setupApi: setupApi,
       fragilityApi: fragilityApi,
       behaviorApi: behaviorApi,
+      socialFeedViewModel: socialVm,
     ),
   );
   return component.createApp();
@@ -88,10 +92,14 @@ void main() async {
 
   const config = AppConfig(
       apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
+  final socialRoot = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+  final socialFeedViewModel =
+      socialRoot.createSocialFeedViewModel(userId: prefs.userId);
   runApp(bootstrapApp(
     config: config,
     prefs: prefs,
     stablecoins: stablecoins,
     billingManager: billingManager,
+    socialFeedViewModel: socialFeedViewModel,
   ));
 }
