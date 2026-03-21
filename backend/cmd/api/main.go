@@ -34,6 +34,9 @@ import (
 	"pano_chart/backend/infrastructure/snapshot"
 	"pano_chart/backend/infrastructure/solana"
 	"pano_chart/backend/infrastructure/symbol_universe"
+
+	appsocial "pano_chart/backend/application/social"
+	infrasocial "pano_chart/backend/infrastructure/social"
 )
 
 func main() {
@@ -423,6 +426,29 @@ func main() {
 	log.Println("[main] Fragility risk engine initialized")
 	log.Println("[main] Behavior engine initialized")
 
+	// --- Social watcher service (RSS/Nitter) ---
+	nitterBaseURL := os.Getenv("NITTER_BASE_URL")
+	if nitterBaseURL == "" {
+		nitterBaseURL = "http://127.0.0.1:8081"
+	}
+	socialCacheTTL := 90 * time.Second
+	rssProvider := infrasocial.NewRSSProvider(nitterBaseURL, nil)
+	socialAccountStore := infrasocial.NewMemoryAccountStore()
+	socialSubStore := infrasocial.NewMemorySubscriptionStore()
+	socialCache := appsocial.NewPostCache(socialCacheTTL)
+	socialDispatcher := appsocial.NewDispatcher(256)
+	socialService := appsocial.NewService(rssProvider, socialAccountStore, socialSubStore, socialCache)
+
+	// Background watcher goroutine.
+	socialWatcher := appsocial.NewWatcher(
+		rssProvider, socialCache, socialAccountStore, socialSubStore,
+		socialDispatcher, appsocial.DefaultWatcherConfig(),
+	)
+	socialCtx, socialCancel := context.WithCancel(context.Background())
+	defer socialCancel()
+	go socialWatcher.Run(socialCtx)
+	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -460,6 +486,13 @@ func main() {
 	log.Println("[main] /api/market/regime/history endpoint registered")
 	log.Println("[main] /api/market/transition endpoint registered")
 	log.Println("[main] /api/payments/verify and /api/subscription/status endpoints registered")
+
+	// Social endpoints
+	mux.Handle("/api/social/subscribe", adhttp.NewSocialSubscribeHandler(socialService))
+	mux.Handle("/api/social/unsubscribe", adhttp.NewSocialUnsubscribeHandler(socialService))
+	mux.Handle("/api/social/feed", adhttp.NewSocialFeedHandler(socialService))
+	mux.Handle("/api/social/accounts", adhttp.NewSocialAccountsHandler(socialService))
+	log.Println("[main] /api/social/* endpoints registered")
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
