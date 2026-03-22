@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:ui' show VoidCallback;
 
+import '../../infrastructure/preferences_service.dart';
+import 'api/social_account_settings.dart';
 import 'api/social_api.dart';
 import 'api/social_models.dart';
 
@@ -12,12 +14,20 @@ class SocialFeedState {
   final String? error;
   final int unseenCount;
 
+  /// Whether social posts should be shown on the detail chart.
+  final bool showOnChart;
+
+  /// Whether push-style notifications are enabled.
+  final bool notificationsEnabled;
+
   const SocialFeedState({
     required this.isLoading,
     required this.posts,
     required this.subscribedHandles,
     this.error,
     this.unseenCount = 0,
+    this.showOnChart = false,
+    this.notificationsEnabled = false,
   });
 
   factory SocialFeedState.initial() => const SocialFeedState(
@@ -32,6 +42,8 @@ class SocialFeedState {
     Set<String>? subscribedHandles,
     String? error,
     int? unseenCount,
+    bool? showOnChart,
+    bool? notificationsEnabled,
   }) {
     return SocialFeedState(
       isLoading: isLoading ?? this.isLoading,
@@ -39,18 +51,25 @@ class SocialFeedState {
       subscribedHandles: subscribedHandles ?? this.subscribedHandles,
       error: error,
       unseenCount: unseenCount ?? this.unseenCount,
+      showOnChart: showOnChart ?? this.showOnChart,
+      notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
     );
   }
 }
 
 /// ViewModel for the social feed feature.
 ///
-/// Manages polling, subscriptions, and feed state.
+/// Manages polling, subscriptions, per-account filter settings,
+/// 7-day history accumulation, and feed state.
 class SocialFeedViewModel {
   final SocialApi _api;
   final String _userId;
 
   VoidCallback? onChanged;
+
+  /// Called when a brand-new post is detected. Can be used to trigger
+  /// platform notifications.
+  void Function(SocialPost post)? onNewPost;
 
   SocialFeedState _state = SocialFeedState.initial();
   SocialFeedState get state => _state;
@@ -58,7 +77,57 @@ class SocialFeedViewModel {
   Timer? _pollTimer;
   static const _pollInterval = Duration(seconds: 60);
 
+  /// 7-day history window for chart overlay data.
+  static const _historyWindow = Duration(days: 7);
+
+  PreferencesService? _prefs;
+
+  /// IDs already seen — used for notification dedup.
+  final Set<String> _knownIds = {};
+
   SocialFeedViewModel(this._api, {required String userId}) : _userId = userId;
+
+  /// Attach preferences so settings persist across restarts.
+  void attachPrefs(PreferencesService? prefs) {
+    _prefs = prefs;
+    if (prefs != null) {
+      _state = _state.copyWith(
+        showOnChart: prefs.showSocialOnChart,
+        notificationsEnabled: prefs.notificationsEnabled,
+      );
+    }
+  }
+
+  // ── per-account settings ──
+
+  SocialAccountSettings getSettings(String handle) {
+    return _prefs?.getAccountSettings(handle) ?? const SocialAccountSettings();
+  }
+
+  void updateSettings(String handle, SocialAccountSettings settings) {
+    _prefs?.setAccountSettings(handle, settings);
+    onChanged?.call();
+    // Re-fetch with new filters.
+    refreshFeeds();
+  }
+
+  // ── chart toggle ──
+
+  bool get showOnChart => _state.showOnChart;
+  set showOnChart(bool v) {
+    _prefs?.showSocialOnChart = v;
+    _state = _state.copyWith(showOnChart: v);
+    onChanged?.call();
+  }
+
+  // ── notifications toggle ──
+
+  bool get notificationsEnabled => _state.notificationsEnabled;
+  set notificationsEnabled(bool v) {
+    _prefs?.notificationsEnabled = v;
+    _state = _state.copyWith(notificationsEnabled: v);
+    onChanged?.call();
+  }
 
   /// Loads the user's subscribed accounts from the backend, then fetches
   /// all their feeds.
@@ -81,7 +150,8 @@ class SocialFeedViewModel {
   }
 
   /// Fetches feeds for all subscribed handles and merges into a single list
-  /// sorted newest-first.
+  /// sorted newest-first. Accumulates 7-day history for chart overlay and
+  /// fires [onNewPost] for brand-new posts.
   Future<void> _loadFeeds() async {
     final handles = _state.subscribedHandles;
     if (handles.isEmpty) {
@@ -92,24 +162,45 @@ class SocialFeedViewModel {
     final allPosts = <SocialPost>[];
     for (final handle in handles) {
       try {
-        final resp = await _api.fetchFeed(handle);
+        final settings = getSettings(handle);
+        final resp = await _api.fetchFeed(handle, settings: settings);
         allPosts.addAll(resp.posts);
       } catch (_) {
         // Skip failed handles — partial data is acceptable.
       }
     }
 
-    allPosts.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    // Merge with existing history (de-duplicate by ID).
+    final existingById = {for (final p in _state.posts) p.id: p};
+    for (final p in allPosts) {
+      existingById[p.id] = p;
+    }
 
-    // Count truly new posts (IDs not in previous state).
-    final previousIds = _state.posts.map((p) => p.id).toSet();
-    final newCount =
-        allPosts.where((p) => !previousIds.contains(p.id)).length;
-    final unseen = _state.posts.isEmpty ? 0 : newCount;
+    // Prune posts older than 7 days.
+    final cutoff = DateTime.now().toUtc().subtract(_historyWindow);
+    final merged = existingById.values
+        .where((p) => p.dateTime.isAfter(cutoff))
+        .toList()
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+    // Count truly new posts (IDs not previously known).
+    final newPosts = allPosts.where((p) => !_knownIds.contains(p.id)).toList();
+    final isFirstLoad = _knownIds.isEmpty;
+    final unseen = isFirstLoad ? 0 : newPosts.length;
+
+    // Fire notification callback for each new post (skip first load — seed only).
+    if (!isFirstLoad && _state.notificationsEnabled && onNewPost != null) {
+      for (final p in newPosts) {
+        onNewPost!(p);
+      }
+    }
+
+    // Track all known IDs.
+    _knownIds.addAll(allPosts.map((p) => p.id));
 
     _state = _state.copyWith(
       isLoading: false,
-      posts: allPosts,
+      posts: merged,
       unseenCount: _state.unseenCount + unseen,
     );
   }

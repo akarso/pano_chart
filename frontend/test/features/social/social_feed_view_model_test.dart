@@ -1,7 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/features/social/api/social_account_settings.dart';
 import 'package:pano_chart_frontend/features/social/api/social_api.dart';
 import 'package:pano_chart_frontend/features/social/api/social_models.dart';
 import 'package:pano_chart_frontend/features/social/social_feed_view_model.dart';
+
+/// Recent timestamp helper — returns unix seconds for N hours ago.
+int _recentTs(int hoursAgo) =>
+    (DateTime.now().toUtc().subtract(Duration(hours: hoursAgo)).millisecondsSinceEpoch ~/ 1000);
 
 class _FakeSocialApi implements SocialApi {
   SocialAccountsResponse accountsResult = const SocialAccountsResponse(
@@ -13,6 +18,9 @@ class _FakeSocialApi implements SocialApi {
   final Map<String, SocialFeedResponse> feedResults = {};
   final List<String> subscribedHandles = [];
   final List<String> unsubscribedHandles = [];
+
+  /// Captured settings per handle from the last fetchFeed call.
+  final Map<String, SocialAccountSettings> capturedSettings = {};
   bool shouldThrow = false;
 
   @override
@@ -22,8 +30,12 @@ class _FakeSocialApi implements SocialApi {
   }
 
   @override
-  Future<SocialFeedResponse> fetchFeed(String handle) async {
+  Future<SocialFeedResponse> fetchFeed(
+    String handle, {
+    SocialAccountSettings settings = const SocialAccountSettings(),
+  }) async {
     if (shouldThrow) throw Exception('network error');
+    capturedSettings[handle] = settings;
     return feedResults[handle] ??
         SocialFeedResponse(handle: handle, count: 0, posts: const []);
   }
@@ -53,6 +65,8 @@ void main() {
       expect(state.subscribedHandles, isEmpty);
       expect(state.error, isNull);
       expect(state.unseenCount, 0);
+      expect(state.showOnChart, isFalse);
+      expect(state.notificationsEnabled, isFalse);
     });
 
     test('copyWith preserves unchanged fields', () {
@@ -89,6 +103,7 @@ void main() {
     });
 
     test('loadSubscriptions sets handles and posts on success', () async {
+      final ts = _recentTs(1);
       final fake = _FakeSocialApi()
         ..accountsResult = const SocialAccountsResponse(
           userId: 'u1',
@@ -99,13 +114,13 @@ void main() {
           handle: 'elonmusk',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'p1',
               accountId: 'twitter:elonmusk',
               author: 'elonmusk',
               title: 'Hello',
               url: 'https://x.com/1',
-              timestamp: 1700000000,
+              timestamp: ts,
             ),
           ],
         );
@@ -136,6 +151,8 @@ void main() {
 
     test('loadSubscriptions merges multiple feeds sorted newest first',
         () async {
+      final tsOlder = _recentTs(4);
+      final tsNewer = _recentTs(2);
       final fake = _FakeSocialApi()
         ..accountsResult = const SocialAccountsResponse(
           userId: 'u1',
@@ -146,13 +163,13 @@ void main() {
           handle: 'alice',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'a1',
               accountId: 'twitter:alice',
               author: 'alice',
               title: 'Older',
               url: 'https://x.com/a1',
-              timestamp: 1000,
+              timestamp: tsOlder,
             ),
           ],
         )
@@ -160,13 +177,13 @@ void main() {
           handle: 'bob',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'b1',
               accountId: 'twitter:bob',
               author: 'bob',
               title: 'Newer',
               url: 'https://x.com/b1',
-              timestamp: 2000,
+              timestamp: tsNewer,
             ),
           ],
         );
@@ -202,6 +219,7 @@ void main() {
     });
 
     test('unsubscribe calls API and removes handle and posts', () async {
+      final ts = _recentTs(1);
       final fake = _FakeSocialApi()
         ..accountsResult = const SocialAccountsResponse(
           userId: 'u1',
@@ -212,13 +230,13 @@ void main() {
           handle: 'rem',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'r1',
               accountId: 'twitter:rem',
               author: 'rem',
               title: 'Post',
               url: 'https://x.com/r1',
-              timestamp: 1000,
+              timestamp: ts,
             ),
           ],
         );
@@ -256,6 +274,8 @@ void main() {
     });
 
     test('refreshFeeds updates posts', () async {
+      final ts1 = _recentTs(3);
+      final ts2 = _recentTs(1);
       final fake = _FakeSocialApi()
         ..accountsResult = const SocialAccountsResponse(
           userId: 'u1',
@@ -266,13 +286,13 @@ void main() {
           handle: 'handle',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'h1',
               accountId: 'twitter:handle',
               author: 'handle',
               title: 'First',
               url: 'https://x.com/h1',
-              timestamp: 1000,
+              timestamp: ts1,
             ),
           ],
         );
@@ -286,21 +306,21 @@ void main() {
         handle: 'handle',
         count: 2,
         posts: [
-          const SocialPost(
+          SocialPost(
             id: 'h1',
             accountId: 'twitter:handle',
             author: 'handle',
             title: 'First',
             url: 'https://x.com/h1',
-            timestamp: 1000,
+            timestamp: ts1,
           ),
-          const SocialPost(
+          SocialPost(
             id: 'h2',
             accountId: 'twitter:handle',
             author: 'handle',
             title: 'Second',
             url: 'https://x.com/h2',
-            timestamp: 2000,
+            timestamp: ts2,
           ),
         ],
       );
@@ -336,6 +356,7 @@ void main() {
     });
 
     test('partial feed failure still returns available posts', () async {
+      final ts = _recentTs(1);
       final fake = _FakeSocialApi()
         ..accountsResult = const SocialAccountsResponse(
           userId: 'u1',
@@ -346,13 +367,13 @@ void main() {
           handle: 'good',
           count: 1,
           posts: [
-            const SocialPost(
+            SocialPost(
               id: 'g1',
               accountId: 'twitter:good',
               author: 'good',
               title: 'Works',
               url: 'https://x.com/g1',
-              timestamp: 1000,
+              timestamp: ts,
             ),
           ],
         );
@@ -363,6 +384,183 @@ void main() {
 
       expect(vm.state.posts.length, 1);
       expect(vm.state.posts[0].id, 'g1');
+    });
+
+    // ── New PR-035 tests ──
+
+    test('showOnChart toggle updates state', () {
+      final vm = SocialFeedViewModel(_FakeSocialApi(), userId: 'u1');
+      int notifications = 0;
+      vm.onChanged = () => notifications++;
+
+      expect(vm.showOnChart, isFalse);
+
+      vm.showOnChart = true;
+      expect(vm.showOnChart, isTrue);
+      expect(vm.state.showOnChart, isTrue);
+      expect(notifications, 1);
+    });
+
+    test('notificationsEnabled toggle updates state', () {
+      final vm = SocialFeedViewModel(_FakeSocialApi(), userId: 'u1');
+      int notifications = 0;
+      vm.onChanged = () => notifications++;
+
+      expect(vm.notificationsEnabled, isFalse);
+
+      vm.notificationsEnabled = true;
+      expect(vm.notificationsEnabled, isTrue);
+      expect(vm.state.notificationsEnabled, isTrue);
+      expect(notifications, 1);
+    });
+
+    test('onNewPost fires for brand-new posts when notifications enabled',
+        () async {
+      final ts = _recentTs(1);
+      final fake = _FakeSocialApi()
+        ..accountsResult = const SocialAccountsResponse(
+          userId: 'u1',
+          count: 1,
+          accounts: ['twitter:a'],
+        )
+        ..feedResults['a'] = SocialFeedResponse(
+          handle: 'a',
+          count: 1,
+          posts: [
+            SocialPost(
+              id: 'n1',
+              accountId: 'twitter:a',
+              author: 'a',
+              title: 'New!',
+              url: 'https://x.com/n1',
+              timestamp: ts,
+            ),
+          ],
+        );
+
+      final vm = SocialFeedViewModel(fake, userId: 'u1');
+      vm.notificationsEnabled = true;
+      final notified = <String>[];
+      vm.onNewPost = (p) => notified.add(p.id);
+
+      await vm.loadSubscriptions();
+
+      // First load — all posts are "new" but onNewPost fires only when
+      // _knownIds was NOT empty (first load seeds _knownIds).
+      expect(notified, isEmpty);
+
+      // Now on refresh, add a truly new post.
+      final ts2 = _recentTs(0);
+      fake.feedResults['a'] = SocialFeedResponse(
+        handle: 'a',
+        count: 2,
+        posts: [
+          SocialPost(
+            id: 'n1',
+            accountId: 'twitter:a',
+            author: 'a',
+            title: 'New!',
+            url: 'https://x.com/n1',
+            timestamp: ts,
+          ),
+          SocialPost(
+            id: 'n2',
+            accountId: 'twitter:a',
+            author: 'a',
+            title: 'Brand new!',
+            url: 'https://x.com/n2',
+            timestamp: ts2,
+          ),
+        ],
+      );
+
+      await vm.refreshFeeds();
+      expect(notified, ['n2']);
+    });
+
+    test('getSettings returns default when no prefs attached', () {
+      final vm = SocialFeedViewModel(_FakeSocialApi(), userId: 'u1');
+      final settings = vm.getSettings('handle');
+
+      expect(settings.omitRetweets, isFalse);
+      expect(settings.minLength, 0);
+      expect(settings.keywords, isEmpty);
+    });
+
+    test('history prunes posts older than 7 days', () async {
+      final recentTs = _recentTs(1);
+      // 8 days ago — should be pruned.
+      final oldTs = (DateTime.now()
+                  .toUtc()
+                  .subtract(const Duration(days: 8))
+                  .millisecondsSinceEpoch ~/
+              1000);
+
+      final fake = _FakeSocialApi()
+        ..accountsResult = const SocialAccountsResponse(
+          userId: 'u1',
+          count: 1,
+          accounts: ['twitter:h'],
+        )
+        ..feedResults['h'] = SocialFeedResponse(
+          handle: 'h',
+          count: 2,
+          posts: [
+            SocialPost(
+              id: 'old',
+              accountId: 'twitter:h',
+              author: 'h',
+              title: 'Old',
+              url: 'https://x.com/old',
+              timestamp: oldTs,
+            ),
+            SocialPost(
+              id: 'new',
+              accountId: 'twitter:h',
+              author: 'h',
+              title: 'New',
+              url: 'https://x.com/new',
+              timestamp: recentTs,
+            ),
+          ],
+        );
+
+      final vm = SocialFeedViewModel(fake, userId: 'u1');
+      await vm.loadSubscriptions();
+
+      // Old post is pruned.
+      expect(vm.state.posts.length, 1);
+      expect(vm.state.posts[0].id, 'new');
+    });
+
+    test('isRetweet flag is preserved through feed loading', () async {
+      final ts = _recentTs(1);
+      final fake = _FakeSocialApi()
+        ..accountsResult = const SocialAccountsResponse(
+          userId: 'u1',
+          count: 1,
+          accounts: ['twitter:x'],
+        )
+        ..feedResults['x'] = SocialFeedResponse(
+          handle: 'x',
+          count: 1,
+          posts: [
+            SocialPost(
+              id: 'rt1',
+              accountId: 'twitter:x',
+              author: 'x',
+              title: 'RT @someone: hello',
+              url: 'https://x.com/rt1',
+              timestamp: ts,
+              isRetweet: true,
+            ),
+          ],
+        );
+
+      final vm = SocialFeedViewModel(fake, userId: 'u1');
+      await vm.loadSubscriptions();
+
+      expect(vm.state.posts[0].isRetweet, isTrue);
     });
   });
 }

@@ -2,10 +2,19 @@ package social
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	domain "pano_chart/backend/domain/social"
 )
+
+// FeedFilter contains optional filters applied to posts before they are
+// returned to the caller. Zero-value fields mean "no filter".
+type FeedFilter struct {
+	OmitRetweets bool     // if true, exclude retweets
+	MinLength    int      // minimum Title length (0 = no minimum)
+	Keywords     []string // if non-empty, post Title must contain at least one
+}
 
 // Service is the application facade for social features.
 // HTTP handlers call this; it coordinates stores, cache, and provider.
@@ -89,4 +98,47 @@ func (s *Service) Feed(handle string) ([]domain.Post, error) {
 // AccountsForUser returns the account IDs a user is subscribed to.
 func (s *Service) AccountsForUser(userID string) ([]string, error) {
 	return s.subs.AccountsForUser(userID)
+}
+
+// FilteredFeed fetches posts for a handle and applies the given filter.
+func (s *Service) FilteredFeed(handle string, filter FeedFilter) ([]domain.Post, error) {
+	posts, err := s.Feed(handle)
+	if err != nil {
+		return nil, err
+	}
+	return applyFilter(posts, filter), nil
+}
+
+// applyFilter returns only the posts that pass all filter criteria.
+func applyFilter(posts []domain.Post, f FeedFilter) []domain.Post {
+	if !f.OmitRetweets && f.MinLength <= 0 && len(f.Keywords) == 0 {
+		return posts // nothing to filter
+	}
+
+	result := make([]domain.Post, 0, len(posts))
+	for _, p := range posts {
+		if f.OmitRetweets && p.IsRetweet {
+			continue
+		}
+		if f.MinLength > 0 && len(p.Title) < f.MinLength {
+			continue
+		}
+		if len(f.Keywords) > 0 && !matchesAnyKeyword(p.Title, f.Keywords) {
+			continue
+		}
+		result = append(result, p)
+	}
+	return result
+}
+
+// matchesAnyKeyword returns true if text contains at least one keyword
+// (case-insensitive).
+func matchesAnyKeyword(text string, keywords []string) bool {
+	lower := strings.ToLower(text)
+	for _, kw := range keywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
 }

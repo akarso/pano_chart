@@ -6,6 +6,7 @@ class SocialPost {
   final String title;
   final String url;
   final int timestamp;
+  final bool isRetweet;
 
   const SocialPost({
     required this.id,
@@ -14,6 +15,7 @@ class SocialPost {
     required this.title,
     required this.url,
     required this.timestamp,
+    this.isRetweet = false,
   });
 
   factory SocialPost.fromJson(Map<String, dynamic> json) {
@@ -24,6 +26,7 @@ class SocialPost {
       title: json['title'] as String,
       url: json['url'] as String,
       timestamp: json['timestamp'] as int,
+      isRetweet: json['is_retweet'] as bool? ?? false,
     );
   }
 

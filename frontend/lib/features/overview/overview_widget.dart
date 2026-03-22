@@ -473,6 +473,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             initialVisibleCount: _sparklineCandles,
             isFavourite: _favourites.contains(item.symbol),
             eventsViewModel: widget.eventsViewModel,
+            socialFeedViewModel: widget.socialFeedViewModel,
             getCandleSeries: widget.getCandleSeries,
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,

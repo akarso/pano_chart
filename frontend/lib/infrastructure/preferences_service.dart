@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../features/social/api/social_account_settings.dart';
+
 /// Persists user settings and favourites across app restarts.
 ///
 /// Uses [SharedPreferences] as the backing store.
@@ -186,5 +188,31 @@ class PreferencesService {
     } else {
       addFavourite(symbol);
     }
+  }
+
+  // ---- social settings ----
+
+  static const _keyShowSocialOnChart = 'settings.showSocialOnChart';
+  static const _keyNotificationsEnabled = 'settings.notificationsEnabled';
+  static const _socialSettingsPrefix = 'social.settings.';
+
+  bool get showSocialOnChart => _prefs.getBool(_keyShowSocialOnChart) ?? false;
+  set showSocialOnChart(bool v) => _prefs.setBool(_keyShowSocialOnChart, v);
+
+  bool get notificationsEnabled =>
+      _prefs.getBool(_keyNotificationsEnabled) ?? false;
+  set notificationsEnabled(bool v) =>
+      _prefs.setBool(_keyNotificationsEnabled, v);
+
+  /// Retrieves per-account filter settings for [handle].
+  SocialAccountSettings getAccountSettings(String handle) {
+    final raw = _prefs.getString('$_socialSettingsPrefix$handle');
+    if (raw == null) return const SocialAccountSettings();
+    return SocialAccountSettings.decode(raw);
+  }
+
+  /// Persists per-account filter settings for [handle].
+  void setAccountSettings(String handle, SocialAccountSettings settings) {
+    _prefs.setString('$_socialSettingsPrefix$handle', settings.encode());
   }
 }

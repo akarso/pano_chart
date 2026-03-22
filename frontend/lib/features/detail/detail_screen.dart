@@ -11,6 +11,7 @@ import '../../infrastructure/preferences_service.dart';
 import '../events/event_filter.dart';
 import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
+import '../social/social_feed_view_model.dart';
 import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
 import 'chart/interactive_chart.dart';
@@ -34,6 +35,7 @@ class DetailScreen extends StatefulWidget {
   final DetailContext? detailContext;
   final bool isFavourite;
   final EventsViewModel? eventsViewModel;
+  final SocialFeedViewModel? socialFeedViewModel;
 
   /// API for fetching setup quality scores.
   final SetupApi? setupApi;
@@ -64,6 +66,7 @@ class DetailScreen extends StatefulWidget {
     this.detailContext,
     this.isFavourite = false,
     this.eventsViewModel,
+    this.socialFeedViewModel,
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
@@ -664,6 +667,7 @@ class _DetailScreenState extends State<DetailScreen> {
                   onConfigChanged: _saveChartConfig,
                   eventsViewModel: widget.eventsViewModel,
                   onNavigateToEvent: _navigateToEventsList,
+                  socialFeedViewModel: widget.socialFeedViewModel,
                   warmupCount: _warmupCount,
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,

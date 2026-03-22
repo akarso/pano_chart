@@ -95,6 +95,7 @@ void main() async {
   final socialRoot = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
   final socialFeedViewModel =
       socialRoot.createSocialFeedViewModel(userId: prefs.userId);
+  socialFeedViewModel.attachPrefs(prefs);
   runApp(bootstrapApp(
     config: config,
     prefs: prefs,

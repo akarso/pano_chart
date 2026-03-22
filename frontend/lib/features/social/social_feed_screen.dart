@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'api/social_account_settings.dart';
 import 'api/social_models.dart';
 import 'social_feed_view_model.dart';
 
@@ -72,6 +73,11 @@ class _SocialFeedScreenState extends State<SocialFeedScreen>
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Feed settings',
+            onPressed: () => _showSettingsSheet(context),
+          ),
           IconButton(
             icon: const Icon(Icons.person_add_outlined),
             tooltip: 'Manage accounts',
@@ -164,8 +170,31 @@ class _SocialFeedScreenState extends State<SocialFeedScreen>
       builder: (_) => _AccountSheet(
         viewModel: widget.viewModel,
         handleController: _handleController,
+        onFeedback: _showSnackBar,
       ),
     );
+  }
+
+  void _showSettingsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _FeedSettingsSheet(viewModel: widget.viewModel),
+    );
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ));
   }
 }
 
@@ -201,6 +230,25 @@ class _PostCard extends StatelessWidget {
                       color: Color(0xFF00e6c0),
                     ),
                   ),
+                  if (post.isRetweet) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[800],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'RT',
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: Colors.white54,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   Text(
                     _formatTime(post.dateTime),
@@ -242,15 +290,319 @@ class _PostCard extends StatelessWidget {
   }
 }
 
+// ── Feed-level settings sheet ───────────────────────────────────────────────
+
+class _FeedSettingsSheet extends StatefulWidget {
+  final SocialFeedViewModel viewModel;
+
+  const _FeedSettingsSheet({required this.viewModel});
+
+  @override
+  State<_FeedSettingsSheet> createState() => _FeedSettingsSheetState();
+}
+
+class _FeedSettingsSheetState extends State<_FeedSettingsSheet> {
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Feed Settings',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Show on chart',
+                style: TextStyle(color: Colors.white, fontSize: 14)),
+            subtitle: Text('Display social posts on the detail chart',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            value: widget.viewModel.showOnChart,
+            activeColor: const Color(0xFF42A5F5),
+            onChanged: (v) {
+              setState(() => widget.viewModel.showOnChart = v);
+            },
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Notifications',
+                style: TextStyle(color: Colors.white, fontSize: 14)),
+            subtitle: Text('Alert when new posts arrive',
+                style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+            value: widget.viewModel.notificationsEnabled,
+            activeColor: const Color(0xFF42A5F5),
+            onChanged: (v) {
+              setState(() => widget.viewModel.notificationsEnabled = v);
+            },
+          ),
+
+          // Per-account settings (one row per subscribed handle).
+          if (widget.viewModel.state.subscribedHandles.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Per-account filters',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 4),
+            ...widget.viewModel.state.subscribedHandles.map((handle) {
+              final settings = widget.viewModel.getSettings(handle);
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text('@$handle',
+                    style:
+                        const TextStyle(color: Colors.white, fontSize: 14)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (settings.hasActiveFilter)
+                      const Icon(Icons.filter_alt,
+                          size: 16, color: Color(0xFF42A5F5)),
+                    IconButton(
+                      icon: const Icon(Icons.tune,
+                          size: 18, color: Colors.white54),
+                      onPressed: () => _showAccountSettingsSheet(handle),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showAccountSettingsSheet(String handle) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      isScrollControlled: true,
+      builder: (_) => _AccountSettingsSheet(
+        viewModel: widget.viewModel,
+        handle: handle,
+      ),
+    );
+  }
+}
+
+// ── Per-account settings sheet ──────────────────────────────────────────────
+
+class _AccountSettingsSheet extends StatefulWidget {
+  final SocialFeedViewModel viewModel;
+  final String handle;
+
+  const _AccountSettingsSheet({
+    required this.viewModel,
+    required this.handle,
+  });
+
+  @override
+  State<_AccountSettingsSheet> createState() => _AccountSettingsSheetState();
+}
+
+class _AccountSettingsSheetState extends State<_AccountSettingsSheet> {
+  late SocialAccountSettings _settings;
+  final _keywordController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _settings = widget.viewModel.getSettings(widget.handle);
+  }
+
+  @override
+  void dispose() {
+    _keywordController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    widget.viewModel.updateSettings(widget.handle, _settings);
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: 16 + bottomPadding,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Filters for @${widget.handle}',
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Omit retweets toggle.
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Omit retweets',
+                style: TextStyle(color: Colors.white, fontSize: 14)),
+            value: _settings.omitRetweets,
+            activeColor: const Color(0xFF42A5F5),
+            onChanged: (v) =>
+                setState(() => _settings = _settings.copyWith(omitRetweets: v)),
+          ),
+
+          // Min body length.
+          Row(
+            children: [
+              const Text('Min body length',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
+              const Spacer(),
+              SizedBox(
+                width: 60,
+                child: TextField(
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                  keyboardType: TextInputType.number,
+                  textAlign: TextAlign.center,
+                  decoration: InputDecoration(
+                    hintText: '${_settings.minLength}',
+                    hintStyle: TextStyle(color: Colors.grey[600]),
+                    filled: true,
+                    fillColor: const Color(0xFF2A2A2A),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 6),
+                  ),
+                  onChanged: (v) {
+                    final n = int.tryParse(v) ?? 0;
+                    setState(
+                        () => _settings = _settings.copyWith(minLength: n));
+                  },
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Keywords.
+          Text('Keywords',
+              style: TextStyle(color: Colors.grey[400], fontSize: 13)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              ..._settings.keywords.map((kw) => Chip(
+                    label: Text(kw,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12)),
+                    backgroundColor: const Color(0xFF2A2A2A),
+                    deleteIconColor: Colors.redAccent,
+                    onDeleted: () {
+                      final updated =
+                          List<String>.from(_settings.keywords)..remove(kw);
+                      setState(() =>
+                          _settings = _settings.copyWith(keywords: updated));
+                    },
+                  )),
+              if (_settings.keywords.length < 6)
+                ActionChip(
+                  label: const Icon(Icons.add, size: 16, color: Color(0xFF42A5F5)),
+                  backgroundColor: const Color(0xFF2A2A2A),
+                  onPressed: () => _showAddKeyword(),
+                ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _save,
+              child: const Text('Apply'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAddKeyword() {
+    _keywordController.clear();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1E1E1E),
+        title:
+            const Text('Add Keyword', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: _keywordController,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'e.g. bitcoin',
+            hintStyle: TextStyle(color: Colors.grey[600]),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              final kw = _keywordController.text.trim();
+              if (kw.isNotEmpty && !_settings.keywords.contains(kw)) {
+                final updated = List<String>.from(_settings.keywords)..add(kw);
+                setState(
+                    () => _settings = _settings.copyWith(keywords: updated));
+              }
+              Navigator.of(ctx).pop();
+            },
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Account management bottom sheet ─────────────────────────────────────────
 
 class _AccountSheet extends StatefulWidget {
   final SocialFeedViewModel viewModel;
   final TextEditingController handleController;
+  final void Function(String message) onFeedback;
 
   const _AccountSheet({
     required this.viewModel,
     required this.handleController,
+    required this.onFeedback,
   });
 
   @override
@@ -264,6 +616,16 @@ class _AccountSheetState extends State<_AccountSheet> {
     widget.viewModel.onChanged = () {
       if (mounted) setState(() {});
     };
+  }
+
+  Future<void> _subscribe(String handle) async {
+    await widget.viewModel.subscribe(handle);
+    widget.onFeedback('Subscribed to @$handle');
+  }
+
+  Future<void> _unsubscribe(String handle) async {
+    await widget.viewModel.unsubscribe(handle);
+    widget.onFeedback('Unsubscribed from @$handle');
   }
 
   @override
@@ -321,7 +683,7 @@ class _AccountSheetState extends State<_AccountSheet> {
                 onPressed: () {
                   final handle = widget.handleController.text.trim();
                   if (handle.isNotEmpty) {
-                    widget.viewModel.subscribe(handle);
+                    _subscribe(handle);
                     widget.handleController.clear();
                   }
                 },
@@ -354,12 +716,12 @@ class _AccountSheetState extends State<_AccountSheet> {
                   ? IconButton(
                       icon: const Icon(Icons.remove_circle_outline,
                           color: Colors.redAccent, size: 20),
-                      onPressed: () => widget.viewModel.unsubscribe(handle),
+                      onPressed: () => _unsubscribe(handle),
                     )
                   : IconButton(
                       icon: const Icon(Icons.add_circle_outline,
                           color: Color(0xFF00e6c0), size: 20),
-                      onPressed: () => widget.viewModel.subscribe(handle),
+                      onPressed: () => _subscribe(handle),
                     ),
             );
           }),
@@ -378,7 +740,7 @@ class _AccountSheetState extends State<_AccountSheet> {
               trailing: IconButton(
                 icon: const Icon(Icons.remove_circle_outline,
                     color: Colors.redAccent, size: 20),
-                onPressed: () => widget.viewModel.unsubscribe(handle),
+                onPressed: () => _unsubscribe(handle),
               ),
             );
           }),

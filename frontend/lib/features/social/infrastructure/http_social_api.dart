@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../api/social_account_settings.dart';
 import '../api/social_api.dart';
 import '../api/social_models.dart';
 
@@ -27,10 +28,22 @@ class HttpSocialApi implements SocialApi {
   HttpSocialApi({required this.client, required this.baseUrl});
 
   @override
-  Future<SocialFeedResponse> fetchFeed(String handle) async {
+  Future<SocialFeedResponse> fetchFeed(
+    String handle, {
+    SocialAccountSettings settings = const SocialAccountSettings(),
+  }) async {
+    final params = <String, String>{'handle': handle};
+    if (settings.omitRetweets) params['omit_retweets'] = 'true';
+    if (settings.minLength > 0) {
+      params['min_length'] = settings.minLength.toString();
+    }
+    if (settings.keywords.isNotEmpty) {
+      params['keywords'] = settings.keywords.join(',');
+    }
+
     final uri = Uri.parse(baseUrl).replace(
       path: '/api/social/feed',
-      queryParameters: {'handle': handle},
+      queryParameters: params,
     );
 
     final response =

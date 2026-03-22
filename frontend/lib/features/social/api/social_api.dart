@@ -1,9 +1,14 @@
+import 'social_account_settings.dart';
 import 'social_models.dart';
 
 /// Port for fetching social data from the backend.
 abstract class SocialApi {
-  /// Fetches the post feed for the given [handle].
-  Future<SocialFeedResponse> fetchFeed(String handle);
+  /// Fetches the post feed for the given [handle], optionally filtered by
+  /// [settings].
+  Future<SocialFeedResponse> fetchFeed(
+    String handle, {
+    SocialAccountSettings settings,
+  });
 
   /// Subscribes [userId] to [handle]. Idempotent.
   Future<void> subscribe({required String userId, required String handle});

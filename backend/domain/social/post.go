@@ -8,4 +8,5 @@ type Post struct {
 	Title     string // post title / text summary
 	URL       string // permalink
 	Timestamp int64  // unix timestamp of publication
+	IsRetweet bool   // true when this is a retweet / boost
 }

@@ -117,3 +117,74 @@ func TestRSSProvider_HandlesInvalidXML(t *testing.T) {
 		t.Fatal("expected error for invalid XML")
 	}
 }
+
+const htmlEntityRSS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>test / @test</title>
+    <item>
+      <title>It&apos;s a great day &amp; I can&apos;t wait</title>
+      <dc:creator>@test</dc:creator>
+      <link>https://example.com/1</link>
+      <guid>guid1</guid>
+      <pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>RT @someone: Big announcement &#x2014; breaking news</title>
+      <dc:creator>@someone</dc:creator>
+      <link>https://example.com/2</link>
+      <guid>guid2</guid>
+      <pubDate>Mon, 01 Jan 2024 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+
+func TestRSSProvider_UnescapesHTMLEntities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, htmlEntityRSS)
+	}))
+	defer srv.Close()
+
+	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
+	acc := domain.Account{ID: "twitter:test", Platform: "twitter", Handle: "test"}
+
+	posts, err := provider.Fetch(acc)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+
+	// Apostrophes and ampersands should be unescaped.
+	expected := "It's a great day & I can't wait"
+	if posts[0].Title != expected {
+		t.Errorf("expected title %q, got %q", expected, posts[0].Title)
+	}
+}
+
+func TestRSSProvider_DetectsRetweets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, htmlEntityRSS)
+	}))
+	defer srv.Close()
+
+	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
+	acc := domain.Account{ID: "twitter:test", Platform: "twitter", Handle: "test"}
+
+	posts, err := provider.Fetch(acc)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	// First post: own author, original title → not a retweet.
+	if posts[0].IsRetweet {
+		t.Error("expected post[0] to not be a retweet")
+	}
+
+	// Second post: "RT @someone" prefix and different creator → retweet.
+	if !posts[1].IsRetweet {
+		t.Error("expected post[1] to be a retweet")
+	}
+}

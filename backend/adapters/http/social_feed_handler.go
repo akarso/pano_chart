@@ -3,6 +3,8 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 
 	appsocial "pano_chart/backend/application/social"
 )
@@ -24,6 +26,7 @@ type socialPostDTO struct {
 	Title     string `json:"title"`
 	URL       string `json:"url"`
 	Timestamp int64  `json:"timestamp"`
+	IsRetweet bool   `json:"is_retweet"`
 }
 
 type socialFeedResponse struct {
@@ -45,7 +48,27 @@ func (h *SocialFeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts, err := h.service.Feed(handle)
+	// Build filter from optional query params.
+	filter := appsocial.FeedFilter{}
+	if r.URL.Query().Get("omit_retweets") == "true" {
+		filter.OmitRetweets = true
+	}
+	if ml := r.URL.Query().Get("min_length"); ml != "" {
+		if v, err := strconv.Atoi(ml); err == nil && v > 0 {
+			filter.MinLength = v
+		}
+	}
+	if kw := r.URL.Query().Get("keywords"); kw != "" {
+		parts := strings.Split(kw, ",")
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				filter.Keywords = append(filter.Keywords, p)
+			}
+		}
+	}
+
+	posts, err := h.service.FilteredFeed(handle, filter)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
@@ -60,6 +83,7 @@ func (h *SocialFeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Title:     p.Title,
 			URL:       p.URL,
 			Timestamp: p.Timestamp,
+			IsRetweet: p.IsRetweet,
 		}
 	}
 

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart' as http_testing;
 
+import 'package:pano_chart_frontend/features/social/api/social_account_settings.dart';
 import 'package:pano_chart_frontend/features/social/infrastructure/http_social_api.dart';
 
 void main() {
@@ -141,6 +142,50 @@ void main() {
         () => api.fetchAccounts('u1'),
         throwsA(isA<HttpSocialApiException>()),
       );
+    });
+
+    test('fetchFeed passes filter query params when settings provided',
+        () async {
+      final client = http_testing.MockClient((req) async {
+        expect(req.url.path, '/api/social/feed');
+        expect(req.url.queryParameters['handle'], 'alice');
+        expect(req.url.queryParameters['omit_retweets'], 'true');
+        expect(req.url.queryParameters['min_length'], '50');
+        expect(req.url.queryParameters['keywords'], 'bitcoin,eth');
+        return http.Response(
+          jsonEncode({
+            'handle': 'alice',
+            'count': 0,
+            'posts': [],
+          }),
+          200,
+        );
+      });
+
+      final api = HttpSocialApi(client: client, baseUrl: 'http://localhost');
+      await api.fetchFeed(
+        'alice',
+        settings: const SocialAccountSettings(
+          omitRetweets: true,
+          minLength: 50,
+          keywords: ['bitcoin', 'eth'],
+        ),
+      );
+    });
+
+    test('fetchFeed omits filter params when settings are default', () async {
+      final client = http_testing.MockClient((req) async {
+        expect(req.url.queryParameters.containsKey('omit_retweets'), isFalse);
+        expect(req.url.queryParameters.containsKey('min_length'), isFalse);
+        expect(req.url.queryParameters.containsKey('keywords'), isFalse);
+        return http.Response(
+          jsonEncode({'handle': 'bob', 'count': 0, 'posts': []}),
+          200,
+        );
+      });
+
+      final api = HttpSocialApi(client: client, baseUrl: 'http://localhost');
+      await api.fetchFeed('bob');
     });
   });
 }

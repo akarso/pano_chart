@@ -129,3 +129,138 @@ func TestService_AccountsForUser(t *testing.T) {
 		t.Fatalf("expected 2 accounts, got %d", len(ids))
 	}
 }
+
+func TestService_FilteredFeed_OmitRetweets(t *testing.T) {
+	accStore := infrasocial.NewMemoryAccountStore()
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	cache := appsocial.NewPostCache(60 * time.Second)
+	provider := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Title: "Original post", IsRetweet: false},
+			{ID: "p2", Title: "RT @someone retweet", IsRetweet: true},
+			{ID: "p3", Title: "Another original", IsRetweet: false},
+		},
+	}
+
+	svc := appsocial.NewService(provider, accStore, subStore, cache)
+
+	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{OmitRetweets: true})
+	if err != nil {
+		t.Fatalf("filtered feed: %v", err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts (no retweets), got %d", len(posts))
+	}
+	for _, p := range posts {
+		if p.IsRetweet {
+			t.Fatalf("unexpected retweet in filtered result: %s", p.ID)
+		}
+	}
+}
+
+func TestService_FilteredFeed_MinLength(t *testing.T) {
+	accStore := infrasocial.NewMemoryAccountStore()
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	cache := appsocial.NewPostCache(60 * time.Second)
+	provider := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Title: "short"},
+			{ID: "p2", Title: "this is a longer post with substantial content"},
+		},
+	}
+
+	svc := appsocial.NewService(provider, accStore, subStore, cache)
+
+	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{MinLength: 10})
+	if err != nil {
+		t.Fatalf("filtered feed: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+	if posts[0].ID != "p2" {
+		t.Fatalf("expected p2, got %s", posts[0].ID)
+	}
+}
+
+func TestService_FilteredFeed_Keywords(t *testing.T) {
+	accStore := infrasocial.NewMemoryAccountStore()
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	cache := appsocial.NewPostCache(60 * time.Second)
+	provider := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Title: "Bitcoin hits new ATH"},
+			{ID: "p2", Title: "Nice weather today"},
+			{ID: "p3", Title: "ETH pumping hard"},
+		},
+	}
+
+	svc := appsocial.NewService(provider, accStore, subStore, cache)
+
+	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{Keywords: []string{"bitcoin", "eth"}})
+	if err != nil {
+		t.Fatalf("filtered feed: %v", err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts matching keywords, got %d", len(posts))
+	}
+}
+
+func TestService_FilteredFeed_NoFilter(t *testing.T) {
+	accStore := infrasocial.NewMemoryAccountStore()
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	cache := appsocial.NewPostCache(60 * time.Second)
+	provider := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Title: "A"},
+			{ID: "p2", Title: "B"},
+		},
+	}
+
+	svc := appsocial.NewService(provider, accStore, subStore, cache)
+
+	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{})
+	if err != nil {
+		t.Fatalf("filtered feed: %v", err)
+	}
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts (no filter), got %d", len(posts))
+	}
+}
+
+func TestService_FilteredFeed_CombinedFilters(t *testing.T) {
+	accStore := infrasocial.NewMemoryAccountStore()
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	cache := appsocial.NewPostCache(60 * time.Second)
+	provider := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Title: "Bitcoin price analysis for today and tomorrow", IsRetweet: false},
+			{ID: "p2", Title: "RT @x Bitcoin short", IsRetweet: true},
+			{ID: "p3", Title: "BTC", IsRetweet: false},
+			{ID: "p4", Title: "Weather is nice today in the city area", IsRetweet: false},
+		},
+	}
+
+	svc := appsocial.NewService(provider, accStore, subStore, cache)
+
+	// Require: no retweets, min 10 chars, must mention "bitcoin" or "btc"
+	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{
+		OmitRetweets: true,
+		MinLength:    10,
+		Keywords:     []string{"bitcoin", "btc"},
+	})
+	if err != nil {
+		t.Fatalf("filtered feed: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("expected 1 post, got %d", len(posts))
+	}
+	if posts[0].ID != "p1" {
+		t.Fatalf("expected p1, got %s", posts[0].ID)
+	}
+}

@@ -36,6 +36,35 @@ void main() {
       expect(dt.isUtc, isTrue);
       expect(dt, DateTime.utc(2023, 11, 14, 22, 13, 20));
     });
+
+    test('isRetweet defaults to false when absent', () {
+      final json = {
+        'id': 'p1',
+        'account_id': 'twitter:x',
+        'author': 'x',
+        'title': 'Hello',
+        'url': 'https://x.com/1',
+        'timestamp': 1700000000,
+      };
+      final post = SocialPost.fromJson(json);
+
+      expect(post.isRetweet, isFalse);
+    });
+
+    test('isRetweet parsed from JSON', () {
+      final json = {
+        'id': 'rt1',
+        'account_id': 'twitter:x',
+        'author': 'x',
+        'title': 'RT @someone: hello',
+        'url': 'https://x.com/rt1',
+        'timestamp': 1700000000,
+        'is_retweet': true,
+      };
+      final post = SocialPost.fromJson(json);
+
+      expect(post.isRetweet, isTrue);
+    });
   });
 
   group('SocialFeedResponse', () {

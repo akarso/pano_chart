@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'package:flutter/gestures.dart' show GestureBinding, PointerScrollEvent;
 import 'package:flutter/material.dart';
 
 import '../../candles/api/candle_response.dart';
@@ -6,6 +7,10 @@ import '../../events/chart_event_overlay.dart';
 import '../../events/chart_event_overlay_painter.dart';
 import '../../events/event_marker_builder.dart';
 import '../../events/events_view_model.dart';
+import '../../social/chart/chart_social_overlay.dart';
+import '../../social/chart/social_chart_overlay_painter.dart';
+import '../../social/chart/social_marker_builder.dart';
+import '../../social/social_feed_view_model.dart';
 import '../chart_navigation.dart';
 import 'axis_layer.dart';
 import 'behavior_oscillator_painter.dart';
@@ -26,6 +31,7 @@ class InteractiveChart extends StatefulWidget {
   final ValueChanged<ChartIndicatorConfig>? onConfigChanged;
   final EventsViewModel? eventsViewModel;
   final ValueChanged<String>? onNavigateToEvent;
+  final SocialFeedViewModel? socialFeedViewModel;
 
   /// Total height of the combined chart.
   final double height;
@@ -48,6 +54,7 @@ class InteractiveChart extends StatefulWidget {
     this.onConfigChanged,
     this.eventsViewModel,
     this.onNavigateToEvent,
+    this.socialFeedViewModel,
     this.height = 360,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -87,19 +94,18 @@ class _InteractiveChartState extends State<InteractiveChart> {
   // ── axis overlay sizing ──
   static const double _yAxisW = 44.0;
   static const double _yAxisDragW = 50.0;
-  static const double _xAxisDragH = 24.0;
 
-  // ── gesture zone tracking ──
-  _GestureZone _activeGesture = _GestureZone.chart;
+  // ── Y-axis drag state ──
   double _yAxisDragStartY = 0;
   double _yAxisDragStartScale = 1.0;
+
+  // ── X-axis drag state ──
   double _xAxisDragStartX = 0;
   double _xAxisDragStartWidth = 10.0;
   double _xAxisDragStartScroll = 0;
 
   // ── layout cache (set in build before gesture callbacks fire) ──
   double _layoutVw = 0;
-  double _layoutTotalH = 0;
   double _layoutChartBottom = 0;
 
   // ── crosshair ──
@@ -225,33 +231,9 @@ class _InteractiveChartState extends State<InteractiveChart> {
     return false;
   }
 
-  // ── gesture handling ──
+  // ── gesture handling (chart area: pan + pinch) ──
 
   void _onScaleStart(ScaleStartDetails d) {
-    final pos = d.localFocalPoint;
-
-    // Y-axis drag zone: right strip within chart content area.
-    if (d.pointerCount == 1 &&
-        pos.dx > _layoutVw - _yAxisDragW &&
-        pos.dy < _layoutChartBottom) {
-      _activeGesture = _GestureZone.yAxis;
-      _yAxisDragStartY = pos.dy;
-      _yAxisDragStartScale = _priceScaleY;
-      return;
-    }
-
-    // X-axis drag zone: bottom strip.
-    if (d.pointerCount == 1 &&
-        pos.dy > _layoutTotalH - _xAxisDragH) {
-      _activeGesture = _GestureZone.xAxis;
-      _xAxisDragStartX = pos.dx;
-      _xAxisDragStartWidth = _candleWidth;
-      _xAxisDragStartScroll = _scrollOffset;
-      return;
-    }
-
-    // Default: chart pan / pinch.
-    _activeGesture = _GestureZone.chart;
     _prevScale = _candleWidth;
     _prevFocalX = d.localFocalPoint.dx;
     _prevScrollOffset = _scrollOffset;
@@ -259,46 +241,98 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
   void _onScaleUpdate(ScaleUpdateDetails d, double viewportWidth) {
     setState(() {
-      switch (_activeGesture) {
-        case _GestureZone.yAxis:
-          if (d.pointerCount == 1) {
-            final delta = d.localFocalPoint.dy - _yAxisDragStartY;
-            _priceScaleY = (_yAxisDragStartScale * math.exp(delta * 0.008))
+      if (d.pointerCount >= 2) {
+        _crosshair = null;
+        final newWidth = (_prevScale! * d.horizontalScale)
+            .clamp(_minCandleWidth, _maxCandleWidth);
+        final focalCandle =
+            _prevScrollOffset + _prevFocalX! / _prevScale!;
+        _candleWidth = newWidth;
+        _scrollOffset =
+            focalCandle - d.localFocalPoint.dx / _candleWidth;
+      } else {
+        final dx = d.localFocalPoint.dx - _prevFocalX!;
+        _scrollOffset = _prevScrollOffset - dx / _candleWidth;
+      }
+      _clampScroll(viewportWidth);
+    });
+  }
+
+  // ── Y-axis drag (vertical price scaling) ──
+
+  void _onYAxisDragStart(DragStartDetails d) {
+    _yAxisDragStartY = d.localPosition.dy;
+    _yAxisDragStartScale = _priceScaleY;
+  }
+
+  void _onYAxisDragUpdate(DragUpdateDetails d) {
+    setState(() {
+      final delta = d.localPosition.dy - _yAxisDragStartY;
+      _priceScaleY =
+          (_yAxisDragStartScale * math.exp(delta * 0.008)).clamp(0.3, 10.0);
+    });
+  }
+
+  void _resetPriceScale() {
+    setState(() => _priceScaleY = 1.0);
+  }
+
+  // ── X-axis drag (horizontal time scaling) ──
+
+  void _onXAxisDragStart(DragStartDetails d, double viewportWidth) {
+    _xAxisDragStartX = d.localPosition.dx;
+    _xAxisDragStartWidth = _candleWidth;
+    _xAxisDragStartScroll = _scrollOffset;
+  }
+
+  void _onXAxisDragUpdate(DragUpdateDetails d, double viewportWidth) {
+    setState(() {
+      final delta = d.localPosition.dx - _xAxisDragStartX;
+      final newWidth =
+          (_xAxisDragStartWidth * math.exp(delta * 0.008))
+              .clamp(_minCandleWidth, _maxCandleWidth);
+      final viewCenter = _xAxisDragStartScroll +
+          viewportWidth / (2 * _xAxisDragStartWidth);
+      _candleWidth = newWidth;
+      _scrollOffset = viewCenter - viewportWidth / (2 * _candleWidth);
+      _clampScroll(viewportWidth);
+    });
+  }
+
+  void _resetTimeScale(double viewportWidth) {
+    setState(() {
+      final candles = widget.series.candles;
+      final ivCount = widget.initialVisibleCount.clamp(1, candles.length);
+      _candleWidth =
+          (viewportWidth / ivCount).clamp(_minCandleWidth, _maxCandleWidth);
+      _clampScroll(viewportWidth);
+    });
+  }
+
+  // ── pointer scroll (trackpad / mouse wheel) ──
+
+  void _handlePointerScroll(PointerScrollEvent event, double chartW) {
+    final pos = event.localPosition;
+    setState(() {
+      if (pos.dx > _layoutVw - _yAxisDragW &&
+          pos.dy < _layoutChartBottom) {
+        // Y-axis zone: scroll → vertical price zoom.
+        _priceScaleY =
+            (_priceScaleY * math.exp(-event.scrollDelta.dy * 0.003))
                 .clamp(0.3, 10.0);
-          }
-          break;
-        case _GestureZone.xAxis:
-          if (d.pointerCount == 1) {
-            final delta = d.localFocalPoint.dx - _xAxisDragStartX;
-            final newWidth =
-                (_xAxisDragStartWidth * math.exp(delta * 0.008))
-                    .clamp(_minCandleWidth, _maxCandleWidth);
-            final viewCenter = _xAxisDragStartScroll +
-                viewportWidth / (2 * _xAxisDragStartWidth);
-            _candleWidth = newWidth;
-            _scrollOffset =
-                viewCenter - viewportWidth / (2 * _candleWidth);
-            _clampScroll(viewportWidth);
-          }
-          break;
-        case _GestureZone.chart:
-          if (d.pointerCount >= 2) {
-            _crosshair = null;
-            // Horizontal pinch zoom only (vertical pinch disabled).
-            final newWidth = (_prevScale! * d.horizontalScale)
+      } else if (pos.dy > _layoutChartBottom) {
+        // X-axis zone: scroll → horizontal time zoom.
+        final newWidth =
+            (_candleWidth * math.exp(-event.scrollDelta.dy * 0.003))
                 .clamp(_minCandleWidth, _maxCandleWidth);
-            final focalCandle =
-                _prevScrollOffset + _prevFocalX! / _prevScale!;
-            _candleWidth = newWidth;
-            _scrollOffset =
-                focalCandle - d.localFocalPoint.dx / _candleWidth;
-          } else {
-            // Single-finger pan.
-            final dx = d.localFocalPoint.dx - _prevFocalX!;
-            _scrollOffset = _prevScrollOffset - dx / _candleWidth;
-          }
-          _clampScroll(viewportWidth);
-          break;
+        final viewCenter = _scrollOffset + chartW / (2 * _candleWidth);
+        _candleWidth = newWidth;
+        _scrollOffset = viewCenter - chartW / (2 * _candleWidth);
+        _clampScroll(chartW);
+      } else {
+        // Chart area: scroll → horizontal pan.
+        _scrollOffset += event.scrollDelta.dy / _candleWidth;
+        _clampScroll(chartW);
       }
     });
   }
@@ -359,9 +393,8 @@ class _InteractiveChartState extends State<InteractiveChart> {
             // Chart renders full width; Y-axis labels overlay on top.
             final chartW = vw;
 
-            // Cache layout dimensions for gesture zone detection.
+            // Cache layout dimensions for pointer-scroll zone detection.
             _layoutVw = vw;
-            _layoutTotalH = priceH + volumeH + oscH + behH + xAxisH;
             _layoutChartBottom = priceH + volumeH + oscH + behH;
 
             // On first build, set candleWidth to match sparkline ratio
@@ -405,13 +438,22 @@ class _InteractiveChartState extends State<InteractiveChart> {
             // Whether user has scrolled to the hard candle limit.
             final atHardLimit = _scrollOffset <= _effectiveWarmup + 0.5;
 
-            return GestureDetector(
-              onScaleStart: _onScaleStart,
-              onScaleUpdate: (d) => _onScaleUpdate(d, chartW),
-              onLongPressStart: (d) => _onCrosshairStart(d.localPosition, chartW, start, priceH),
-              onLongPressMoveUpdate: (d) => _onCrosshairUpdate(d.localPosition, chartW, start, priceH),
-              onLongPressEnd: (_) => _onCrosshairEnd(),
-              child: Stack(
+            return Listener(
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent) {
+                  GestureBinding.instance.pointerSignalResolver
+                      .register(event, (e) {
+                    _handlePointerScroll(e as PointerScrollEvent, chartW);
+                  });
+                }
+              },
+              child: GestureDetector(
+                onScaleStart: _onScaleStart,
+                onScaleUpdate: (d) => _onScaleUpdate(d, chartW),
+                onLongPressStart: (d) => _onCrosshairStart(d.localPosition, chartW, start, priceH),
+                onLongPressMoveUpdate: (d) => _onCrosshairUpdate(d.localPosition, chartW, start, priceH),
+                onLongPressEnd: (_) => _onCrosshairEnd(),
+                child: Stack(
                 children: [
                   // ── Price chart layer ──
                   Positioned(
@@ -448,6 +490,21 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       child: ChartEventOverlay(
                         markers: _buildEventMarkers(chartW),
                         onNavigateToEvent: widget.onNavigateToEvent,
+                        priceAreaHeight: priceH,
+                      ),
+                    ),
+
+                  // ── Social overlay (blue markers) ──
+                  if (widget.socialFeedViewModel != null &&
+                      widget.socialFeedViewModel!.showOnChart &&
+                      widget.socialFeedViewModel!.state.posts.isNotEmpty)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: chartW,
+                      height: priceH + volumeH + oscH + behH + xAxisH,
+                      child: ChartSocialOverlay(
+                        markers: _buildSocialMarkers(chartW),
                         priceAreaHeight: priceH,
                       ),
                     ),
@@ -591,6 +648,43 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         ),
                       ),
                     ),
+
+                  // ── Y-axis drag zone ──
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    width: _yAxisDragW,
+                    height: priceH + volumeH + oscH + behH,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onVerticalDragStart: _onYAxisDragStart,
+                      onVerticalDragUpdate: _onYAxisDragUpdate,
+                      onDoubleTap: _resetPriceScale,
+                      child: const Center(
+                        child: Icon(
+                          Icons.drag_handle,
+                          color: Color(0x33FFFFFF),
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // ── X-axis drag zone ──
+                  Positioned(
+                    left: 0,
+                    top: priceH + volumeH + oscH + behH,
+                    width: chartW,
+                    height: xAxisH + 20,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragStart: (d) =>
+                          _onXAxisDragStart(d, chartW),
+                      onHorizontalDragUpdate: (d) =>
+                          _onXAxisDragUpdate(d, chartW),
+                      onDoubleTap: () => _resetTimeScale(chartW),
+                    ),
+                  ),
 
                   // ── Crosshair overlay ──
                   if (_crosshair != null)
@@ -744,6 +838,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                 ],
               ),
+            ),
             );
           }),
         ),
@@ -795,6 +890,32 @@ class _InteractiveChartState extends State<InteractiveChart> {
     );
 
     return [...pastMarkers, ...futureMarkers];
+  }
+
+  List<SocialMarker> _buildSocialMarkers(double chartWidth) {
+    final svm = widget.socialFeedViewModel;
+    if (svm == null) return [];
+
+    final candles = widget.series.candles;
+    final start = _visibleStart(chartWidth);
+    final end = math.min(_visibleEnd(chartWidth), candles.length);
+    final pixOff = _scrollPixelOffset(chartWidth);
+
+    final visibleCandles = candles.sublist(start, end);
+    if (visibleCandles.isEmpty) return [];
+
+    final visibleSeries = CandleSeriesResponse(
+      symbol: widget.series.symbol,
+      timeframe: widget.series.timeframe,
+      candles: visibleCandles,
+    );
+
+    return buildSocialMarkers(
+      series: visibleSeries,
+      posts: svm.state.posts,
+      candleWidth: _candleWidth,
+      scrollPixelOffset: pixOff,
+    );
   }
 
   // ── Crosshair ──
@@ -882,8 +1003,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
   }
 }
 
-/// Which zone of the chart the current gesture started in.
-enum _GestureZone { chart, yAxis, xAxis }
+
 
 /// Paints a green reference line above the X-axis indicating the overview
 /// sparkline window (the candles the user saw before opening detail).

@@ -3,6 +3,7 @@ package social
 import (
 	"encoding/xml"
 	"fmt"
+	html "html"
 	"io"
 	"net/http"
 	"strings"
@@ -84,6 +85,12 @@ func parseRSS(accountID string, data []byte) ([]domain.Post, error) {
 		return nil, fmt.Errorf("rss parse: %w", err)
 	}
 
+	// Extract the handle from the accountID for retweet detection.
+	ownHandle := accountID
+	if idx := strings.Index(accountID, ":"); idx >= 0 {
+		ownHandle = accountID[idx+1:]
+	}
+
 	posts := make([]domain.Post, 0, len(doc.Channel.Items))
 	for _, item := range doc.Channel.Items {
 		ts := parseRSSDate(item.PubDate)
@@ -94,13 +101,23 @@ func parseRSS(accountID string, data []byte) ([]domain.Post, error) {
 				author = "@" + accountID[idx+1:]
 			}
 		}
+
+		// Unescape HTML entities (fixes mangled apostrophes, etc.).
+		title := html.UnescapeString(item.Title)
+
+		// Detect retweets: title starts with "RT @" or author differs from
+		// the owning account.
+		isRT := strings.HasPrefix(title, "RT @") ||
+			(author != "" && !strings.EqualFold(strings.TrimPrefix(author, "@"), ownHandle))
+
 		posts = append(posts, domain.Post{
 			ID:        item.GUID,
 			AccountID: accountID,
 			Author:    author,
-			Title:     item.Title,
+			Title:     title,
 			URL:       item.Link,
 			Timestamp: ts,
+			IsRetweet: isRT,
 		})
 	}
 	return posts, nil

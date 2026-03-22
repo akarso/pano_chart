@@ -180,3 +180,49 @@ func TestUnsubscribeHandler_Success(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestFeedHandler_FilterParams(t *testing.T) {
+	p := &stubProvider{
+		platform: "twitter",
+		posts: []domain.Post{
+			{ID: "p1", Author: "@alice", Title: "Original long post about bitcoin stuff", URL: "http://example.com/1", Timestamp: 1000, IsRetweet: false},
+			{ID: "p2", Author: "@bob", Title: "RT @bob: short", URL: "http://example.com/2", Timestamp: 999, IsRetweet: true},
+			{ID: "p3", Author: "@alice", Title: "Nice weather today in the city area around here", URL: "http://example.com/3", Timestamp: 998, IsRetweet: false},
+		},
+	}
+	svc := appsocial.NewService(
+		p,
+		infrasocial.NewMemoryAccountStore(),
+		infrasocial.NewMemorySubscriptionStore(),
+		appsocial.NewPostCache(60*time.Second),
+	)
+	handler := adhttp.NewSocialFeedHandler(svc)
+
+	// Filter: omit retweets, min_length=10, keywords=bitcoin
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/social/feed?handle=alice&omit_retweets=true&min_length=10&keywords=bitcoin", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Count int `json:"count"`
+		Posts []struct {
+			ID        string `json:"id"`
+			IsRetweet bool   `json:"is_retweet"`
+		} `json:"posts"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Count != 1 {
+		t.Fatalf("expected 1 filtered post, got %d", resp.Count)
+	}
+	if resp.Posts[0].ID != "p1" {
+		t.Fatalf("expected post p1, got %s", resp.Posts[0].ID)
+	}
+}
