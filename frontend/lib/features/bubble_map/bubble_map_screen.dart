@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/polling_config.dart';
 import '../../domain/symbol.dart';
@@ -75,6 +76,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
 
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
+  Pausable? _pausable;
 
   /// Bubble positions driven by physics (overrides packed positions while
   /// physics mode is active or frozen).
@@ -101,7 +103,28 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pausable == null) {
+      final mgr = AppLifecycleScope.of(context);
+      if (mgr != null) {
+        _pausable = Pausable(
+          onPause: () {
+            _autoRefreshTimer?.stop();
+          },
+          onResume: () {
+            _autoRefreshTimer?.start();
+          },
+        );
+        mgr.addPausable(_pausable!);
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    final mgr = AppLifecycleScope.of(context);
+    if (_pausable != null) mgr?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _stopPhysics();
     vm.onChanged = null;

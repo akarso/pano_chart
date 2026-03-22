@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/overview_banner.dart';
 import '../../core/polling_config.dart';
@@ -132,6 +133,9 @@ class OverviewWidgetState extends State<OverviewWidget>
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
+  // ---- lifecycle registration ----
+  Pausable? _pausable;
+
   PreferencesService? get _prefs => widget.prefs;
 
   /// Whether auto-refresh is enabled (pro tier).
@@ -224,7 +228,30 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pausable == null) {
+      final mgr = AppLifecycleScope.of(context);
+      if (mgr != null) {
+        _pausable = Pausable(
+          onPause: () {
+            _autoRefreshTimer?.stop();
+            _stalenessTracker.stop();
+          },
+          onResume: () {
+            _autoRefreshTimer?.start();
+            _stalenessTracker.start();
+          },
+        );
+        mgr.addPausable(_pausable!);
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    final mgr = AppLifecycleScope.of(context);
+    if (_pausable != null) mgr?.removePausable(_pausable!);
     vm.onChanged = null;
     _autoRefreshTimer?.dispose();
     _scrollController.removeListener(_onScroll);

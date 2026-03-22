@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/format_price.dart';
 import '../../core/polling_config.dart';
@@ -114,6 +115,9 @@ class _DetailScreenState extends State<DetailScreen> {
   // ---- macro events 15m refresh timer ----
   AutoRefreshTimer? _eventsRefreshTimer;
 
+  // ---- lifecycle registration ----
+  Pausable? _pausable;
+
   @override
   void initState() {
     super.initState();
@@ -133,7 +137,30 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pausable == null) {
+      final mgr = AppLifecycleScope.of(context);
+      if (mgr != null) {
+        _pausable = Pausable(
+          onPause: () {
+            _autoRefreshTimer?.stop();
+            _eventsRefreshTimer?.stop();
+          },
+          onResume: () {
+            _autoRefreshTimer?.start();
+            _eventsRefreshTimer?.start();
+          },
+        );
+        mgr.addPausable(_pausable!);
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    final mgr = AppLifecycleScope.of(context);
+    if (_pausable != null) mgr?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
     super.dispose();

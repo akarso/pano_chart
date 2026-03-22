@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import '../core/app_lifecycle_manager.dart';
 import '../core/config/config.dart';
 import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
@@ -18,6 +19,7 @@ Widget bootstrapApp({
   StablecoinConfig stablecoins = const StablecoinConfig({}),
   BillingManager? billingManager,
   SocialFeedViewModel? socialFeedViewModel,
+  AppLifecycleManager? lifecycleManager,
 }) {
   final root = CompositionRoot(
     apiBaseUrl: config.apiBaseUrl,
@@ -61,7 +63,11 @@ Widget bootstrapApp({
       socialFeedViewModel: socialVm,
     ),
   );
-  return component.createApp();
+  final app = component.createApp();
+  if (lifecycleManager != null) {
+    return AppLifecycleScope(manager: lifecycleManager, child: app);
+  }
+  return app;
 }
 
 void main() async {
@@ -96,11 +102,15 @@ void main() async {
   final socialFeedViewModel =
       socialRoot.createSocialFeedViewModel(userId: prefs.userId);
   socialFeedViewModel.attachPrefs(prefs);
+
+  final lifecycleManager = AppLifecycleManager()..init();
+
   runApp(bootstrapApp(
     config: config,
     prefs: prefs,
     stablecoins: stablecoins,
     billingManager: billingManager,
     socialFeedViewModel: socialFeedViewModel,
+    lifecycleManager: lifecycleManager,
   ));
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/app_lifecycle_manager.dart';
 import 'api/social_account_settings.dart';
 import 'api/social_models.dart';
 import 'social_feed_view_model.dart';
@@ -24,14 +25,13 @@ class SocialFeedScreen extends StatefulWidget {
   State<SocialFeedScreen> createState() => _SocialFeedScreenState();
 }
 
-class _SocialFeedScreenState extends State<SocialFeedScreen>
-    with WidgetsBindingObserver {
+class _SocialFeedScreenState extends State<SocialFeedScreen> {
   final _handleController = TextEditingController();
+  Pausable? _pausable;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     widget.viewModel.onChanged = () {
       if (mounted) setState(() {});
     };
@@ -41,22 +41,33 @@ class _SocialFeedScreenState extends State<SocialFeedScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pausable == null) {
+      final mgr = AppLifecycleScope.of(context);
+      if (mgr != null) {
+        _pausable = Pausable(
+          onPause: () {
+            widget.viewModel.stopPolling();
+          },
+          onResume: () {
+            widget.viewModel.startPolling();
+            widget.viewModel.refreshFeeds();
+          },
+        );
+        mgr.addPausable(_pausable!);
+      }
+    }
+  }
+
+  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    final mgr = AppLifecycleScope.of(context);
+    if (_pausable != null) mgr?.removePausable(_pausable!);
     widget.viewModel.stopPolling();
     widget.viewModel.onChanged = null;
     _handleController.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      widget.viewModel.stopPolling();
-    } else if (state == AppLifecycleState.resumed) {
-      widget.viewModel.startPolling();
-      widget.viewModel.refreshFeeds();
-    }
   }
 
   @override
