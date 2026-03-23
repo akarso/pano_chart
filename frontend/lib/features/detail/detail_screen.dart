@@ -699,10 +699,11 @@ class _DetailScreenState extends State<DetailScreen> {
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
                 ),
-            // Event overlay controls
-            if (widget.eventsViewModel != null) ...[
+            // Overlay controls (social feed + macro events)
+            if (widget.socialFeedViewModel != null ||
+                widget.eventsViewModel != null) ...[
               const SizedBox(height: 8),
-              _buildEventControls(),
+              _buildOverlayControls(),
             ],
             const SizedBox(height: 12),
             TradeActionButtons(
@@ -827,73 +828,101 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _buildEventControls() {
-    final evm = widget.eventsViewModel!;
+  Widget _buildOverlayControls() {
     return Row(
       children: [
-        // Show/Hide toggle
-        GestureDetector(
-          onTap: () => evm.toggleShowEvents(),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                evm.state.showEvents ? Icons.visibility : Icons.visibility_off,
-                size: 16,
-                color: evm.state.showEvents ? Colors.white70 : Colors.white30,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                'Events',
-                style: TextStyle(
-                  color: evm.state.showEvents ? Colors.white70 : Colors.white30,
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 16),
-        // Filter level chips
-        for (final level in EventFilterLevel.values) ...[
+        // Social feed toggle
+        if (widget.socialFeedViewModel != null) ...[
           GestureDetector(
-            onTap: () => evm.setFilterLevel(level),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: evm.state.filterLevel == level
-                    ? Colors.white.withAlpha(25)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: evm.state.filterLevel == level
-                      ? Colors.white38
-                      : Colors.white12,
-                  width: 0.5,
-                ),
-              ),
-              child: Text(
-                level.label,
-                style: TextStyle(
-                  color: evm.state.filterLevel == level
+            onTap: () {
+              setState(() {
+                widget.socialFeedViewModel!.showOnChart =
+                    !widget.socialFeedViewModel!.showOnChart;
+              });
+            },
+            child: Icon(
+              Icons.rss_feed,
+              size: 16,
+              color: widget.socialFeedViewModel!.showOnChart
+                  ? Colors.white70
+                  : Colors.white30,
+            ),
+          ),
+          const SizedBox(width: 12),
+        ],
+        // Macro events toggle + filter chips
+        if (widget.eventsViewModel != null) ...[
+          GestureDetector(
+            onTap: () => widget.eventsViewModel!.toggleShowEvents(),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.public,
+                  size: 16,
+                  color: widget.eventsViewModel!.state.showEvents
                       ? Colors.white70
                       : Colors.white30,
-                  fontSize: 10,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Events',
+                  style: TextStyle(
+                    color: widget.eventsViewModel!.state.showEvents
+                        ? Colors.white70
+                        : Colors.white30,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          // Filter level chips
+          for (final level in EventFilterLevel.values) ...[
+            GestureDetector(
+              onTap: () => widget.eventsViewModel!.setFilterLevel(level),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: widget.eventsViewModel!.state.filterLevel == level
+                      ? Colors.white.withAlpha(25)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color:
+                        widget.eventsViewModel!.state.filterLevel == level
+                            ? Colors.white38
+                            : Colors.white12,
+                    width: 0.5,
+                  ),
+                ),
+                child: Text(
+                  level.label,
+                  style: TextStyle(
+                    color:
+                        widget.eventsViewModel!.state.filterLevel == level
+                            ? Colors.white70
+                            : Colors.white30,
+                    fontSize: 10,
+                  ),
                 ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
+            const SizedBox(width: 6),
+          ],
         ],
         const Spacer(),
         // "View all" link to events list
-        GestureDetector(
-          onTap: () => _navigateToEventsList(''),
-          child: const Text(
-            'View all',
-            style: TextStyle(color: Colors.white38, fontSize: 10),
+        if (widget.eventsViewModel != null)
+          GestureDetector(
+            onTap: () => _navigateToEventsList(''),
+            child: const Text(
+              'View all',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
           ),
-        ),
       ],
     );
   }

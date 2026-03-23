@@ -34,4 +34,19 @@ type SubscriptionStore interface {
 
 	// HasSubscribers returns true if at least one user subscribes to accountID.
 	HasSubscribers(accountID string) (bool, error)
+
+	// UsersForAccount returns all user IDs subscribed to the given account.
+	UsersForAccount(accountID string) ([]string, error)
+}
+
+// DeviceTokenStore persists FCM device tokens keyed by user.
+type DeviceTokenStore interface {
+	// Register stores or updates a device's FCM token for a user.
+	Register(userID, deviceID, fcmToken, platform string) error
+
+	// Unregister removes a device token.
+	Unregister(deviceID string) error
+
+	// TokensForUsers returns all distinct FCM tokens for the given user IDs.
+	TokensForUsers(userIDs []string) ([]string, error)
 }

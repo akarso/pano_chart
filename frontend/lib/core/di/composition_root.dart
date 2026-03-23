@@ -28,7 +28,9 @@ import '../../features/news/news_view_model.dart';
 import '../../features/overview/get_rankings_impl.dart';
 import '../../features/overview/http_rankings_api.dart';
 import '../../features/overview/overview_view_model.dart';
+import '../../features/social/api/device_registration_api.dart';
 import '../../features/social/api/social_api.dart';
+import '../../features/social/infrastructure/http_device_registration_api.dart';
 import '../../features/social/infrastructure/http_social_api.dart';
 import '../../features/social/social_feed_view_model.dart';
 
@@ -146,6 +148,11 @@ class CompositionRoot {
   /// Creates a wired [SocialApi].
   SocialApi createSocialApi() {
     return HttpSocialApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [DeviceRegistrationApi].
+  DeviceRegistrationApi createDeviceRegistrationApi() {
+    return HttpDeviceRegistrationApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired [SocialFeedViewModel].

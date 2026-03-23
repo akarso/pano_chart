@@ -55,3 +55,15 @@ func (s *MemorySubscriptionStore) HasSubscribers(accountID string) (bool, error)
 	}
 	return false, nil
 }
+
+func (s *MemorySubscriptionStore) UsersForAccount(accountID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var users []string
+	for userID, accs := range s.subs {
+		if accs[accountID] {
+			users = append(users, userID)
+		}
+	}
+	return users, nil
+}

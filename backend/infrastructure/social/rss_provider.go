@@ -6,11 +6,14 @@ import (
 	html "html"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
 	domain "pano_chart/backend/domain/social"
 )
+
+var htmlTagRe = regexp.MustCompile(`<[^>]*>`)
 
 // ── RSS XML structures ──────────────────────────────────────────────────────
 
@@ -102,8 +105,9 @@ func parseRSS(accountID string, data []byte) ([]domain.Post, error) {
 			}
 		}
 
-		// Unescape HTML entities (fixes mangled apostrophes, etc.).
-		title := html.UnescapeString(item.Title)
+		// Strip HTML tags and unescape entities so Title is plain text.
+		title := html.UnescapeString(htmlTagRe.ReplaceAllString(item.Title, ""))
+		title = strings.TrimSpace(title)
 
 		// Detect retweets: title starts with "RT @" or author differs from
 		// the owning account.

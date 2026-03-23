@@ -7,6 +7,8 @@
       "name": "pano_chart_frontend",
       "version": "0.0.0",
       "dependencies": [
+        "firebase_core",
+        "firebase_messaging",
         "flutter",
         "flutter_svg",
         "http",
@@ -68,6 +70,28 @@
         "test_api",
         "vector_math",
         "vm_service"
+      ]
+    },
+    {
+      "name": "firebase_messaging",
+      "version": "16.1.2",
+      "dependencies": [
+        "firebase_core",
+        "firebase_core_platform_interface",
+        "firebase_messaging_platform_interface",
+        "firebase_messaging_web",
+        "flutter",
+        "meta"
+      ]
+    },
+    {
+      "name": "firebase_core",
+      "version": "4.5.0",
+      "dependencies": [
+        "firebase_core_platform_interface",
+        "firebase_core_web",
+        "flutter",
+        "meta"
       ]
     },
     {
@@ -358,6 +382,53 @@
       ]
     },
     {
+      "name": "firebase_messaging_web",
+      "version": "4.1.3",
+      "dependencies": [
+        "_flutterfire_internals",
+        "firebase_core",
+        "firebase_core_web",
+        "firebase_messaging_platform_interface",
+        "flutter",
+        "flutter_web_plugins",
+        "meta",
+        "web"
+      ]
+    },
+    {
+      "name": "firebase_messaging_platform_interface",
+      "version": "4.7.7",
+      "dependencies": [
+        "_flutterfire_internals",
+        "firebase_core",
+        "flutter",
+        "meta",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "firebase_core_platform_interface",
+      "version": "6.0.2",
+      "dependencies": [
+        "collection",
+        "flutter",
+        "flutter_test",
+        "meta",
+        "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "firebase_core_web",
+      "version": "3.5.0",
+      "dependencies": [
+        "firebase_core_platform_interface",
+        "flutter",
+        "flutter_web_plugins",
+        "meta",
+        "web"
+      ]
+    },
+    {
       "name": "in_app_purchase_storekit",
       "version": "0.4.4",
       "dependencies": [
@@ -580,16 +651,27 @@
       ]
     },
     {
+      "name": "web",
+      "version": "1.1.1",
+      "dependencies": []
+    },
+    {
+      "name": "_flutterfire_internals",
+      "version": "1.3.67",
+      "dependencies": [
+        "collection",
+        "firebase_core",
+        "firebase_core_platform_interface",
+        "flutter",
+        "meta"
+      ]
+    },
+    {
       "name": "plugin_platform_interface",
       "version": "2.1.8",
       "dependencies": [
         "meta"
       ]
-    },
-    {
-      "name": "web",
-      "version": "1.1.1",
-      "dependencies": []
     },
     {
       "name": "logging",

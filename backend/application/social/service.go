@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	domain "pano_chart/backend/domain/social"
 )
@@ -120,7 +121,7 @@ func applyFilter(posts []domain.Post, f FeedFilter) []domain.Post {
 		if f.OmitRetweets && p.IsRetweet {
 			continue
 		}
-		if f.MinLength > 0 && len(p.Title) < f.MinLength {
+		if f.MinLength > 0 && utf8.RuneCountInString(p.Title) < f.MinLength {
 			continue
 		}
 		if len(f.Keywords) > 0 && !matchesAnyKeyword(p.Title, f.Keywords) {

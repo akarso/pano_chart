@@ -106,8 +106,16 @@ class SocialFeedViewModel {
 
   void updateSettings(String handle, SocialAccountSettings settings) {
     _prefs?.setAccountSettings(handle, settings);
+    // Drop cached posts for this handle so stale unfiltered data
+    // does not survive the history merge in _loadFeeds.
+    _state = _state.copyWith(
+      posts: _state.posts.where((p) {
+        final h =
+            p.accountId.contains(':') ? p.accountId.split(':').last : p.accountId;
+        return h != handle;
+      }).toList(),
+    );
     onChanged?.call();
-    // Re-fetch with new filters.
     refreshFeeds();
   }
 

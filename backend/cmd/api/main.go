@@ -449,6 +449,34 @@ func main() {
 	go socialWatcher.Run(socialCtx)
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
+	// --- Push notifications (FCM) ---
+	deviceDBPath := os.Getenv("DEVICE_DB_PATH")
+	if deviceDBPath == "" {
+		deviceDBPath = "./device_tokens.sqlite"
+	}
+	deviceStore, err := infrasocial.NewSQLiteDeviceStore(deviceDBPath)
+	if err != nil {
+		log.Fatalf("[main] device token store: %v", err)
+	}
+	defer func() { _ = deviceStore.Close() }()
+
+	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	fcmProjectID := os.Getenv("FCM_PROJECT_ID")
+	if fcmCredsPath != "" {
+		fcmNotifier, err := infrasocial.NewFCMNotifier(fcmCredsPath, fcmProjectID)
+		if err != nil {
+			log.Printf("[main] FCM notifier init failed (push disabled): %v", err)
+		} else {
+			pushConsumer := appsocial.NewPushConsumer(
+				socialDispatcher.Events(), socialSubStore, deviceStore, fcmNotifier,
+			)
+			go pushConsumer.Run(socialCtx)
+			log.Println("[main] Push notification consumer started")
+		}
+	} else {
+		log.Println("[main] GOOGLE_APPLICATION_CREDENTIALS not set — push notifications disabled")
+	}
+
 	// --- Handlers ---
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -493,6 +521,11 @@ func main() {
 	mux.Handle("/api/social/feed", adhttp.NewSocialFeedHandler(socialService))
 	mux.Handle("/api/social/accounts", adhttp.NewSocialAccountsHandler(socialService))
 	log.Println("[main] /api/social/* endpoints registered")
+
+	// Device registration endpoints (push notifications)
+	mux.Handle("/api/device/register", adhttp.NewDeviceRegisterHandler(deviceStore))
+	mux.Handle("/api/device/unregister", adhttp.NewDeviceUnregisterHandler(deviceStore))
+	log.Println("[main] /api/device/* endpoints registered")
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},

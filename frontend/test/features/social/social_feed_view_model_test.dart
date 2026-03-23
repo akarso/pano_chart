@@ -562,5 +562,90 @@ void main() {
 
       expect(vm.state.posts[0].isRetweet, isTrue);
     });
+
+    test('updateSettings drops cached posts for affected handle before refresh',
+        () async {
+      final ts = _recentTs(1);
+      final fake = _FakeSocialApi()
+        ..accountsResult = const SocialAccountsResponse(
+          userId: 'u1',
+          count: 2,
+          accounts: ['twitter:alice', 'twitter:bob'],
+        )
+        ..feedResults['alice'] = SocialFeedResponse(
+          handle: 'alice',
+          count: 2,
+          posts: [
+            SocialPost(
+              id: 'a1',
+              accountId: 'twitter:alice',
+              author: 'alice',
+              title: 'Short',
+              url: 'https://x.com/a1',
+              timestamp: ts,
+            ),
+            SocialPost(
+              id: 'a2',
+              accountId: 'twitter:alice',
+              author: 'alice',
+              title: 'A longer post that passes the filter',
+              url: 'https://x.com/a2',
+              timestamp: ts,
+            ),
+          ],
+        )
+        ..feedResults['bob'] = SocialFeedResponse(
+          handle: 'bob',
+          count: 1,
+          posts: [
+            SocialPost(
+              id: 'b1',
+              accountId: 'twitter:bob',
+              author: 'bob',
+              title: 'Bob post',
+              url: 'https://x.com/b1',
+              timestamp: ts,
+            ),
+          ],
+        );
+
+      final vm = SocialFeedViewModel(fake, userId: 'u1');
+      await vm.loadSubscriptions();
+
+      // All 3 posts loaded initially.
+      expect(vm.state.posts.length, 3);
+
+      // Now the backend will return only the longer alice post (simulating
+      // server-side minLength filtering).
+      fake.feedResults['alice'] = SocialFeedResponse(
+        handle: 'alice',
+        count: 1,
+        posts: [
+          SocialPost(
+            id: 'a2',
+            accountId: 'twitter:alice',
+            author: 'alice',
+            title: 'A longer post that passes the filter',
+            url: 'https://x.com/a2',
+            timestamp: ts,
+          ),
+        ],
+      );
+
+      // Apply settings — should drop alice's cached posts then refresh.
+      vm.updateSettings(
+        'alice',
+        const SocialAccountSettings(minLength: 20),
+      );
+
+      // Let the async refreshFeeds complete.
+      await Future<void>.delayed(Duration.zero);
+
+      // 'a1' (short) should be gone; 'a2' + 'b1' remain.
+      final ids = vm.state.posts.map((p) => p.id).toSet();
+      expect(ids, containsAll(['a2', 'b1']));
+      expect(ids.contains('a1'), isFalse,
+          reason: 'stale unfiltered post should not survive settings change');
+    });
   });
 }

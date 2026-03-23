@@ -164,6 +164,57 @@ func TestRSSProvider_UnescapesHTMLEntities(t *testing.T) {
 	}
 }
 
+const htmlTagRSS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>leon / @leon</title>
+    <item>
+      <title>&lt;p&gt;true&lt;/p&gt;&lt;span class=&quot;reply&quot;&gt;in reply to @someone&lt;/span&gt;</title>
+      <dc:creator>@leon</dc:creator>
+      <link>https://example.com/1</link>
+      <guid>guid-html1</guid>
+      <pubDate>Mon, 01 Jan 2024 12:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Clean text without any markup at all</title>
+      <dc:creator>@leon</dc:creator>
+      <link>https://example.com/2</link>
+      <guid>guid-html2</guid>
+      <pubDate>Mon, 01 Jan 2024 11:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`
+
+func TestRSSProvider_StripsHTMLTagsFromTitle(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, htmlTagRSS)
+	}))
+	defer srv.Close()
+
+	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
+	acc := domain.Account{ID: "twitter:leon", Platform: "twitter", Handle: "leon"}
+
+	posts, err := provider.Fetch(acc)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+
+	if len(posts) != 2 {
+		t.Fatalf("expected 2 posts, got %d", len(posts))
+	}
+
+	// HTML tags should be stripped; only plain text remains.
+	expected := "truein reply to @someone"
+	if posts[0].Title != expected {
+		t.Errorf("expected title %q, got %q", expected, posts[0].Title)
+	}
+
+	// Clean title should be unchanged.
+	if posts[1].Title != "Clean text without any markup at all" {
+		t.Errorf("unexpected title: %q", posts[1].Title)
+	}
+}
+
 func TestRSSProvider_DetectsRetweets(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, htmlEntityRSS)
