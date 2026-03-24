@@ -92,8 +92,26 @@ func main() {
 	result := vol.Aggregate(candles)
 	fmt.Printf("Produced %d non-empty minute buckets.\n", len(result.Buckets))
 
+	// --- Derive multi-timeframe ---
+	fmt.Println("Deriving multi-timeframe buckets...")
+	intraday := vol.BuildAllTimeframes(result.Buckets)
+	for _, tf := range intraday {
+		fmt.Printf("  %s: %d buckets\n", tf.Timeframe, len(tf.Buckets))
+	}
+
+	// --- Weekly seasonality ---
+	fmt.Println("Computing weekly seasonality...")
+	const atrPeriod = 14
+	atr := vol.ComputeATR(candles, atrPeriod)
+	weekly := vol.BuildWeekly(candles[atrPeriod:], atr[atrPeriod:])
+	fmt.Printf("Weekly buckets: %d\n", len(weekly.Buckets))
+
 	// --- Save JSON ---
-	if err := vol.SaveToFile(result, outFile); err != nil {
+	full := vol.FullResult{
+		Intraday: intraday,
+		Weekly:   weekly,
+	}
+	if err := vol.SaveFullResult(full, outFile); err != nil {
 		fmt.Fprintf(os.Stderr, "save: %v\n", err)
 		os.Exit(1)
 	}

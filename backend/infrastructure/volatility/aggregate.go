@@ -16,7 +16,7 @@ func Aggregate(candles []Candle) Result {
 	}
 
 	const atrPeriod = 14
-	atr := computeATR(candles, atrPeriod)
+	atr := ComputeATR(candles, atrPeriod)
 
 	for i := atrPeriod; i < len(candles); i++ {
 		c := candles[i]
@@ -70,9 +70,9 @@ func Aggregate(candles []Candle) Result {
 	return Result{Buckets: results}
 }
 
-// computeATR returns the exponential ATR value for each candle.
+// ComputeATR returns the exponential ATR value for each candle.
 // The first candle has ATR 0 (no previous close).
-func computeATR(candles []Candle, period int) []float64 {
+func ComputeATR(candles []Candle, period int) []float64 {
 	n := len(candles)
 	atr := make([]float64, n)
 

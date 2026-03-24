@@ -29,3 +29,40 @@ type BucketResult struct {
 	SpikeProb   float64 `json:"spike_prob"`
 	Normalized  float64 `json:"normalized"`
 }
+
+// Timeframe identifies a candle aggregation interval.
+type Timeframe string
+
+const (
+	TF1m  Timeframe = "1m"
+	TF5m  Timeframe = "5m"
+	TF15m Timeframe = "15m"
+	TF1h  Timeframe = "1h"
+	TF4h  Timeframe = "4h"
+	TF1d  Timeframe = "1d"
+)
+
+// TimeframeResult holds volatility buckets for a single timeframe.
+type TimeframeResult struct {
+	Timeframe Timeframe      `json:"timeframe"`
+	Buckets   []BucketResult `json:"buckets"`
+}
+
+// WeeklyResult holds 7-day seasonality buckets.
+type WeeklyResult struct {
+	Buckets []WeeklyBucket `json:"buckets"`
+}
+
+// WeeklyBucket is a single minute-of-week volatility entry.
+type WeeklyBucket struct {
+	MinuteOfWeek int     `json:"minute"`
+	AvgMove      float64 `json:"avg_move"`
+	SpikeProb    float64 `json:"spike_prob"`
+	Normalized   float64 `json:"normalized"`
+}
+
+// FullResult is the combined output for all timeframes plus weekly.
+type FullResult struct {
+	Intraday []TimeframeResult `json:"intraday"`
+	Weekly   WeeklyResult      `json:"weekly"`
+}

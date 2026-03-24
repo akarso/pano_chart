@@ -129,6 +129,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadExchangePreference();
     _loadExchangeConfigs();
     _loadEvents();
+    _wireSocialFeedCallback();
     _loadSetupData();
     _loadFragilityData();
     _loadBehaviorData();
@@ -163,6 +164,7 @@ class _DetailScreenState extends State<DetailScreen> {
     if (_pausable != null) mgr?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
+    widget.socialFeedViewModel?.onChanged = null;
     super.dispose();
   }
 
@@ -307,6 +309,14 @@ class _DetailScreenState extends State<DetailScreen> {
     if (result != null) {
       _saveCustomExchange(result);
     }
+  }
+
+  void _wireSocialFeedCallback() {
+    final svm = widget.socialFeedViewModel;
+    if (svm == null) return;
+    svm.onChanged = () {
+      if (mounted) setState(() {});
+    };
   }
 
   void _loadEvents() {
@@ -834,18 +844,26 @@ class _DetailScreenState extends State<DetailScreen> {
         // Social feed toggle
         if (widget.socialFeedViewModel != null) ...[
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () {
-              setState(() {
-                widget.socialFeedViewModel!.showOnChart =
-                    !widget.socialFeedViewModel!.showOnChart;
-              });
+              widget.socialFeedViewModel!.showOnChart =
+                  !widget.socialFeedViewModel!.showOnChart;
             },
-            child: Icon(
-              Icons.rss_feed,
-              size: 16,
-              color: widget.socialFeedViewModel!.showOnChart
-                  ? Colors.white70
-                  : Colors.white30,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.rss_feed,
+                    size: 16,
+                    color: widget.socialFeedViewModel!.showOnChart
+                        ? Colors.white70
+                        : Colors.white30,
+                  ),
+                  const SizedBox(width: 4),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -853,28 +871,32 @@ class _DetailScreenState extends State<DetailScreen> {
         // Macro events toggle + filter chips
         if (widget.eventsViewModel != null) ...[
           GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () => widget.eventsViewModel!.toggleShowEvents(),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.public,
-                  size: 16,
-                  color: widget.eventsViewModel!.state.showEvents
-                      ? Colors.white70
-                      : Colors.white30,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Events',
-                  style: TextStyle(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.public,
+                    size: 16,
                     color: widget.eventsViewModel!.state.showEvents
                         ? Colors.white70
                         : Colors.white30,
-                    fontSize: 11,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  Text(
+                    'Events',
+                    style: TextStyle(
+                      color: widget.eventsViewModel!.state.showEvents
+                          ? Colors.white70
+                          : Colors.white30,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           const SizedBox(width: 16),

@@ -226,3 +226,199 @@ func TestSaveToFile_WritesValidJSON(t *testing.T) {
 	assert.Len(t, loaded.Buckets, 2)
 	assert.InDelta(t, 0.42, loaded.Buckets[0].AvgMove, 0.001)
 }
+
+// ── DeriveTimeframe tests ──
+
+func TestDeriveTimeframe_EmptyBase(t *testing.T) {
+	r := vol.DeriveTimeframe(nil, 5, vol.TF5m)
+	assert.Equal(t, vol.TF5m, r.Timeframe)
+	assert.Empty(t, r.Buckets)
+}
+
+func TestDeriveTimeframe_GroupsCorrectly(t *testing.T) {
+	base := make([]vol.BucketResult, 10)
+	for i := range base {
+		base[i] = vol.BucketResult{
+			MinuteOfDay: i,
+			AvgMove:     float64(i + 1),
+			SpikeProb:   0.1,
+			Normalized:  1.0,
+		}
+	}
+	r := vol.DeriveTimeframe(base, 5, vol.TF5m)
+	assert.Len(t, r.Buckets, 2)
+	// First group: minutes 0-4, avg of 1,2,3,4,5 = 3.0
+	assert.InDelta(t, 3.0, r.Buckets[0].AvgMove, 0.001)
+	assert.Equal(t, 0, r.Buckets[0].MinuteOfDay)
+	// Second group: minutes 5-9, avg of 6,7,8,9,10 = 8.0
+	assert.InDelta(t, 8.0, r.Buckets[1].AvgMove, 0.001)
+	assert.Equal(t, 5, r.Buckets[1].MinuteOfDay)
+}
+
+func TestDeriveTimeframe_PartialLastGroup(t *testing.T) {
+	base := make([]vol.BucketResult, 7)
+	for i := range base {
+		base[i] = vol.BucketResult{
+			MinuteOfDay: i,
+			AvgMove:     1.0,
+			SpikeProb:   0.0,
+			Normalized:  1.0,
+		}
+	}
+	r := vol.DeriveTimeframe(base, 5, vol.TF5m)
+	// 5 + 2 → 2 groups
+	assert.Len(t, r.Buckets, 2)
+	// Partial group still averages correctly
+	assert.InDelta(t, 1.0, r.Buckets[1].AvgMove, 0.001)
+}
+
+func TestBuildAllTimeframes_ProducesSixTimeframes(t *testing.T) {
+	base := make([]vol.BucketResult, 1440)
+	for i := range base {
+		base[i] = vol.BucketResult{
+			MinuteOfDay: i,
+			AvgMove:     0.5,
+			SpikeProb:   0.05,
+			Normalized:  1.0,
+		}
+	}
+	tfs := vol.BuildAllTimeframes(base)
+	assert.Len(t, tfs, 6)
+	assert.Equal(t, vol.TF1m, tfs[0].Timeframe)
+	assert.Len(t, tfs[0].Buckets, 1440) // 1m: pass-through
+	assert.Len(t, tfs[1].Buckets, 288)  // 5m
+	assert.Len(t, tfs[2].Buckets, 96)   // 15m
+	assert.Len(t, tfs[3].Buckets, 24)   // 1h
+	assert.Len(t, tfs[4].Buckets, 6)    // 4h
+	assert.Len(t, tfs[5].Buckets, 1)    // 1d
+}
+
+// ── Weekly tests ──
+
+func TestBuildWeekly_EmptyInput(t *testing.T) {
+	r := vol.BuildWeekly(nil, nil)
+	assert.Empty(t, r.Buckets)
+}
+
+func TestBuildWeekly_ProducesBucketsPerDayOfWeek(t *testing.T) {
+	// Generate 7 days of candles (1 per minute) starting on a known weekday.
+	// 2023-11-13 is a Monday (Weekday()==1).
+	base := int64(1699833600000) // 2023-11-13 00:00:00 UTC
+	n := 7 * 1440
+	candles := make([]vol.Candle, n)
+	for i := range candles {
+		candles[i] = vol.Candle{
+			OpenTime: base + int64(i)*60_000,
+			Open:     100,
+			High:     101,
+			Low:      99,
+			Close:    100.5,
+		}
+	}
+	atr := vol.ComputeATR(candles, 14)
+	// Skip warmup period for both candles and atr.
+	r := vol.BuildWeekly(candles[14:], atr[14:])
+	assert.NotEmpty(t, r.Buckets)
+
+	// Check that we have entries spanning multiple days of week.
+	days := map[int]bool{}
+	for _, b := range r.Buckets {
+		days[b.MinuteOfWeek/1440] = true
+		assert.Greater(t, b.AvgMove, 0.0)
+		assert.GreaterOrEqual(t, b.SpikeProb, 0.0)
+		assert.Greater(t, b.Normalized, 0.0)
+	}
+	assert.GreaterOrEqual(t, len(days), 6, "should cover at least 6 days of week")
+}
+
+func TestBuildWeekly_SortedByMinuteOfWeek(t *testing.T) {
+	base := int64(1699833600000)
+	n := 2 * 1440
+	candles := make([]vol.Candle, n)
+	for i := range candles {
+		candles[i] = vol.Candle{
+			OpenTime: base + int64(i)*60_000,
+			Open:     100,
+			High:     101,
+			Low:      99,
+			Close:    100.5,
+		}
+	}
+	atr := vol.ComputeATR(candles, 14)
+	r := vol.BuildWeekly(candles[14:], atr[14:])
+	for i := 1; i < len(r.Buckets); i++ {
+		assert.LessOrEqual(t, r.Buckets[i-1].MinuteOfWeek, r.Buckets[i].MinuteOfWeek)
+	}
+}
+
+func TestBuildWeekly_NormalizedAveragesCloseToOne(t *testing.T) {
+	base := int64(1699833600000)
+	n := 3 * 1440
+	candles := make([]vol.Candle, n)
+	for i := range candles {
+		candles[i] = vol.Candle{
+			OpenTime: base + int64(i)*60_000,
+			Open:     100,
+			High:     101,
+			Low:      99,
+			Close:    100.5,
+		}
+	}
+	atr := vol.ComputeATR(candles, 14)
+	r := vol.BuildWeekly(candles[14:], atr[14:])
+	require.NotEmpty(t, r.Buckets)
+	var sum float64
+	for _, b := range r.Buckets {
+		sum += b.Normalized
+	}
+	avg := sum / float64(len(r.Buckets))
+	assert.InDelta(t, 1.0, avg, 0.01)
+}
+
+// ── SaveFullResult test ──
+
+func TestSaveFullResult_WritesValidJSON(t *testing.T) {
+	full := vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{
+				{MinuteOfDay: 0, AvgMove: 0.5, SpikeProb: 0.1, Normalized: 1.0},
+			}},
+		},
+		Weekly: vol.WeeklyResult{
+			Buckets: []vol.WeeklyBucket{
+				{MinuteOfWeek: 0, AvgMove: 0.6, SpikeProb: 0.05, Normalized: 0.9},
+			},
+		},
+	}
+	path := t.TempDir() + "/full_output.json"
+	require.NoError(t, vol.SaveFullResult(full, path))
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var loaded vol.FullResult
+	require.NoError(t, json.Unmarshal(data, &loaded))
+	assert.Len(t, loaded.Intraday, 1)
+	assert.Equal(t, vol.TF1m, loaded.Intraday[0].Timeframe)
+	assert.Len(t, loaded.Weekly.Buckets, 1)
+	assert.InDelta(t, 0.6, loaded.Weekly.Buckets[0].AvgMove, 0.001)
+}
+
+// ── ComputeATR export test ──
+
+func TestComputeATR_Exported(t *testing.T) {
+	candles := make([]vol.Candle, 20)
+	for i := range candles {
+		candles[i] = vol.Candle{
+			OpenTime: int64(i) * 60_000,
+			Open:     100,
+			High:     101,
+			Low:      99,
+			Close:    100,
+		}
+	}
+	atr := vol.ComputeATR(candles, 14)
+	assert.Len(t, atr, 20)
+	assert.Equal(t, 0.0, atr[0])
+	assert.Greater(t, atr[19], 0.0)
+}
