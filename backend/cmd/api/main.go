@@ -527,6 +527,14 @@ func main() {
 	mux.Handle("/api/device/unregister", adhttp.NewDeviceUnregisterHandler(deviceStore))
 	log.Println("[main] /api/device/* endpoints registered")
 
+	// Volatility profile endpoint
+	volPath := os.Getenv("VOL_OUTPUT")
+	if volPath == "" {
+		volPath = "volatility_1m.json"
+	}
+	mux.Handle("/api/volatility", adhttp.NewVolatilityHandler(volPath))
+	log.Println("[main] /api/volatility endpoint registered")
+
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},

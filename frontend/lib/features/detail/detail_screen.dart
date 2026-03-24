@@ -29,6 +29,7 @@ import 'trade/trade_action_buttons.dart';
 import '../volatility/volatility_alignment.dart';
 import '../volatility/volatility_model.dart';
 import '../volatility/volatility_widget.dart';
+import '../volatility/http_volatility_api.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -62,8 +63,8 @@ class DetailScreen extends StatefulWidget {
   /// Whether the user has pro access (enables auto-refresh).
   final bool isProUser;
 
-  /// Optional intraday volatility profile (1440 minute-of-day buckets).
-  final List<VolatilityBucket>? volatilityData;
+  /// API for fetching intraday volatility profiles.
+  final VolatilityApi? volatilityApi;
 
   const DetailScreen({
     Key? key,
@@ -81,7 +82,7 @@ class DetailScreen extends StatefulWidget {
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
     this.isProUser = false,
-    this.volatilityData,
+    this.volatilityApi,
   }) : super(key: key);
 
   @override
@@ -116,6 +117,10 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _isLoadingBehavior = false;
   bool _behaviorFetched = false;
 
+  // ---- volatility state ----
+  List<VolatilityBucket>? _volatilityData;
+  bool _volatilityFetched = false;
+
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
@@ -140,6 +145,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadSetupData();
     _loadFragilityData();
     _loadBehaviorData();
+    _loadVolatilityData();
     _startAutoRefresh();
     _startEventsRefreshTimer();
   }
@@ -423,6 +429,21 @@ class _DetailScreenState extends State<DetailScreen> {
           _behaviorFetched = true;
         });
       }
+    }
+  }
+
+  Future<void> _loadVolatilityData() async {
+    final api = widget.volatilityApi;
+    if (api == null || _volatilityFetched) return;
+    try {
+      final data = await api.fetch();
+      if (!mounted) return;
+      setState(() {
+        _volatilityData = data;
+        _volatilityFetched = true;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _volatilityFetched = true);
     }
   }
 
@@ -718,13 +739,13 @@ class _DetailScreenState extends State<DetailScreen> {
                 ),
             // Intraday activity profile
             if (_chartConfig.showVolatility &&
-                widget.volatilityData != null &&
-                widget.volatilityData!.isNotEmpty) ...[
+                _volatilityData != null &&
+                _volatilityData!.isNotEmpty) ...[
               const SizedBox(height: 4),
               VolatilityWidget(
                 bars: alignBucketsToCandles(
                   candles: _series.candles,
-                  bucketsByMinute: buildBucketLookup(widget.volatilityData!),
+                  bucketsByMinute: buildBucketLookup(_volatilityData!),
                 ),
               ),
             ],

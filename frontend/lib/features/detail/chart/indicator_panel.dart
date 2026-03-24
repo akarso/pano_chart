@@ -48,7 +48,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
       constraints: BoxConstraints(maxHeight: maxH),
       child: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -56,7 +56,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
             Container(
               width: 36,
               height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
+              margin: const EdgeInsets.only(bottom: 10),
               decoration: BoxDecoration(
                 color: Colors.white24,
                 borderRadius: BorderRadius.circular(2),
@@ -74,7 +74,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
                 ),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
 
             // ── EMA Fast ──
             _IndicatorRow(
@@ -124,9 +124,9 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
               onPeriod: (v) => _update(_cfg.copyWith(atrPeriod: v)),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             const Divider(color: Colors.white12, height: 1),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
 
             // ── Behavioral Indicators section ──
             Row(
@@ -153,7 +153,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 4),
 
             // ── Greed ──
             _IndicatorRow(
@@ -203,9 +203,9 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
               onPeriod: (v) => _update(_cfg.copyWith(behaviorWindow: v)),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
             const Divider(color: Colors.white12, height: 1),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
 
             // ── Intraday Activity ──
             _IndicatorRow(
@@ -219,7 +219,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
               onPeriod: (_) {},
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 10),
 
             SizedBox(
               width: double.infinity,
@@ -267,7 +267,7 @@ class _IndicatorRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           // Toggle

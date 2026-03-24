@@ -39,6 +39,7 @@ Widget bootstrapApp({
   final setupApi = root.createSetupApi();
   final fragilityApi = root.createFragilityApi();
   final behaviorApi = root.createBehaviorApi();
+  final volatilityApi = root.createVolatilityApi();
   final socialVm = socialFeedViewModel;
   final component = AppComponent(
     config,
@@ -60,6 +61,7 @@ Widget bootstrapApp({
       setupApi: setupApi,
       fragilityApi: fragilityApi,
       behaviorApi: behaviorApi,
+      volatilityApi: volatilityApi,
       socialFeedViewModel: socialVm,
     ),
   );

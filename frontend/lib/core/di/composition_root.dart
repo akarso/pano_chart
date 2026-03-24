@@ -21,6 +21,7 @@ import '../../features/market_state/http_transition_api.dart';
 import '../../features/detail/http_fragility_api.dart';
 import '../../features/detail/http_behavior_api.dart';
 import '../../features/detail/http_setup_api.dart';
+import '../../features/volatility/http_volatility_api.dart';
 import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
@@ -143,6 +144,11 @@ class CompositionRoot {
   /// Creates a wired [BehaviorApi] for fetching retail behavior scores.
   BehaviorApi createBehaviorApi() {
     return HttpBehaviorApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [VolatilityApi] for fetching intraday activity profiles.
+  VolatilityApi createVolatilityApi() {
+    return HttpVolatilityApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired [SocialApi].

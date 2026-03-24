@@ -38,6 +38,7 @@ import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
 import '../detail/http_setup_api.dart';
+import '../volatility/http_volatility_api.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 
@@ -63,6 +64,7 @@ class OverviewWidget extends StatefulWidget {
   final SetupApi? setupApi;
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
+  final VolatilityApi? volatilityApi;
   final SocialFeedViewModel? socialFeedViewModel;
 
   const OverviewWidget({
@@ -84,6 +86,7 @@ class OverviewWidget extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.volatilityApi,
     this.socialFeedViewModel,
   }) : super(key: key);
 
@@ -505,6 +508,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             setupApi: widget.setupApi,
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
+            volatilityApi: widget.volatilityApi,
             isProUser: _isProUser,
             detailContext: DetailContext(
               rank: rank,
@@ -1017,6 +1021,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     setupApi: widget.setupApi,
                     fragilityApi: widget.fragilityApi,
                     behaviorApi: widget.behaviorApi,
+                    volatilityApi: widget.volatilityApi,
                     isProUser: _isProUser,
                   ),
                 ),
