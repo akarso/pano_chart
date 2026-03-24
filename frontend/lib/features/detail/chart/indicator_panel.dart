@@ -204,6 +204,22 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
             ),
 
             const SizedBox(height: 16),
+            const Divider(color: Colors.white12, height: 1),
+            const SizedBox(height: 12),
+
+            // ── Intraday Activity ──
+            _IndicatorRow(
+              label: 'Activity',
+              color: const Color(0xFF66BB6A),
+              enabled: _cfg.showVolatility,
+              period: 0,
+              minPeriod: 0,
+              maxPeriod: 0,
+              onToggle: (v) => _update(_cfg.copyWith(showVolatility: v)),
+              onPeriod: (_) {},
+            ),
+
+            const SizedBox(height: 16),
 
             SizedBox(
               width: double.infinity,
@@ -282,33 +298,36 @@ class _IndicatorRow extends StatelessWidget {
               ),
             ),
           ),
-          // Period slider
-          Expanded(
-            child: Slider(
-              value: period.toDouble(),
-              min: minPeriod.toDouble(),
-              max: maxPeriod.toDouble(),
-              divisions: maxPeriod - minPeriod,
-              label: '$period',
-              activeColor: color.withOpacity(enabled ? 1.0 : 0.3),
-              inactiveColor: Colors.white12,
-              onChanged: enabled
-                  ? (v) => onPeriod(v.round())
-                  : null,
-            ),
-          ),
-          // Period value
-          SizedBox(
-            width: 28,
-            child: Text(
-              '$period',
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: enabled ? Colors.white70 : Colors.white24,
-                fontSize: 12,
+          // Period slider (hidden when min == max, e.g. Activity row)
+          if (maxPeriod > minPeriod) ...[
+            Expanded(
+              child: Slider(
+                value: period.toDouble(),
+                min: minPeriod.toDouble(),
+                max: maxPeriod.toDouble(),
+                divisions: maxPeriod - minPeriod,
+                label: '$period',
+                activeColor: color.withOpacity(enabled ? 1.0 : 0.3),
+                inactiveColor: Colors.white12,
+                onChanged: enabled
+                    ? (v) => onPeriod(v.round())
+                    : null,
               ),
             ),
-          ),
+            // Period value
+            SizedBox(
+              width: 28,
+              child: Text(
+                '$period',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: enabled ? Colors.white70 : Colors.white24,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+          if (maxPeriod <= minPeriod) const Spacer(),
         ],
       ),
     );

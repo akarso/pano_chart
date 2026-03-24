@@ -23,6 +23,9 @@ class ChartIndicatorConfig {
   final bool showPanic;
   final int behaviorWindow;
 
+  // ── Volatility overlay ──
+  final bool showVolatility;
+
   const ChartIndicatorConfig({
     this.showEmaFast = true,
     this.emaFastPeriod = 20,
@@ -38,6 +41,7 @@ class ChartIndicatorConfig {
     this.showPatience = true,
     this.showPanic = true,
     this.behaviorWindow = 20,
+    this.showVolatility = false,
   });
 
   ChartIndicatorConfig copyWith({
@@ -55,6 +59,7 @@ class ChartIndicatorConfig {
     bool? showPatience,
     bool? showPanic,
     int? behaviorWindow,
+    bool? showVolatility,
   }) {
     return ChartIndicatorConfig(
       showEmaFast: showEmaFast ?? this.showEmaFast,
@@ -71,6 +76,7 @@ class ChartIndicatorConfig {
       showPatience: showPatience ?? this.showPatience,
       showPanic: showPanic ?? this.showPanic,
       behaviorWindow: behaviorWindow ?? this.behaviorWindow,
+      showVolatility: showVolatility ?? this.showVolatility,
     );
   }
 
@@ -89,6 +95,7 @@ class ChartIndicatorConfig {
         'showPatience': showPatience,
         'showPanic': showPanic,
         'behaviorWindow': behaviorWindow,
+        'showVolatility': showVolatility,
       };
 
   factory ChartIndicatorConfig.fromJson(Map<String, dynamic> j) {
@@ -107,6 +114,7 @@ class ChartIndicatorConfig {
       showPatience: j['showPatience'] as bool? ?? true,
       showPanic: j['showPanic'] as bool? ?? true,
       behaviorWindow: j['behaviorWindow'] as int? ?? 20,
+      showVolatility: j['showVolatility'] as bool? ?? false,
     );
   }
 
@@ -146,7 +154,8 @@ class ChartIndicatorConfig {
           showFear == other.showFear &&
           showPatience == other.showPatience &&
           showPanic == other.showPanic &&
-          behaviorWindow == other.behaviorWindow;
+          behaviorWindow == other.behaviorWindow &&
+          showVolatility == other.showVolatility;
 
   @override
   int get hashCode => Object.hash(
@@ -157,5 +166,6 @@ class ChartIndicatorConfig {
         showBehaviorPanel, showGreed,
         showFear, showPatience,
         showPanic, behaviorWindow,
+        showVolatility,
       );
 }

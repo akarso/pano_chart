@@ -21,6 +21,8 @@ void main() {
       expect(cfg.showPatience, true);
       expect(cfg.showPanic, true);
       expect(cfg.behaviorWindow, 20);
+      // Volatility default
+      expect(cfg.showVolatility, false);
     });
 
     test('copyWith preserves unchanged fields', () {
@@ -62,6 +64,7 @@ void main() {
       expect(base.copyWith(showRsi: false), isNot(base));
       expect(base.copyWith(showBehaviorPanel: true), isNot(base));
       expect(base.copyWith(behaviorWindow: 30), isNot(base));
+      expect(base.copyWith(showVolatility: true), isNot(base));
     });
 
     test('JSON round-trip', () {
@@ -80,6 +83,7 @@ void main() {
         showPatience: false,
         showPanic: true,
         behaviorWindow: 30,
+        showVolatility: true,
       );
       final json = original.toJson();
       final restored = ChartIndicatorConfig.fromJson(json);

@@ -26,6 +26,9 @@ import 'behavior_data.dart';
 import 'setup_data.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
+import '../volatility/volatility_alignment.dart';
+import '../volatility/volatility_model.dart';
+import '../volatility/volatility_widget.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -59,6 +62,9 @@ class DetailScreen extends StatefulWidget {
   /// Whether the user has pro access (enables auto-refresh).
   final bool isProUser;
 
+  /// Optional intraday volatility profile (1440 minute-of-day buckets).
+  final List<VolatilityBucket>? volatilityData;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -75,6 +81,7 @@ class DetailScreen extends StatefulWidget {
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
     this.isProUser = false,
+    this.volatilityData,
   }) : super(key: key);
 
   @override
@@ -709,6 +716,18 @@ class _DetailScreenState extends State<DetailScreen> {
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
                 ),
+            // Intraday activity profile
+            if (_chartConfig.showVolatility &&
+                widget.volatilityData != null &&
+                widget.volatilityData!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              VolatilityWidget(
+                bars: alignBucketsToCandles(
+                  candles: _series.candles,
+                  bucketsByMinute: buildBucketLookup(widget.volatilityData!),
+                ),
+              ),
+            ],
             // Overlay controls (social feed + macro events)
             if (widget.socialFeedViewModel != null ||
                 widget.eventsViewModel != null) ...[
