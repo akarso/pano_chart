@@ -621,17 +621,28 @@ class _AccountSheet extends StatefulWidget {
 }
 
 class _AccountSheetState extends State<_AccountSheet> {
+  VoidCallback? _previousOnChanged;
+
   @override
   void initState() {
     super.initState();
+    _previousOnChanged = widget.viewModel.onChanged;
     widget.viewModel.onChanged = () {
+      _previousOnChanged?.call();
       if (mounted) setState(() {});
     };
   }
 
+  @override
+  void dispose() {
+    widget.viewModel.onChanged = _previousOnChanged;
+    super.dispose();
+  }
+
   Future<void> _subscribe(String handle) async {
-    await widget.viewModel.subscribe(handle);
+    Navigator.of(context).pop();
     widget.onFeedback('Subscribed to @$handle');
+    await widget.viewModel.subscribe(handle);
   }
 
   Future<void> _unsubscribe(String handle) async {
