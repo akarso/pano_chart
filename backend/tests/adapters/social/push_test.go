@@ -30,12 +30,13 @@ type sendRecord struct {
 	Token string
 	Title string
 	Body  string
+	Data  map[string]string
 }
 
-func (s *stubNotifier) Send(_ context.Context, token, title, body string) error {
+func (s *stubNotifier) Send(_ context.Context, token, title, body string, data map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sends = append(s.sends, sendRecord{Token: token, Title: title, Body: body})
+	s.sends = append(s.sends, sendRecord{Token: token, Title: title, Body: body, Data: data})
 	return nil
 }
 

@@ -9,8 +9,13 @@ import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
 import '../features/billing/billing_manager.dart';
 import '../features/billing/trial_manager.dart';
+import '../features/events/macro_events_screen.dart';
+import '../features/market_state/market_pulse_screen.dart';
+import '../features/news/news_list_screen.dart';
+import '../features/notifications/notification_router.dart';
 import '../features/overview/overview_widget.dart';
 import '../features/social/notification_service.dart';
+import '../features/social/social_feed_screen.dart';
 import '../features/social/social_feed_view_model.dart';
 import '../infrastructure/preferences_service.dart';
 import '../infrastructure/stablecoin_config.dart';
@@ -23,6 +28,8 @@ Widget bootstrapApp({
   BillingManager? billingManager,
   SocialFeedViewModel? socialFeedViewModel,
   AppLifecycleManager? lifecycleManager,
+  GlobalKey<NavigatorState>? navigatorKey,
+  void Function(NotificationRouter router)? onRouterReady,
 }) {
   final root = CompositionRoot(
     apiBaseUrl: config.apiBaseUrl,
@@ -43,9 +50,11 @@ Widget bootstrapApp({
   final fragilityApi = root.createFragilityApi();
   final behaviorApi = root.createBehaviorApi();
   final volatilityApi = root.createVolatilityApi();
+  final notificationConfigApi = root.createNotificationConfigApi();
   final socialVm = socialFeedViewModel;
   final component = AppComponent(
     config,
+    navigatorKey: navigatorKey,
     home: OverviewWidget(
       viewModel: overviewViewModel,
       getCandleSeries: getCandleSeries,
@@ -66,8 +75,31 @@ Widget bootstrapApp({
       behaviorApi: behaviorApi,
       volatilityApi: volatilityApi,
       socialFeedViewModel: socialVm,
+      notificationConfigApi: notificationConfigApi,
     ),
   );
+
+  // Build notification router if navigator key provided.
+  if (navigatorKey != null && prefs != null) {
+    final router = NotificationRouter(
+      navigatorKey: navigatorKey,
+      prefs: prefs,
+      socialScreen: socialVm != null
+          ? () => SocialFeedScreen(viewModel: socialVm)
+          : null,
+      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel),
+      newsScreen: () => NewsListScreen(viewModel: newsViewModel),
+      marketScreen: () => MarketPulseScreen(
+            marketStateApi: marketStateApi,
+            compositeIndexApi: compositeIndexApi,
+            regimeApi: regimeApi,
+            transitionApi: transitionApi,
+            regimeHistoryApi: regimeHistoryApi,
+          ),
+    );
+    onRouterReady?.call(router);
+  }
+
   final app = component.createApp();
   if (lifecycleManager != null) {
     return AppLifecycleScope(manager: lifecycleManager, child: app);
@@ -109,6 +141,7 @@ void main() async {
   socialFeedViewModel.attachPrefs(prefs);
 
   // ── Firebase + device registration + local notifications ──
+  RemoteMessage? initialMessage;
   final notificationService = NotificationService();
   try {
     await Firebase.initializeApp();
@@ -116,6 +149,9 @@ void main() async {
 
     // Request notification permission (required on Android 13+ / iOS).
     await FirebaseMessaging.instance.requestPermission();
+
+    // Capture cold-start notification before runApp.
+    initialMessage = await FirebaseMessaging.instance.getInitialMessage();
 
     final fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken != null) {
@@ -152,6 +188,9 @@ void main() async {
 
   final lifecycleManager = AppLifecycleManager()..init();
 
+  final navigatorKey = GlobalKey<NavigatorState>();
+  NotificationRouter? notificationRouter;
+
   runApp(bootstrapApp(
     config: config,
     prefs: prefs,
@@ -159,5 +198,33 @@ void main() async {
     billingManager: billingManager,
     socialFeedViewModel: socialFeedViewModel,
     lifecycleManager: lifecycleManager,
+    navigatorKey: navigatorKey,
+    onRouterReady: (router) => notificationRouter = router,
   ));
+
+  // ── Deep link handling for push notifications ──
+
+  // Cold start: if the app was launched by tapping a notification.
+  if (initialMessage != null) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      notificationRouter?.handle(initialMessage!.data);
+    });
+  }
+
+  // Background resume: user taps notification while app is backgrounded.
+  try {
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      notificationRouter?.handle(message.data);
+    });
+
+    // Foreground: refresh social feed when a social push arrives while visible.
+    FirebaseMessaging.onMessage.listen((message) {
+      final type = message.data['type'];
+      if (type == 'twitter') {
+        socialFeedViewModel.refreshFeeds();
+      }
+    });
+  } catch (_) {
+    // Firebase unavailable.
+  }
 }

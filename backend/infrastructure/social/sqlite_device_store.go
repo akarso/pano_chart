@@ -51,6 +51,11 @@ func (s *SQLiteDeviceStore) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying *sql.DB so co-located stores can share it.
+func (s *SQLiteDeviceStore) DB() *sql.DB {
+	return s.db
+}
+
 func (s *SQLiteDeviceStore) migrate() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS device_tokens (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,

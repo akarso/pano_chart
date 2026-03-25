@@ -11,8 +11,14 @@ import (
 
 // spySender records broadcast calls.
 type spySender struct {
-	mu    sync.Mutex
-	calls []notifications.Notification
+	mu       sync.Mutex
+	calls    []notifications.Notification
+	userSent []userSendRecord
+}
+
+type userSendRecord struct {
+	userID string
+	n      notifications.Notification
 }
 
 func (s *spySender) Broadcast(_ context.Context, n notifications.Notification) error {
@@ -22,16 +28,35 @@ func (s *spySender) Broadcast(_ context.Context, n notifications.Notification) e
 	return nil
 }
 
+func (s *spySender) SendToUser(_ context.Context, userID string, n notifications.Notification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userSent = append(s.userSent, userSendRecord{userID, n})
+	return nil
+}
+
 func (s *spySender) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.calls)
 }
 
+func (s *spySender) userCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.userSent)
+}
+
 func (s *spySender) last() notifications.Notification {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls[len(s.calls)-1]
+}
+
+func (s *spySender) lastUserSend() userSendRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.userSent[len(s.userSent)-1]
 }
 
 func TestEngine_SendWithinHours(t *testing.T) {

@@ -26,6 +26,8 @@ import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
 import '../../features/news/news_view_model.dart';
+import '../../features/notifications/api/notification_config_api.dart';
+import '../../features/notifications/infrastructure/http_notification_config_api.dart';
 import '../../features/overview/get_rankings_impl.dart';
 import '../../features/overview/http_rankings_api.dart';
 import '../../features/overview/overview_view_model.dart';
@@ -165,5 +167,10 @@ class CompositionRoot {
   SocialFeedViewModel createSocialFeedViewModel({required String userId}) {
     final api = createSocialApi();
     return SocialFeedViewModel(api, userId: userId);
+  }
+
+  /// Creates a wired [NotificationConfigApi].
+  NotificationConfigApi createNotificationConfigApi() {
+    return HttpNotificationConfigApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 }

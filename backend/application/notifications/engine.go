@@ -9,6 +9,8 @@ import (
 // Sender abstracts the delivery mechanism for broadcast notifications.
 type Sender interface {
 	Broadcast(ctx context.Context, n Notification) error
+	// SendToUser delivers a notification only to the specified user's devices.
+	SendToUser(ctx context.Context, userID string, n Notification) error
 }
 
 // EngineConfig holds tunables for the notification engine.
@@ -67,6 +69,26 @@ func (e *Engine) Send(ctx context.Context, n Notification) error {
 
 	log.Printf("[notify] sending: type=%s title=%q key=%s", n.Type, n.Title, n.Key)
 	return e.sender.Broadcast(ctx, n)
+}
+
+// SendToUser checks quiet hours and per-user dedup, then delivers to a
+// single user's devices.
+func (e *Engine) SendToUser(ctx context.Context, userID string, n Notification) error {
+	if !e.withinAllowedHours() {
+		log.Printf("[notify] suppressed (quiet hours): type=%s key=%s user=%s", n.Type, n.Key, userID)
+		return nil
+	}
+
+	perUserKey := userID + ":" + n.Key
+	if e.dedup.Seen(perUserKey) {
+		log.Printf("[notify] suppressed (dedup): type=%s key=%s user=%s", n.Type, n.Key, userID)
+		return nil
+	}
+
+	e.dedup.Mark(perUserKey, e.cfg.DefaultDedupTTL)
+
+	log.Printf("[notify] sending to user=%s: type=%s title=%q key=%s", userID, n.Type, n.Title, n.Key)
+	return e.sender.SendToUser(ctx, userID, n)
 }
 
 func (e *Engine) withinAllowedHours() bool {

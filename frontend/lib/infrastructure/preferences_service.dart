@@ -194,6 +194,16 @@ class PreferencesService {
 
   static const _keyShowSocialOnChart = 'settings.showSocialOnChart';
   static const _keyNotificationsEnabled = 'settings.notificationsEnabled';
+  static const _keyNotifyMacro = 'settings.notify.macro';
+  static const _keyNotifyUptrend = 'settings.notify.uptrend';
+  static const _keyNotifyDowntrend = 'settings.notify.downtrend';
+  static const _keyNotifySideways = 'settings.notify.sideways';
+  static const _keyNotifySetupOfDay = 'settings.notify.setupOfDay';
+  static const _keyNotifyNews = 'settings.notify.news';
+  static const _keyUptrendMinDominance = 'settings.notify.uptrendMinDom';
+  static const _keyDowntrendMinDominance = 'settings.notify.downtrendMinDom';
+  static const _keySidewaysMinDominance = 'settings.notify.sidewaysMinDom';
+  static const _keySetupMinScore = 'settings.notify.setupMinScore';
   static const _socialSettingsPrefix = 'social.settings.';
 
   bool get showSocialOnChart => _prefs.getBool(_keyShowSocialOnChart) ?? false;
@@ -203,6 +213,36 @@ class PreferencesService {
       _prefs.getBool(_keyNotificationsEnabled) ?? false;
   set notificationsEnabled(bool v) =>
       _prefs.setBool(_keyNotificationsEnabled, v);
+
+  bool get notifyMacro => _prefs.getBool(_keyNotifyMacro) ?? true;
+  set notifyMacro(bool v) => _prefs.setBool(_keyNotifyMacro, v);
+
+  bool get notifyUptrend => _prefs.getBool(_keyNotifyUptrend) ?? true;
+  set notifyUptrend(bool v) => _prefs.setBool(_keyNotifyUptrend, v);
+
+  bool get notifyDowntrend => _prefs.getBool(_keyNotifyDowntrend) ?? true;
+  set notifyDowntrend(bool v) => _prefs.setBool(_keyNotifyDowntrend, v);
+
+  bool get notifySideways => _prefs.getBool(_keyNotifySideways) ?? true;
+  set notifySideways(bool v) => _prefs.setBool(_keyNotifySideways, v);
+
+  bool get notifySetupOfDay => _prefs.getBool(_keyNotifySetupOfDay) ?? true;
+  set notifySetupOfDay(bool v) => _prefs.setBool(_keyNotifySetupOfDay, v);
+
+  bool get notifyNews => _prefs.getBool(_keyNotifyNews) ?? true;
+  set notifyNews(bool v) => _prefs.setBool(_keyNotifyNews, v);
+
+  double get uptrendMinDominance => _prefs.getDouble(_keyUptrendMinDominance) ?? 0.75;
+  set uptrendMinDominance(double v) => _prefs.setDouble(_keyUptrendMinDominance, v);
+
+  double get downtrendMinDominance => _prefs.getDouble(_keyDowntrendMinDominance) ?? 0.75;
+  set downtrendMinDominance(double v) => _prefs.setDouble(_keyDowntrendMinDominance, v);
+
+  double get sidewaysMinDominance => _prefs.getDouble(_keySidewaysMinDominance) ?? 0.75;
+  set sidewaysMinDominance(double v) => _prefs.setDouble(_keySidewaysMinDominance, v);
+
+  double get setupMinScore => _prefs.getDouble(_keySetupMinScore) ?? 0.75;
+  set setupMinScore(double v) => _prefs.setDouble(_keySetupMinScore, v);
 
   /// Retrieves per-account filter settings for [handle].
   SocialAccountSettings getAccountSettings(String handle) {

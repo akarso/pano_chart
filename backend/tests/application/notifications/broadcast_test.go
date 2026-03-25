@@ -19,10 +19,11 @@ type fakePushNotifier struct {
 
 type pushCall struct {
 	token, title, body string
+	data               map[string]string
 }
 
-func (f *fakePushNotifier) Send(_ context.Context, token, title, body string) error {
-	f.sent = append(f.sent, pushCall{token, title, body})
+func (f *fakePushNotifier) Send(_ context.Context, token, title, body string, data map[string]string) error {
+	f.sent = append(f.sent, pushCall{token, title, body, data})
 	return nil
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"pano_chart/backend/domain"
@@ -60,14 +59,13 @@ func DefaultSchedulerConfig() SchedulerConfig {
 // Scheduler periodically checks data sources and sends notifications
 // through the Engine.
 type Scheduler struct {
-	engine   *Engine
-	market   MarketProvider  // optional
-	setups   SetupProvider   // optional
-	events   EventProvider   // optional
-	cfg      SchedulerConfig
-	lastRun  map[string]time.Time
-	lastRunM sync.Mutex
-	now      func() time.Time
+	engine  *Engine
+	market  MarketProvider          // optional
+	setups  SetupProvider           // optional
+	events  EventProvider           // optional
+	configs NotificationConfigStore // optional — enables per-user thresholds
+	cfg     SchedulerConfig
+	now     func() time.Time
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -79,14 +77,19 @@ func NewScheduler(
 	cfg SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		engine:  engine,
-		market:  market,
-		setups:  setups,
-		events:  events,
-		cfg:     cfg,
-		lastRun: make(map[string]time.Time),
-		now:     time.Now,
+		engine: engine,
+		market: market,
+		setups: setups,
+		events: events,
+		cfg:    cfg,
+		now:    time.Now,
 	}
+}
+
+// SetConfigStore attaches a per-user notification config store.
+// When set, market and setup notifications use per-user thresholds.
+func (s *Scheduler) SetConfigStore(store NotificationConfigStore) {
+	s.configs = store
 }
 
 // Run starts the scheduler loops. Blocks until ctx is cancelled.
@@ -161,6 +164,7 @@ func (s *Scheduler) checkMacroEvents(ctx context.Context) {
 			Type:  TypeMacro,
 			Title: "Upcoming Macro Event",
 			Body:  body,
+			Data:  map[string]string{"type": string(TypeMacro)},
 			Key:   "macro_" + ev.ID(),
 		})
 	}
@@ -170,9 +174,6 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	if s.market == nil {
 		return
 	}
-	if !s.oncePerDay("market_state") {
-		return
-	}
 
 	summary, err := s.market.Calculate(s.cfg.Timeframe)
 	if err != nil {
@@ -180,6 +181,20 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		return
 	}
 
+	// Per-user path: check each user's regime toggles and thresholds.
+	if s.configs != nil {
+		configs, err := s.configs.All()
+		if err != nil {
+			log.Printf("[notify-scheduler] fetch configs error: %v", err)
+			return
+		}
+		for _, cfg := range configs {
+			s.checkMarketForUser(ctx, cfg, summary)
+		}
+		return
+	}
+
+	// Legacy broadcast path (no config store).
 	if summary.Confidence < s.cfg.MarketMinConfidence {
 		return
 	}
@@ -202,15 +217,61 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  msg,
+		Data:  map[string]string{"type": string(TypeMarket)},
 		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
+	})
+}
+
+// checkMarketForUser evaluates the market breadth against a single user's
+// enabled regimes and thresholds. The first regime to cross its dominance
+// threshold wins (strongest is picked when multiple qualify).
+func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summary mkt.Summary) {
+	type candidate struct {
+		label     string
+		dominance float64
+	}
+
+	var candidates []candidate
+
+	// Uptrend — maps to Breadth.Trend (strong directional moves).
+	if cfg.Uptrend && summary.Breadth.Trend >= cfg.UptrendMinDominance {
+		candidates = append(candidates, candidate{"Uptrend", summary.Breadth.Trend})
+	}
+	// Downtrend — maps to Breadth.Breakout (sharp expansions, often directional).
+	if cfg.Downtrend && summary.Breadth.Breakout >= cfg.DowntrendMinDominance {
+		candidates = append(candidates, candidate{"Downtrend", summary.Breadth.Breakout})
+	}
+	// Sideways — maps to Breadth.Sideways (includes compression-like behavior).
+	if cfg.Sideways && summary.Breadth.Sideways >= cfg.SidewaysMinDominance {
+		candidates = append(candidates, candidate{"Sideways", summary.Breadth.Sideways})
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	// Pick the strongest.
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if c.dominance > best.dominance {
+			best = c
+		}
+	}
+
+	body := fmt.Sprintf("Market is %s (%.0f%% dominance)", best.label, best.dominance*100)
+	dateKey := s.now().Format("2006-01-02")
+
+	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
+		Type:  TypeMarket,
+		Title: "Market Update",
+		Body:  body,
+		Data:  map[string]string{"type": string(TypeMarket)},
+		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, dateKey),
 	})
 }
 
 func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 	if s.setups == nil {
-		return
-	}
-	if !s.oncePerDay("setup_of_day") {
 		return
 	}
 
@@ -220,31 +281,43 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		return
 	}
 
-	if best.Score < s.cfg.SetupMinScore {
+	body := fmt.Sprintf("%s (%0.f%%)", best.Symbol, best.Score*100)
+	dateKey := s.now().Format("2006-01-02")
+
+	// Per-user path: check each user's setup toggle and threshold.
+	if s.configs != nil {
+		configs, err := s.configs.All()
+		if err != nil {
+			log.Printf("[notify-scheduler] fetch configs for setup error: %v", err)
+			return
+		}
+		for _, cfg := range configs {
+			if !cfg.SetupOfDay || best.Score < cfg.SetupMinScore {
+				continue
+			}
+			_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
+				Type:  TypeSetup,
+				Title: "Setup of the Day",
+				Body:  body,
+				Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
+				Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
+			})
+		}
 		return
 	}
 
-	body := fmt.Sprintf("%s (%0.f%%)", best.Symbol, best.Score*100)
+	// Legacy broadcast path.
+	if best.Score < s.cfg.SetupMinScore {
+		return
+	}
 
 	_ = s.engine.Send(ctx, Notification{
 		Type:  TypeSetup,
 		Title: "Setup of the Day",
 		Body:  body,
-		Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, s.now().Format("2006-01-02")),
+		Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
+		Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
 	})
-}
-
-// oncePerDay returns true at most once per 24h per key.
-func (s *Scheduler) oncePerDay(key string) bool {
-	s.lastRunM.Lock()
-	defer s.lastRunM.Unlock()
-
-	now := s.now()
-	if last, ok := s.lastRun[key]; ok && now.Sub(last) < 24*time.Hour {
-		return false
-	}
-	s.lastRun[key] = now
-	return true
 }
 
 // SetClock overrides the time source (for testing).

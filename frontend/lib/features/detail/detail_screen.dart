@@ -679,7 +679,7 @@ class _DetailScreenState extends State<DetailScreen> {
               IconButton(
                 icon: const Icon(Icons.tune, color: Colors.white70, size: 20),
                 padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 36, minHeight: 32),
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 32),
                 onPressed: () async {
                   final result = await showIndicatorPanel(context, _chartConfig);
                   if (result != null) _saveChartConfig(result);

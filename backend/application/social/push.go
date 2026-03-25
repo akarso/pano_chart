@@ -11,7 +11,9 @@ import (
 // PushNotifier sends push notifications to devices.
 type PushNotifier interface {
 	// Send delivers a push notification to the given FCM token.
-	Send(ctx context.Context, token, title, body string) error
+	// data is an optional key-value map included in the FCM data payload
+	// for client-side deep-link routing.
+	Send(ctx context.Context, token, title, body string, data map[string]string) error
 }
 
 // PushConsumer reads new-post events from the dispatcher channel and sends
@@ -94,7 +96,7 @@ func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 		}
 
 		for _, token := range tokens {
-			if err := c.push.Send(ctx, token, title, body); err != nil {
+			if err := c.push.Send(ctx, token, title, body, map[string]string{"type": "twitter"}); err != nil {
 				log.Printf("[push] send to token …%s: %v", lastN(token, 8), err)
 			} else {
 				log.Printf("[push] sent to …%s: %s", lastN(token, 8), title)

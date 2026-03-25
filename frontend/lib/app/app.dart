@@ -6,13 +6,16 @@ import '../core/config/config.dart';
 class App extends StatelessWidget {
   final AppConfig config;
   final Widget? home;
+  final GlobalKey<NavigatorState>? navigatorKey;
 
-  const App({Key? key, required this.config, this.home}) : super(key: key);
+  const App({Key? key, required this.config, this.home, this.navigatorKey})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Pano Chart',
+      navigatorKey: navigatorKey,
       home: home != null
           ? Scaffold(
               body: home,

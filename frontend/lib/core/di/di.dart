@@ -6,9 +6,11 @@ import 'package:flutter/widgets.dart';
 class AppComponent {
   final AppConfig config;
   final Widget? home;
+  final GlobalKey<NavigatorState>? navigatorKey;
 
-  AppComponent(this.config, {this.home});
+  AppComponent(this.config, {this.home, this.navigatorKey});
 
   /// Returns the root App widget wired with the provided config.
-  App createApp() => App(config: config, home: home);
+  App createApp() =>
+      App(config: config, home: home, navigatorKey: navigatorKey);
 }

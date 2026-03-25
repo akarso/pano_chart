@@ -494,6 +494,13 @@ func main() {
 		log.Println("[main] GOOGLE_APPLICATION_CREDENTIALS not set — push notifications disabled")
 	}
 
+	// --- Notification config store (per-user preferences) ---
+	notifConfigStore, err := infranotify.NewSQLiteConfigStore(deviceStore.DB())
+	if err != nil {
+		log.Fatalf("[main] notification config store: %v", err)
+	}
+	log.Println("[main] Notification config store initialized")
+
 	// --- Notification engine (broadcast: market, setup, macro, news) ---
 	if fcmCredsPath != "" {
 		fcmForBroadcast, err := infrasocial.NewFCMNotifier(fcmCredsPath, fcmProjectID)
@@ -516,6 +523,7 @@ func main() {
 				macroProvider,
 				appnotify.DefaultSchedulerConfig(),
 			)
+			notifyScheduler.SetConfigStore(notifConfigStore)
 			go notifyScheduler.Run(socialCtx)
 			log.Println("[main] Notification engine + scheduler started")
 		}
@@ -570,6 +578,10 @@ func main() {
 	mux.Handle("/api/device/register", adhttp.NewDeviceRegisterHandler(deviceStore))
 	mux.Handle("/api/device/unregister", adhttp.NewDeviceUnregisterHandler(deviceStore))
 	log.Println("[main] /api/device/* endpoints registered")
+
+	// Notification config endpoint
+	mux.Handle("/api/notification/config", adhttp.NewNotificationConfigHandler(notifConfigStore))
+	log.Println("[main] /api/notification/config endpoint registered")
 
 	// Volatility profile endpoint
 	volPath := os.Getenv("VOL_OUTPUT")

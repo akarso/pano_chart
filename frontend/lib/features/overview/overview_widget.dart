@@ -31,6 +31,8 @@ import '../news/news_list_screen.dart';
 import '../news/news_view_model.dart';
 import '../social/social_feed_screen.dart';
 import '../social/social_feed_view_model.dart';
+import '../notifications/notification_settings_page.dart';
+import '../notifications/api/notification_config_api.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
@@ -66,6 +68,7 @@ class OverviewWidget extends StatefulWidget {
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
   final SocialFeedViewModel? socialFeedViewModel;
+  final NotificationConfigApi? notificationConfigApi;
 
   const OverviewWidget({
     Key? key,
@@ -88,6 +91,7 @@ class OverviewWidget extends StatefulWidget {
     this.behaviorApi,
     this.volatilityApi,
     this.socialFeedViewModel,
+    this.notificationConfigApi,
   }) : super(key: key);
 
   @override
@@ -1078,6 +1082,23 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.socialFeedViewModel != null) _menuDivider(),
+        if (widget.prefs != null)
+          _menuRow(
+            icon: Icons.notifications_outlined,
+            label: 'Notifications',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => NotificationSettingsPage(
+                    prefs: widget.prefs!,
+                    configApi: widget.notificationConfigApi,
+                  ),
+                ),
+              );
+            },
+          ),
+        if (widget.prefs != null) _menuDivider(),
         if (widget.billingManager != null)
           _menuRow(
             icon: Icons.workspace_premium,

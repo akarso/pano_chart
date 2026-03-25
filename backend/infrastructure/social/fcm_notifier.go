@@ -90,7 +90,7 @@ func NewFCMNotifier(credentialsPath, projectID string) (*FCMNotifier, error) {
 }
 
 // Send delivers a push notification to a single FCM token.
-func (n *FCMNotifier) Send(ctx context.Context, token, title, body string) error {
+func (n *FCMNotifier) Send(ctx context.Context, token, title, body string, data map[string]string) error {
 	accessToken, err := n.getAccessToken(ctx)
 	if err != nil {
 		return fmt.Errorf("getting access token: %w", err)
@@ -105,6 +105,7 @@ func (n *FCMNotifier) Send(ctx context.Context, token, title, body string) error
 				Title: title,
 				Body:  body,
 			},
+			Data: data,
 		},
 	}
 
@@ -203,8 +204,9 @@ type fcmRequest struct {
 }
 
 type fcmMessage struct {
-	Token        string           `json:"token"`
-	Notification *fcmNotification `json:"notification,omitempty"`
+	Token        string            `json:"token"`
+	Notification *fcmNotification  `json:"notification,omitempty"`
+	Data         map[string]string `json:"data,omitempty"`
 }
 
 type fcmNotification struct {
