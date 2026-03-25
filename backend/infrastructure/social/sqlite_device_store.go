@@ -132,3 +132,22 @@ func (s *SQLiteDeviceStore) TokensForUsers(userIDs []string) ([]string, error) {
 	}
 	return tokens, rows.Err()
 }
+
+// AllTokens returns every registered FCM token.
+func (s *SQLiteDeviceStore) AllTokens() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT fcm_token FROM device_tokens`)
+	if err != nil {
+		return nil, fmt.Errorf("query all tokens: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var tokens []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, fmt.Errorf("scan token: %w", err)
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}

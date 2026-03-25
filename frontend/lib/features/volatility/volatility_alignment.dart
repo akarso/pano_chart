@@ -1,21 +1,30 @@
 import '../candles/api/candle_response.dart';
 import 'volatility_model.dart';
 
-/// Maps visible candles to their corresponding [VolatilityBucket] from the
-/// full 1440-entry intraday profile.
+/// Maps candles to their corresponding [VolatilityBucket] from the
+/// volatility profile, using the user's **local** timezone.
 ///
-/// Returns one bucket per candle, looked up by minute-of-day.  If no bucket
-/// matches (empty data), a neutral bucket (normalized = 1.0) is
-/// substituted.
-List<VolatilityBucket> alignBucketsToCandles({
+/// For intraday timeframes the lookup key is minute-of-day (0–1439).
+/// For the 1d timeframe the lookup key is day-of-week where
+/// Sunday = 0. For daily candles the Dart `DateTime.weekday`
+/// (Monday=1 … Sunday=7) is mapped to the Go convention (Sunday=0 … Saturday=6).
+///
+/// Returns one entry per candle (null when no bucket matches).
+List<VolatilityBucket?> alignBucketsToCandles({
   required List<CandleDto> candles,
   required Map<int, VolatilityBucket> bucketsByMinute,
+  bool isDailyTimeframe = false,
 }) {
-  const neutral = VolatilityBucket(minute: 0, normalized: 1.0, spikeProb: 0);
-
   return candles.map((c) {
-    final m = c.timestamp.hour * 60 + c.timestamp.minute;
-    return bucketsByMinute[m] ?? neutral;
+    final local = c.timestamp.toLocal();
+    if (isDailyTimeframe) {
+      // Dart weekday: Monday=1 … Sunday=7
+      // Backend day-of-week: Sunday=0 … Saturday=6
+      final dow = local.weekday % 7; // Mon=1,…,Sat=6,Sun=7→0
+      return bucketsByMinute[dow];
+    }
+    final m = local.hour * 60 + local.minute;
+    return bucketsByMinute[m];
   }).toList();
 }
 

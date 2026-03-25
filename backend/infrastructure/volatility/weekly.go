@@ -78,3 +78,45 @@ func BuildWeekly(candles []Candle, atr []float64) WeeklyResult {
 
 	return WeeklyResult{Buckets: results}
 }
+
+// DeriveDailyOfWeek aggregates minute-of-week buckets into 7 day-of-week
+// buckets suitable for overlaying on a 1D chart.  Each bucket represents
+// one weekday (0 = Sunday … 6 = Saturday).  The MinuteOfDay field in the
+// returned BucketResults stores the day index (0-6).
+func DeriveDailyOfWeek(weekly WeeklyResult) []BucketResult {
+	type acc struct {
+		sumMove  float64
+		sumSpike float64
+		sumNorm  float64
+		count    int
+	}
+
+	days := make([]acc, 7)
+
+	for _, wb := range weekly.Buckets {
+		day := wb.MinuteOfWeek / 1440
+		if day < 0 || day >= 7 {
+			continue
+		}
+		days[day].sumMove += wb.AvgMove
+		days[day].sumSpike += wb.SpikeProb
+		days[day].sumNorm += wb.Normalized
+		days[day].count++
+	}
+
+	results := make([]BucketResult, 0, 7)
+	for d := 0; d < 7; d++ {
+		a := days[d]
+		if a.count == 0 {
+			continue
+		}
+		results = append(results, BucketResult{
+			MinuteOfDay: d, // day-of-week (0=Sun, 6=Sat)
+			AvgMove:     a.sumMove / float64(a.count),
+			SpikeProb:   a.sumSpike / float64(a.count),
+			Normalized:  a.sumNorm / float64(a.count),
+		})
+	}
+
+	return results
+}

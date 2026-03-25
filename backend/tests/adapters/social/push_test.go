@@ -96,6 +96,20 @@ func (s *memDeviceStore) TokensForUsers(userIDs []string) ([]string, error) {
 	return tokens, nil
 }
 
+func (s *memDeviceStore) AllTokens() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := make(map[string]bool)
+	var tokens []string
+	for _, e := range s.devices {
+		if !seen[e.fcmToken] {
+			tokens = append(tokens, e.fcmToken)
+			seen[e.fcmToken] = true
+		}
+	}
+	return tokens, nil
+}
+
 // ── SQLite DeviceStore tests ────────────────────────────────────────────────
 
 func openTestDB(t *testing.T) *sql.DB {

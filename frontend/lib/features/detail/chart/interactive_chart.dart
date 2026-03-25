@@ -20,6 +20,8 @@ import 'crosshair_overlay.dart';
 import 'indicators.dart';
 import 'oscillator_painter.dart';
 import 'volume_painter.dart';
+import '../../volatility/volatility_model.dart';
+import '../../volatility/volatility_painter.dart';
 
 /// Interactive candlestick chart with pinch-to-zoom, panning,
 /// and layered technical indicators (EMA clouds, RSI, ATR).
@@ -32,6 +34,10 @@ class InteractiveChart extends StatefulWidget {
   final EventsViewModel? eventsViewModel;
   final ValueChanged<String>? onNavigateToEvent;
   final SocialFeedViewModel? socialFeedViewModel;
+
+  /// Per-candle volatility buckets (aligned 1:1 with series.candles).
+  /// Null entries mean no bucket matched that candle.
+  final List<VolatilityBucket?>? volatilityAligned;
 
   /// Total height of the combined chart.
   final double height;
@@ -55,6 +61,7 @@ class InteractiveChart extends StatefulWidget {
     this.eventsViewModel,
     this.onNavigateToEvent,
     this.socialFeedViewModel,
+    this.volatilityAligned,
     this.height = 360,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -354,33 +361,49 @@ class _InteractiveChartState extends State<InteractiveChart> {
     // Compute height splits.
     final hasOscillator = _rsi != null || _atr != null;
     final hasBehavior = _behavior != null;
-    final panelCount = (hasOscillator ? 1 : 0) + (hasBehavior ? 1 : 0);
+    final hasVolatility = widget.config.showVolatility &&
+        widget.volatilityAligned != null &&
+        widget.volatilityAligned!.isNotEmpty;
+    final panelCount = (hasOscillator ? 1 : 0) +
+        (hasBehavior ? 1 : 0) +
+        (hasVolatility ? 1 : 0);
     late final double priceH;
     late final double volumeH;
     late final double oscH;
     late final double behH;
+    late final double volH;
     switch (panelCount) {
       case 0:
         priceH = widget.height * 0.78;
         volumeH = widget.height * 0.22;
         oscH = 0;
         behH = 0;
+        volH = 0;
         break;
       case 1:
         priceH = widget.height * 0.58;
         volumeH = widget.height * 0.14;
         oscH = hasOscillator ? widget.height * 0.26 : 0.0;
         behH = hasBehavior ? widget.height * 0.26 : 0.0;
+        volH = hasVolatility ? widget.height * 0.26 : 0.0;
         break;
-      default: // 2 panels
+      case 2:
         priceH = widget.height * 0.46;
         volumeH = widget.height * 0.12;
-        oscH = widget.height * 0.20;
-        behH = widget.height * 0.20;
+        oscH = hasOscillator ? widget.height * 0.20 : 0.0;
+        behH = hasBehavior ? widget.height * 0.20 : 0.0;
+        volH = hasVolatility ? widget.height * 0.20 : 0.0;
+        break;
+      default: // 3 panels
+        priceH = widget.height * 0.40;
+        volumeH = widget.height * 0.10;
+        oscH = hasOscillator ? widget.height * 0.16 : 0.0;
+        behH = hasBehavior ? widget.height * 0.16 : 0.0;
+        volH = hasVolatility ? widget.height * 0.16 : 0.0;
         break;
     }
     final xAxisH = 18.0;
-    final totalH = priceH + volumeH + oscH + behH + xAxisH + 20;
+    final totalH = priceH + volumeH + volH + oscH + behH + xAxisH + 20;
 
     return SizedBox(
       height: totalH,
@@ -395,7 +418,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
 
             // Cache layout dimensions for pointer-scroll zone detection.
             _layoutVw = vw;
-            _layoutChartBottom = priceH + volumeH + oscH + behH;
+            _layoutChartBottom = priceH + volumeH + volH + oscH + behH;
 
             // On first build, set candleWidth to match sparkline ratio
             // and scroll to show the last initialVisibleCount candles.
@@ -486,7 +509,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH + volumeH + oscH + behH + xAxisH,
+                      height: priceH + volumeH + volH + oscH + behH + xAxisH,
                       child: ChartEventOverlay(
                         markers: _buildEventMarkers(chartW),
                         onNavigateToEvent: widget.onNavigateToEvent,
@@ -502,7 +525,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH + volumeH + oscH + behH + xAxisH,
+                      height: priceH + volumeH + volH + oscH + behH + xAxisH,
                       child: ChartSocialOverlay(
                         markers: _buildSocialMarkers(chartW),
                         priceAreaHeight: priceH,
@@ -548,11 +571,39 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                   ),
 
+                  // ── Volatility layer (intraday activity profile) ──
+                  if (hasVolatility)
+                    Positioned(
+                      left: 0,
+                      top: priceH + volumeH,
+                      width: chartW,
+                      height: volH,
+                      child: RepaintBoundary(
+                        child: Container(
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: Color(0x33FFFFFF), width: 0.5),
+                            ),
+                          ),
+                          child: CustomPaint(
+                            size: Size(chartW, volH),
+                            painter: VolatilityPainter(
+                              aligned: widget.volatilityAligned!,
+                              startIndex: start,
+                              endIndex: end,
+                              candleWidth: _candleWidth,
+                              scrollPixelOffset: pixOff,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
                   // ── Oscillator layer (RSI + ATR) ──
                   if (hasOscillator)
                     Positioned(
                       left: 0,
-                      top: priceH + volumeH,
+                      top: priceH + volumeH + volH,
                       width: chartW,
                       height: oscH,
                       child: RepaintBoundary(
@@ -581,7 +632,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   if (hasBehavior)
                     Positioned(
                       left: 0,
-                      top: priceH + volumeH + oscH,
+                      top: priceH + volumeH + volH + oscH,
                       width: chartW,
                       height: behH,
                       child: RepaintBoundary(
@@ -611,7 +662,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   // ── X-axis time labels ──
                   Positioned(
                     left: 0,
-                    top: priceH + volumeH + oscH + behH,
+                    top: priceH + volumeH + volH + oscH + behH,
                     width: chartW,
                     height: xAxisH,
                     child: IgnorePointer(
@@ -632,7 +683,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   if (widget.referenceStartIndex != null)
                     Positioned(
                       left: 0,
-                      top: priceH + volumeH + oscH + behH - 2,
+                      top: priceH + volumeH + volH + oscH + behH - 2,
                       width: chartW,
                       height: 3,
                       child: IgnorePointer(
@@ -654,7 +705,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     right: 0,
                     top: 0,
                     width: _yAxisDragW,
-                    height: priceH + volumeH + oscH + behH,
+                    height: priceH + volumeH + volH + oscH + behH,
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onVerticalDragStart: _onYAxisDragStart,
@@ -673,7 +724,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   // ── X-axis drag zone ──
                   Positioned(
                     left: 0,
-                    top: priceH + volumeH + oscH + behH,
+                    top: priceH + volumeH + volH + oscH + behH,
                     width: chartW,
                     height: xAxisH + 20,
                     child: GestureDetector(
@@ -692,7 +743,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       left: 0,
                       top: 0,
                       width: chartW,
-                      height: priceH + volumeH + oscH + behH,
+                      height: priceH + volumeH + volH + oscH + behH,
                       child: IgnorePointer(
                         child: CrosshairOverlay(
                           state: _crosshair!,
@@ -700,7 +751,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                           timeframe: widget.series.timeframe,
                           priceHeight: priceH,
                           volumeHeight: volumeH,
-                          oscillatorHeight: oscH + behH,
+                      oscillatorHeight: oscH + behH + volH,
                           chartWidth: chartW,
                           priceLo: priceLo,
                           priceHi: priceHi,
@@ -712,11 +763,26 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       ),
                     ),
 
+                  // ── Volatility label ──
+                  if (hasVolatility)
+                    Positioned(
+                      right: _yAxisW + 4,
+                      top: priceH + volumeH + 2,
+                      child: const Text(
+                        'Activity',
+                        style: TextStyle(
+                          color: Color(0x884CAF50),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+
                   // ── Oscillator labels ──
                   if (_rsi != null)
                     Positioned(
                       right: _yAxisW + 4,
-                      top: priceH + volumeH + 2,
+                      top: priceH + volumeH + volH + 2,
                       child: const Text(
                         'RSI',
                         style: TextStyle(
@@ -729,7 +795,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                   if (_atr != null)
                     Positioned(
                       right: _yAxisW + 4,
-                      top: priceH + volumeH + 14,
+                      top: priceH + volumeH + volH + 14,
                       child: const Text(
                         'ATR',
                         style: TextStyle(
@@ -745,7 +811,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     if (widget.config.showGreed)
                       Positioned(
                         right: _yAxisW + 4,
-                        top: priceH + volumeH + oscH + 2,
+                        top: priceH + volumeH + volH + oscH + 2,
                         child: Text(
                           'Greed',
                           style: TextStyle(
@@ -758,7 +824,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     if (widget.config.showFear)
                       Positioned(
                         right: _yAxisW + 4,
-                        top: priceH + volumeH + oscH + 14,
+                        top: priceH + volumeH + volH + oscH + 14,
                         child: Text(
                           'Fear',
                           style: TextStyle(
@@ -771,7 +837,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     if (widget.config.showPatience)
                       Positioned(
                         right: _yAxisW + 4,
-                        top: priceH + volumeH + oscH + 26,
+                        top: priceH + volumeH + volH + oscH + 26,
                         child: Text(
                           'Patience',
                           style: TextStyle(
@@ -784,7 +850,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     if (widget.config.showPanic)
                       Positioned(
                         right: _yAxisW + 4,
-                        top: priceH + volumeH + oscH + 38,
+                        top: priceH + volumeH + volH + oscH + 38,
                         child: Text(
                           'Panic',
                           style: TextStyle(

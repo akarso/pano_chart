@@ -193,6 +193,7 @@ class _SocialFeedScreenState extends State<SocialFeedScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
+      isScrollControlled: true,
       builder: (_) => _FeedSettingsSheet(viewModel: widget.viewModel),
     );
   }
@@ -315,83 +316,92 @@ class _FeedSettingsSheet extends StatefulWidget {
 class _FeedSettingsSheetState extends State<_FeedSettingsSheet> {
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Feed Settings',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 16),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Show on chart',
-                style: TextStyle(color: Colors.white, fontSize: 14)),
-            subtitle: Text('Display social posts on the detail chart',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-            value: widget.viewModel.showOnChart,
-            activeColor: const Color(0xFF42A5F5),
-            onChanged: (v) {
-              setState(() => widget.viewModel.showOnChart = v);
-            },
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Notifications',
-                style: TextStyle(color: Colors.white, fontSize: 14)),
-            subtitle: Text('Alert when new posts arrive',
-                style: TextStyle(color: Colors.grey[600], fontSize: 12)),
-            value: widget.viewModel.notificationsEnabled,
-            activeColor: const Color(0xFF42A5F5),
-            onChanged: (v) {
-              setState(() => widget.viewModel.notificationsEnabled = v);
-            },
-          ),
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
 
-          // Per-account settings (one row per subscribed handle).
-          if (widget.viewModel.state.subscribedHandles.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Per-account filters',
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16, right: 16, top: 16, bottom: 16 + bottomInset,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Feed Settings',
               style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
               ),
             ),
-            const SizedBox(height: 4),
-            ...widget.viewModel.state.subscribedHandles.map((handle) {
-              final settings = widget.viewModel.getSettings(handle);
-              return ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text('@$handle',
-                    style:
-                        const TextStyle(color: Colors.white, fontSize: 14)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (settings.hasActiveFilter)
-                      const Icon(Icons.filter_alt,
-                          size: 16, color: Color(0xFF42A5F5)),
-                    IconButton(
-                      icon: const Icon(Icons.tune,
-                          size: 18, color: Colors.white54),
-                      onPressed: () => _showAccountSettingsSheet(handle),
-                    ),
-                  ],
+            const SizedBox(height: 16),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Show on chart',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text('Display social posts on the detail chart',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              value: widget.viewModel.showOnChart,
+              activeColor: const Color(0xFF42A5F5),
+              onChanged: (v) {
+                setState(() => widget.viewModel.showOnChart = v);
+              },
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Notifications',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
+              subtitle: Text('Alert when new posts arrive',
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+              value: widget.viewModel.notificationsEnabled,
+              activeColor: const Color(0xFF42A5F5),
+              onChanged: (v) {
+                setState(() => widget.viewModel.notificationsEnabled = v);
+              },
+            ),
+
+            // Per-account settings (one row per subscribed handle).
+            if (widget.viewModel.state.subscribedHandles.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Per-account filters',
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
-              );
-            }),
+              ),
+              const SizedBox(height: 4),
+              ...widget.viewModel.state.subscribedHandles.map((handle) {
+                final settings = widget.viewModel.getSettings(handle);
+                return ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text('@$handle',
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 14)),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (settings.hasActiveFilter)
+                        const Icon(Icons.filter_alt,
+                            size: 16, color: Color(0xFF42A5F5)),
+                      IconButton(
+                        icon: const Icon(Icons.tune,
+                            size: 18, color: Colors.white54),
+                        onPressed: () => _showAccountSettingsSheet(handle),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -654,119 +664,137 @@ class _AccountSheetState extends State<_AccountSheet> {
   Widget build(BuildContext context) {
     final subscribed = widget.viewModel.state.subscribedHandles;
     final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+    final bottomInset = MediaQuery.of(context).viewPadding.bottom;
+    final customHandles =
+        subscribed.where((h) => !_popularAccounts.contains(h)).toList();
 
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 16,
-        right: 16,
-        top: 16,
-        bottom: 16 + bottomPadding,
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Manage Accounts',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: Colors.white,
+      child: SingleChildScrollView(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: 16 + bottomPadding + bottomInset,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Manage Accounts',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-          // Custom handle input.
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: widget.handleController,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Enter handle (e.g. elonmusk)',
-                    hintStyle: TextStyle(color: Colors.grey[600]),
-                    prefixText: '@ ',
-                    prefixStyle: TextStyle(color: Colors.grey[500]),
-                    filled: true,
-                    fillColor: const Color(0xFF2A2A2A),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
+            // Custom handle input.
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: widget.handleController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: 'Enter handle (e.g. elonmusk)',
+                      hintStyle: TextStyle(color: Colors.grey[600]),
+                      prefixText: '@ ',
+                      prefixStyle: TextStyle(color: Colors.grey[500]),
+                      filled: true,
+                      fillColor: const Color(0xFF2A2A2A),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide.none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              IconButton(
-                icon: const Icon(Icons.add_circle, color: Color(0xFF00e6c0)),
-                onPressed: () {
-                  final handle = widget.handleController.text.trim();
-                  if (handle.isNotEmpty) {
-                    _subscribe(handle);
-                    widget.handleController.clear();
-                  }
-                },
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-          Text(
-            'Popular',
-            style: TextStyle(
-              color: Colors.grey[500],
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.add_circle, color: Color(0xFF00e6c0)),
+                  onPressed: () {
+                    final handle = widget.handleController.text.trim();
+                    if (handle.isNotEmpty) {
+                      _subscribe(handle);
+                      widget.handleController.clear();
+                    }
+                  },
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 8),
 
-          // Popular accounts.
-          ..._popularAccounts.map((handle) {
-            final isSubscribed = subscribed.contains(handle);
-            return ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                '@$handle',
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+            // Custom accounts (user-added, non-popular) — shown first.
+            if (customHandles.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Your accounts',
+                style: TextStyle(
+                  color: Colors.grey[500],
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-              trailing: isSubscribed
-                  ? IconButton(
-                      icon: const Icon(Icons.remove_circle_outline,
-                          color: Colors.redAccent, size: 20),
-                      onPressed: () => _unsubscribe(handle),
-                    )
-                  : IconButton(
-                      icon: const Icon(Icons.add_circle_outline,
-                          color: Color(0xFF00e6c0), size: 20),
-                      onPressed: () => _subscribe(handle),
-                    ),
-            );
-          }),
+              const SizedBox(height: 8),
+              ...customHandles.map((handle) {
+                return ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    '@$handle',
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.remove_circle_outline,
+                        color: Colors.redAccent, size: 20),
+                    onPressed: () => _unsubscribe(handle),
+                  ),
+                );
+              }),
+            ],
 
-          // Currently subscribed (non-popular).
-          ...subscribed
-              .where((h) => !_popularAccounts.contains(h))
-              .map((handle) {
-            return ListTile(
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: Text(
-                '@$handle',
-                style: const TextStyle(color: Colors.white, fontSize: 14),
+            const SizedBox(height: 16),
+            Text(
+              'Popular',
+              style: TextStyle(
+                color: Colors.grey[500],
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
               ),
-              trailing: IconButton(
-                icon: const Icon(Icons.remove_circle_outline,
-                    color: Colors.redAccent, size: 20),
-                onPressed: () => _unsubscribe(handle),
-              ),
-            );
-          }),
-        ],
+            ),
+            const SizedBox(height: 8),
+
+            // Popular accounts.
+            ..._popularAccounts.map((handle) {
+              final isSubscribed = subscribed.contains(handle);
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  '@$handle',
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+                trailing: isSubscribed
+                    ? IconButton(
+                        icon: const Icon(Icons.remove_circle_outline,
+                            color: Colors.redAccent, size: 20),
+                        onPressed: () => _unsubscribe(handle),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.add_circle_outline,
+                            color: Color(0xFF00e6c0), size: 20),
+                        onPressed: () => _subscribe(handle),
+                      ),
+              );
+            }),
+          ],
+        ),
       ),
     );
   }

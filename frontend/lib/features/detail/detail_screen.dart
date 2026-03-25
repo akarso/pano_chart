@@ -28,7 +28,6 @@ import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
 import '../volatility/volatility_alignment.dart';
 import '../volatility/volatility_model.dart';
-import '../volatility/volatility_widget.dart';
 import '../volatility/http_volatility_api.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
@@ -206,6 +205,8 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData(); // reload fragility for new timeframe
       _behaviorFetched = false;
       _loadBehaviorData(); // reload behavior for new timeframe
+      _volatilityFetched = false;
+      _loadVolatilityData(); // reload volatility for new timeframe
       _startAutoRefresh(); // restart with new timeframe interval
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
@@ -436,7 +437,7 @@ class _DetailScreenState extends State<DetailScreen> {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
     try {
-      final data = await api.fetch();
+      final data = await api.fetch(timeframe: _timeframe);
       if (!mounted) return;
       setState(() {
         _volatilityData = data;
@@ -733,22 +734,17 @@ class _DetailScreenState extends State<DetailScreen> {
                   eventsViewModel: widget.eventsViewModel,
                   onNavigateToEvent: _navigateToEventsList,
                   socialFeedViewModel: widget.socialFeedViewModel,
+                  volatilityAligned: _volatilityData != null
+                      ? alignBucketsToCandles(
+                          candles: _series.candles,
+                          bucketsByMinute: buildBucketLookup(_volatilityData!),
+                          isDailyTimeframe: _timeframe == '1d',
+                        )
+                      : null,
                   warmupCount: _warmupCount,
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
                 ),
-            // Intraday activity profile
-            if (_chartConfig.showVolatility &&
-                _volatilityData != null &&
-                _volatilityData!.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              VolatilityWidget(
-                bars: alignBucketsToCandles(
-                  candles: _series.candles,
-                  bucketsByMinute: buildBucketLookup(_volatilityData!),
-                ),
-              ),
-            ],
             // Overlay controls (social feed + macro events)
             if (widget.socialFeedViewModel != null ||
                 widget.eventsViewModel != null) ...[

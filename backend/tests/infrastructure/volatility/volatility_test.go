@@ -272,7 +272,7 @@ func TestDeriveTimeframe_PartialLastGroup(t *testing.T) {
 	assert.InDelta(t, 1.0, r.Buckets[1].AvgMove, 0.001)
 }
 
-func TestBuildAllTimeframes_ProducesSixTimeframes(t *testing.T) {
+func TestBuildAllTimeframes_ProducesFiveTimeframes(t *testing.T) {
 	base := make([]vol.BucketResult, 1440)
 	for i := range base {
 		base[i] = vol.BucketResult{
@@ -283,14 +283,58 @@ func TestBuildAllTimeframes_ProducesSixTimeframes(t *testing.T) {
 		}
 	}
 	tfs := vol.BuildAllTimeframes(base)
-	assert.Len(t, tfs, 6)
+	assert.Len(t, tfs, 5)
 	assert.Equal(t, vol.TF1m, tfs[0].Timeframe)
 	assert.Len(t, tfs[0].Buckets, 1440) // 1m: pass-through
 	assert.Len(t, tfs[1].Buckets, 288)  // 5m
 	assert.Len(t, tfs[2].Buckets, 96)   // 15m
 	assert.Len(t, tfs[3].Buckets, 24)   // 1h
 	assert.Len(t, tfs[4].Buckets, 6)    // 4h
-	assert.Len(t, tfs[5].Buckets, 1)    // 1d
+}
+
+// ── DeriveDailyOfWeek tests ──
+
+func TestDeriveDailyOfWeek_EmptyWeekly(t *testing.T) {
+	r := vol.DeriveDailyOfWeek(vol.WeeklyResult{})
+	assert.Empty(t, r)
+}
+
+func TestDeriveDailyOfWeek_ProducesSevenDays(t *testing.T) {
+	// Create 7 days × 2 buckets per day.
+	var buckets []vol.WeeklyBucket
+	for day := 0; day < 7; day++ {
+		for _, offset := range []int{0, 720} { // minute 0 and 720 of the day
+			buckets = append(buckets, vol.WeeklyBucket{
+				MinuteOfWeek: day*1440 + offset,
+				AvgMove:      float64(day+1) * 0.1,
+				SpikeProb:    float64(day) * 0.05,
+				Normalized:   1.0,
+			})
+		}
+	}
+	weekly := vol.WeeklyResult{Buckets: buckets}
+	result := vol.DeriveDailyOfWeek(weekly)
+	assert.Len(t, result, 7)
+
+	// Each day should average its two buckets (which are identical).
+	for i, b := range result {
+		assert.Equal(t, i, b.MinuteOfDay, "MinuteOfDay stores day-of-week")
+		assert.InDelta(t, float64(i+1)*0.1, b.AvgMove, 0.001)
+		assert.InDelta(t, float64(i)*0.05, b.SpikeProb, 0.001)
+	}
+}
+
+func TestDeriveDailyOfWeek_SkipsMissingDays(t *testing.T) {
+	// Only provide data for Monday (day 1) and Friday (day 5).
+	buckets := []vol.WeeklyBucket{
+		{MinuteOfWeek: 1*1440 + 60, AvgMove: 0.5, SpikeProb: 0.1, Normalized: 1.0},
+		{MinuteOfWeek: 5*1440 + 60, AvgMove: 0.8, SpikeProb: 0.2, Normalized: 1.2},
+	}
+	weekly := vol.WeeklyResult{Buckets: buckets}
+	result := vol.DeriveDailyOfWeek(weekly)
+	assert.Len(t, result, 2)
+	assert.Equal(t, 1, result[0].MinuteOfDay) // Monday
+	assert.Equal(t, 5, result[1].MinuteOfDay) // Friday
 }
 
 // ── Weekly tests ──

@@ -35,7 +35,9 @@ import (
 	"pano_chart/backend/infrastructure/solana"
 	"pano_chart/backend/infrastructure/symbol_universe"
 
+	appnotify "pano_chart/backend/application/notifications"
 	appsocial "pano_chart/backend/application/social"
+	infranotify "pano_chart/backend/infrastructure/notifications"
 	infrasocial "pano_chart/backend/infrastructure/social"
 )
 
@@ -433,8 +435,23 @@ func main() {
 	}
 	socialCacheTTL := 90 * time.Second
 	rssProvider := infrasocial.NewRSSProvider(nitterBaseURL, nil)
-	socialAccountStore := infrasocial.NewMemoryAccountStore()
-	socialSubStore := infrasocial.NewMemorySubscriptionStore()
+
+	socialDBPath := os.Getenv("SOCIAL_DB_PATH")
+	if socialDBPath == "" {
+		socialDBPath = "./social.sqlite"
+	}
+	socialAccountStore, err := infrasocial.NewSQLiteAccountStore(socialDBPath)
+	if err != nil {
+		log.Fatalf("[main] social account store: %v", err)
+	}
+	defer func() { _ = socialAccountStore.Close() }()
+
+	socialSubStore, err := infrasocial.NewSQLiteSubscriptionStore(socialDBPath)
+	if err != nil {
+		log.Fatalf("[main] social subscription store: %v", err)
+	}
+	defer func() { _ = socialSubStore.Close() }()
+
 	socialCache := appsocial.NewPostCache(socialCacheTTL)
 	socialDispatcher := appsocial.NewDispatcher(256)
 	socialService := appsocial.NewService(rssProvider, socialAccountStore, socialSubStore, socialCache)
@@ -475,6 +492,33 @@ func main() {
 		}
 	} else {
 		log.Println("[main] GOOGLE_APPLICATION_CREDENTIALS not set — push notifications disabled")
+	}
+
+	// --- Notification engine (broadcast: market, setup, macro, news) ---
+	if fcmCredsPath != "" {
+		fcmForBroadcast, err := infrasocial.NewFCMNotifier(fcmCredsPath, fcmProjectID)
+		if err != nil {
+			log.Printf("[main] broadcast FCM init failed: %v", err)
+		} else {
+			broadcastSender := infranotify.NewBroadcastSender(deviceStore, fcmForBroadcast)
+			notifyEngine := appnotify.NewEngine(broadcastSender, appnotify.DefaultEngineConfig())
+
+			// Macro event provider adapter (wraps EventsUseCase).
+			var macroProvider appnotify.EventProvider
+			if eventsUC != nil {
+				macroProvider = &eventsAdapter{uc: eventsUC}
+			}
+
+			notifyScheduler := appnotify.NewScheduler(
+				notifyEngine,
+				marketService, // implements MarketProvider (Calculate)
+				nil,           // setup provider — wired in a future PR
+				macroProvider,
+				appnotify.DefaultSchedulerConfig(),
+			)
+			go notifyScheduler.Run(socialCtx)
+			log.Println("[main] Notification engine + scheduler started")
+		}
 	}
 
 	// --- Handlers ---
@@ -545,4 +589,16 @@ func main() {
 
 	fmt.Printf("Server starting on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+// eventsAdapter adapts EventsUseCase to the notification scheduler's EventProvider.
+type eventsAdapter struct {
+	uc usecases.EventsUseCase
+}
+
+func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]domain.Event, error) {
+	return a.uc.Execute(ctx, usecases.GetEventsRequest{
+		DateFrom: from,
+		DateTo:   to,
+	})
 }

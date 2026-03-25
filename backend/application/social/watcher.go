@@ -100,6 +100,8 @@ func (w *Watcher) pollNext() {
 		return
 	}
 
+	log.Printf("[social] poll %s: %d posts fetched, lastSeen=%s", acc.Handle, len(posts), acc.LastSeenPostID)
+
 	// Cache all fetched posts.
 	w.cache.Set(acc.ID, posts)
 
@@ -107,14 +109,17 @@ func (w *Watcher) pollNext() {
 	newPosts := FilterNew(acc, posts)
 
 	if len(newPosts) > 0 {
+		log.Printf("[social] %s: %d NEW posts → dispatching", acc.Handle, len(newPosts))
 		w.dispatcher.Dispatch(newPosts)
 
-		// Update last seen.
+		// Update last seen — both in DB and in the scheduler's in-memory copy
+		// so subsequent polls don't re-dispatch the same posts.
 		acc.LastSeenPostID = newPosts[0].ID
 		acc.LastPolledAt = time.Now().Unix()
 		if err := w.accounts.Upsert(acc); err != nil {
 			log.Printf("[social] upsert %s: %v", acc.ID, err)
 		}
+		w.scheduler.UpdateAccount(acc)
 	}
 }
 

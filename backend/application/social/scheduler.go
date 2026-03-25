@@ -45,6 +45,19 @@ func (s *Scheduler) Next() (domain.Account, bool) {
 	return acc, true
 }
 
+// UpdateAccount patches the in-memory copy so that subsequent Next calls
+// return the updated state without waiting for a full refresh.
+func (s *Scheduler) UpdateAccount(updated domain.Account) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.accounts {
+		if s.accounts[i].ID == updated.ID {
+			s.accounts[i] = updated
+			return
+		}
+	}
+}
+
 // Len returns the current number of accounts.
 func (s *Scheduler) Len() int {
 	s.mu.Lock()

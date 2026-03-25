@@ -13,8 +13,8 @@ import (
 func main() {
 	symbol := "BTCUSDT"
 	days := 150
-	dbPath := envOrDefault("VOL_DB_PATH", "volatility_candles.sqlite")
-	outFile := envOrDefault("VOL_OUTPUT", "volatility_1m.json")
+	dbPath := envOrDefault("VOL_DB_PATH", "/var/www/pano_charts/volatility_candles.sqlite")
+	outFile := envOrDefault("VOL_OUTPUT", "/var/www/pano_charts/volatility_1m.json")
 
 	// --- SQLite candle cache ---
 	cache, err := vol.NewCandleCache(dbPath)
@@ -105,6 +105,14 @@ func main() {
 	atr := vol.ComputeATR(candles, atrPeriod)
 	weekly := vol.BuildWeekly(candles[atrPeriod:], atr[atrPeriod:])
 	fmt.Printf("Weekly buckets: %d\n", len(weekly.Buckets))
+
+	// --- Day-of-week (1d) from weekly data ---
+	dailyBuckets := vol.DeriveDailyOfWeek(weekly)
+	intraday = append(intraday, vol.TimeframeResult{
+		Timeframe: vol.TF1d,
+		Buckets:   dailyBuckets,
+	})
+	fmt.Printf("  1d (day-of-week): %d buckets\n", len(dailyBuckets))
 
 	// --- Save JSON ---
 	full := vol.FullResult{

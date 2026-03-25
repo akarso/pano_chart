@@ -35,7 +35,8 @@ func DeriveTimeframe(base []BucketResult, groupSize int, tf Timeframe) Timeframe
 }
 
 // BuildAllTimeframes derives all standard timeframes from 1-minute base
-// buckets.
+// buckets.  The 1d timeframe is intentionally excluded here — it is
+// derived from weekly day-of-week data instead (see DeriveDailyOfWeek).
 func BuildAllTimeframes(base []BucketResult) []TimeframeResult {
 	return []TimeframeResult{
 		{Timeframe: TF1m, Buckets: base},
@@ -43,6 +44,5 @@ func BuildAllTimeframes(base []BucketResult) []TimeframeResult {
 		DeriveTimeframe(base, 15, TF15m),
 		DeriveTimeframe(base, 60, TF1h),
 		DeriveTimeframe(base, 240, TF4h),
-		DeriveTimeframe(base, 1440, TF1d),
 	}
 }

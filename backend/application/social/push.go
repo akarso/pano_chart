@@ -49,6 +49,7 @@ func (c *PushConsumer) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
+			log.Printf("[push] received batch of %d posts", len(posts))
 			c.handleBatch(ctx, posts)
 		}
 	}
@@ -69,6 +70,7 @@ func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 			log.Printf("[push] users for %s: %v", accountID, err)
 			continue
 		}
+		log.Printf("[push] account %s: %d subscribers", accountID, len(users))
 		if len(users) == 0 {
 			continue
 		}
@@ -78,6 +80,7 @@ func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 			log.Printf("[push] tokens for %s: %v", accountID, err)
 			continue
 		}
+		log.Printf("[push] account %s: %d device tokens", accountID, len(tokens))
 		if len(tokens) == 0 {
 			continue
 		}
@@ -93,6 +96,8 @@ func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 		for _, token := range tokens {
 			if err := c.push.Send(ctx, token, title, body); err != nil {
 				log.Printf("[push] send to token …%s: %v", lastN(token, 8), err)
+			} else {
+				log.Printf("[push] sent to …%s: %s", lastN(token, 8), title)
 			}
 		}
 	}

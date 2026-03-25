@@ -81,6 +81,18 @@ func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 		return nil, err
 	}
 
+	// Fallback: if the file is the old flat format (just "buckets" at top
+	// level, no "intraday" wrapper), wrap it as a single 1m timeframe.
+	if len(result.Intraday) == 0 {
+		var legacy vol.Result
+		if err := json.Unmarshal(data, &legacy); err == nil && len(legacy.Buckets) > 0 {
+			result.Intraday = []vol.TimeframeResult{
+				{Timeframe: vol.TF1m, Buckets: legacy.Buckets},
+			}
+			log.Printf("[volatility] migrated legacy format (%d buckets) from %s", len(legacy.Buckets), h.path)
+		}
+	}
+
 	h.cached = &result
 	log.Printf("[volatility] loaded %d timeframes from %s", len(result.Intraday), h.path)
 	return h.cached, nil

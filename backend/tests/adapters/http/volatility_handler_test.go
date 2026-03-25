@@ -134,3 +134,44 @@ func TestVolatilityHandler_MissingFile(t *testing.T) {
 		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 }
+
+func TestVolatilityHandler_LegacyFormat(t *testing.T) {
+	// Write old-style flat JSON: {"buckets": [...]}
+	legacy := vol.Result{
+		Buckets: []vol.BucketResult{
+			{MinuteOfDay: 0, AvgMove: 0.01, SpikeProb: 0.1, Normalized: 0.8},
+			{MinuteOfDay: 1, AvgMove: 0.02, SpikeProb: 0.9, Normalized: 1.5},
+		},
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vol_legacy.json")
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	handler := httpAdapter.NewVolatilityHandler(path)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/volatility?timeframe=1m", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var tfr vol.TimeframeResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &tfr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if string(tfr.Timeframe) != "1m" {
+		t.Fatalf("expected timeframe 1m, got %s", tfr.Timeframe)
+	}
+	if len(tfr.Buckets) != 2 {
+		t.Fatalf("expected 2 buckets, got %d", len(tfr.Buckets))
+	}
+}

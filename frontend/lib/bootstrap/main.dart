@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -8,6 +10,7 @@ import '../core/di/composition_root.dart';
 import '../features/billing/billing_manager.dart';
 import '../features/billing/trial_manager.dart';
 import '../features/overview/overview_widget.dart';
+import '../features/social/notification_service.dart';
 import '../features/social/social_feed_view_model.dart';
 import '../infrastructure/preferences_service.dart';
 import '../infrastructure/stablecoin_config.dart';
@@ -104,6 +107,48 @@ void main() async {
   final socialFeedViewModel =
       socialRoot.createSocialFeedViewModel(userId: prefs.userId);
   socialFeedViewModel.attachPrefs(prefs);
+
+  // ── Firebase + device registration + local notifications ──
+  final notificationService = NotificationService();
+  try {
+    await Firebase.initializeApp();
+    await notificationService.init();
+
+    // Request notification permission (required on Android 13+ / iOS).
+    await FirebaseMessaging.instance.requestPermission();
+
+    final fcmToken = await FirebaseMessaging.instance.getToken();
+    if (fcmToken != null) {
+      final deviceApi = socialRoot.createDeviceRegistrationApi();
+      final platform =
+          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+      try {
+        await deviceApi.register(
+          userId: prefs.userId,
+          deviceId: prefs.userId,
+          fcmToken: fcmToken,
+          platform: platform,
+        );
+      } catch (_) {
+        // Non-fatal — push won't work but app is still usable.
+      }
+
+      // Re-register whenever the FCM token refreshes.
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+        deviceApi.register(
+          userId: prefs.userId,
+          deviceId: prefs.userId,
+          fcmToken: newToken,
+          platform: platform,
+        );
+      });
+    }
+  } catch (_) {
+    // Firebase unavailable (e.g. web, desktop, emulator without config).
+  }
+
+  // Wire local notification display for new social posts.
+  socialFeedViewModel.onNewPost = notificationService.showNewPostNotification;
 
   final lifecycleManager = AppLifecycleManager()..init();
 

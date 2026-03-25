@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'volatility_model.dart';
 import 'volatility_painter.dart';
 
-/// Compact bar chart showing intraday volatility profile below the
-/// candlestick chart. Bars above the centre line mean above-average
-/// activity; colour encodes spike risk (green → yellow → red).
+/// Standalone volatility bar chart for use outside the main interactive
+/// chart (e.g. previews or summaries). Bars above the centre line mean
+/// above-average activity; colour encodes spike risk (green → yellow → red).
 class VolatilityWidget extends StatelessWidget {
   /// Volatility buckets aligned to visible candles—one entry per bar.
-  final List<VolatilityBucket> bars;
+  final List<VolatilityBucket?> bars;
 
   const VolatilityWidget({
     super.key,
@@ -19,14 +19,20 @@ class VolatilityWidget extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 60,
-      child: CustomPaint(
-        size: const Size(double.infinity, 60),
-        painter: VolatilityPainter(
-          data: bars,
-          start: 0,
-          count: bars.length,
-        ),
-      ),
+      child: LayoutBuilder(builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final cw = bars.isEmpty ? 1.0 : w / bars.length;
+        return CustomPaint(
+          size: Size(w, 60),
+          painter: VolatilityPainter(
+            aligned: bars,
+            startIndex: 0,
+            endIndex: bars.length,
+            candleWidth: cw,
+            scrollPixelOffset: 0,
+          ),
+        );
+      }),
     );
   }
 }

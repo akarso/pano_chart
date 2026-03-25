@@ -49,4 +49,7 @@ type DeviceTokenStore interface {
 
 	// TokensForUsers returns all distinct FCM tokens for the given user IDs.
 	TokensForUsers(userIDs []string) ([]string, error)
+
+	// AllTokens returns every registered FCM token (for broadcast notifications).
+	AllTokens() ([]string, error)
 }
