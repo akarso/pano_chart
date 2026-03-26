@@ -1,11 +1,14 @@
 import '../../infrastructure/preferences_service.dart';
 
+/// Valid timeframe values matching backend domain/timeframe.go.
+const kTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
+
 /// Notification preferences per category — synced with [PreferencesService].
 ///
 /// Market regime is split into three independent toggles (uptrend, downtrend,
-/// sideways) each with a configurable minimum dominance threshold. The
-/// `market` notification type is considered enabled when **any** of the three
-/// sub-toggles is on.
+/// sideways) each with a configurable minimum dominance threshold and
+/// timeframe. The `market` notification type is considered enabled when
+/// **any** of the three sub-toggles is on.
 class NotificationSettings {
   bool social;
   bool macro;
@@ -20,6 +23,11 @@ class NotificationSettings {
   double sidewaysMinDominance;
   double setupMinScore;
 
+  String uptrendTimeframe;
+  String downtrendTimeframe;
+  String sidewaysTimeframe;
+  String setupTimeframe;
+
   NotificationSettings({
     required this.social,
     required this.macro,
@@ -32,6 +40,10 @@ class NotificationSettings {
     this.downtrendMinDominance = 0.75,
     this.sidewaysMinDominance = 0.75,
     this.setupMinScore = 0.75,
+    this.uptrendTimeframe = '1h',
+    this.downtrendTimeframe = '1h',
+    this.sidewaysTimeframe = '1h',
+    this.setupTimeframe = '1h',
   });
 
   factory NotificationSettings.defaults() => NotificationSettings(
@@ -58,6 +70,10 @@ class NotificationSettings {
         downtrendMinDominance: prefs.downtrendMinDominance,
         sidewaysMinDominance: prefs.sidewaysMinDominance,
         setupMinScore: prefs.setupMinScore,
+        uptrendTimeframe: prefs.uptrendTimeframe,
+        downtrendTimeframe: prefs.downtrendTimeframe,
+        sidewaysTimeframe: prefs.sidewaysTimeframe,
+        setupTimeframe: prefs.setupTimeframe,
       );
 
   /// Persists all values back to [PreferencesService].
@@ -73,6 +89,10 @@ class NotificationSettings {
     prefs.downtrendMinDominance = downtrendMinDominance;
     prefs.sidewaysMinDominance = sidewaysMinDominance;
     prefs.setupMinScore = setupMinScore;
+    prefs.uptrendTimeframe = uptrendTimeframe;
+    prefs.downtrendTimeframe = downtrendTimeframe;
+    prefs.sidewaysTimeframe = sidewaysTimeframe;
+    prefs.setupTimeframe = setupTimeframe;
   }
 
   /// Returns `true` if the given notification [type] is enabled.
@@ -107,6 +127,10 @@ class NotificationSettings {
         'downtrend_min_dominance': downtrendMinDominance,
         'sideways_min_dominance': sidewaysMinDominance,
         'setup_min_score': setupMinScore,
+        'uptrend_timeframe': uptrendTimeframe,
+        'downtrend_timeframe': downtrendTimeframe,
+        'sideways_timeframe': sidewaysTimeframe,
+        'setup_timeframe': setupTimeframe,
       };
 
   /// Applies server-side config values onto this instance.
@@ -126,5 +150,13 @@ class NotificationSettings {
         (json['sideways_min_dominance'] as num?)?.toDouble() ?? sidewaysMinDominance;
     setupMinScore =
         (json['setup_min_score'] as num?)?.toDouble() ?? setupMinScore;
+    uptrendTimeframe =
+        json['uptrend_timeframe'] as String? ?? uptrendTimeframe;
+    downtrendTimeframe =
+        json['downtrend_timeframe'] as String? ?? downtrendTimeframe;
+    sidewaysTimeframe =
+        json['sideways_timeframe'] as String? ?? sidewaysTimeframe;
+    setupTimeframe =
+        json['setup_timeframe'] as String? ?? setupTimeframe;
   }
 }

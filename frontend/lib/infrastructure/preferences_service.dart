@@ -204,6 +204,10 @@ class PreferencesService {
   static const _keyDowntrendMinDominance = 'settings.notify.downtrendMinDom';
   static const _keySidewaysMinDominance = 'settings.notify.sidewaysMinDom';
   static const _keySetupMinScore = 'settings.notify.setupMinScore';
+  static const _keyUptrendTimeframe = 'settings.notify.uptrendTf';
+  static const _keyDowntrendTimeframe = 'settings.notify.downtrendTf';
+  static const _keySidewaysTimeframe = 'settings.notify.sidewaysTf';
+  static const _keySetupTimeframe = 'settings.notify.setupTf';
   static const _socialSettingsPrefix = 'social.settings.';
 
   bool get showSocialOnChart => _prefs.getBool(_keyShowSocialOnChart) ?? false;
@@ -243,6 +247,18 @@ class PreferencesService {
 
   double get setupMinScore => _prefs.getDouble(_keySetupMinScore) ?? 0.75;
   set setupMinScore(double v) => _prefs.setDouble(_keySetupMinScore, v);
+
+  String get uptrendTimeframe => _prefs.getString(_keyUptrendTimeframe) ?? '1h';
+  set uptrendTimeframe(String v) => _prefs.setString(_keyUptrendTimeframe, v);
+
+  String get downtrendTimeframe => _prefs.getString(_keyDowntrendTimeframe) ?? '1h';
+  set downtrendTimeframe(String v) => _prefs.setString(_keyDowntrendTimeframe, v);
+
+  String get sidewaysTimeframe => _prefs.getString(_keySidewaysTimeframe) ?? '1h';
+  set sidewaysTimeframe(String v) => _prefs.setString(_keySidewaysTimeframe, v);
+
+  String get setupTimeframe => _prefs.getString(_keySetupTimeframe) ?? '1h';
+  set setupTimeframe(String v) => _prefs.setString(_keySetupTimeframe, v);
 
   /// Retrieves per-account filter settings for [handle].
   SocialAccountSettings getAccountSettings(String handle) {

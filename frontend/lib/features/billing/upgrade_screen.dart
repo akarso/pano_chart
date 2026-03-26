@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'billing_manager.dart';
-import 'solana_payment_screen.dart';
 
 /// Full-screen dialog for upgrading to Pro or managing an existing
 /// subscription.
@@ -185,26 +184,6 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
             style: TextStyle(color: Colors.white54, fontSize: 14),
           ),
         ),
-        const SizedBox(height: 8),
-        const Divider(color: Colors.white12),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: busy ? null : _onPayWithSolana,
-            icon: const Icon(Icons.currency_exchange, size: 18),
-            label: const Text('Pay with Solana'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF00E6C0),
-              side: const BorderSide(color: Color(0xFF00E6C0)),
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-              textStyle:
-                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -237,17 +216,6 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
           'https://play.google.com/store/account/subscriptions'),
       mode: LaunchMode.externalApplication,
     );
-  }
-
-  Future<void> _onPayWithSolana() async {
-    final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => SolanaPaymentScreen(billingManager: _billing),
-      ),
-    );
-    if (result == true && mounted) {
-      setState(() {}); // refresh UI with new subscription status
-    }
   }
 
   String _formatDate(DateTime dt) {

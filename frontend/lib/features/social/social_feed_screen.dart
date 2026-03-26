@@ -261,6 +261,25 @@ class _PostCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                  if (post.isReply) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[800],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: const Text(
+                        'Reply',
+                        style: TextStyle(
+                          fontSize: 9,
+                          color: Colors.white54,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const Spacer(),
                   Text(
                     _formatTime(post.dateTime),
@@ -492,6 +511,17 @@ class _AccountSettingsSheetState extends State<_AccountSettingsSheet> {
             activeColor: const Color(0xFF42A5F5),
             onChanged: (v) =>
                 setState(() => _settings = _settings.copyWith(omitRetweets: v)),
+          ),
+
+          // Omit replies toggle.
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Omit replies',
+                style: TextStyle(color: Colors.white, fontSize: 14)),
+            value: _settings.omitReplies,
+            activeColor: const Color(0xFF42A5F5),
+            onChanged: (v) =>
+                setState(() => _settings = _settings.copyWith(omitReplies: v)),
           ),
 
           // Min body length.

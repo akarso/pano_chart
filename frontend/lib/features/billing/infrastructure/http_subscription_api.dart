@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import '../api/sol_price_info.dart';
 import '../api/subscription_api.dart';
 
 /// HTTP implementation of [SubscriptionApi] that talks to the backend.
@@ -49,18 +48,5 @@ class HttpSubscriptionApi implements SubscriptionApi {
     final expiresAt =
         expiresAtStr != null ? DateTime.tryParse(expiresAtStr) : null;
     return SubscriptionStatus(active: active, expiresAt: expiresAt);
-  }
-
-  @override
-  Future<SolPriceInfo> getSolPrice() async {
-    final uri = Uri.parse('$baseUrl/api/sol/price');
-    final response = await client.get(uri);
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Failed to get SOL price (${response.statusCode})',
-      );
-    }
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    return SolPriceInfo.fromJson(data);
   }
 }

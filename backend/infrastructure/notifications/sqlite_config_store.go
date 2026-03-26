@@ -47,6 +47,10 @@ type configJSON struct {
 	DowntrendMinDominance float64 `json:"downtrend_min_dominance"`
 	SidewaysMinDominance  float64 `json:"sideways_min_dominance"`
 	SetupMinScore         float64 `json:"setup_min_score"`
+	UptrendTimeframe      string  `json:"uptrend_timeframe,omitempty"`
+	DowntrendTimeframe    string  `json:"downtrend_timeframe,omitempty"`
+	SidewaysTimeframe     string  `json:"sideways_timeframe,omitempty"`
+	SetupTimeframe        string  `json:"setup_timeframe,omitempty"`
 }
 
 func toJSON(cfg appnotify.NotificationConfig) configJSON {
@@ -62,11 +66,15 @@ func toJSON(cfg appnotify.NotificationConfig) configJSON {
 		DowntrendMinDominance: cfg.DowntrendMinDominance,
 		SidewaysMinDominance:  cfg.SidewaysMinDominance,
 		SetupMinScore:         cfg.SetupMinScore,
+		UptrendTimeframe:      cfg.UptrendTimeframe,
+		DowntrendTimeframe:    cfg.DowntrendTimeframe,
+		SidewaysTimeframe:     cfg.SidewaysTimeframe,
+		SetupTimeframe:        cfg.SetupTimeframe,
 	}
 }
 
 func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
-	return appnotify.NotificationConfig{
+	cfg := appnotify.NotificationConfig{
 		UserID:                userID,
 		Social:                j.Social,
 		Macro:                 j.Macro,
@@ -79,7 +87,25 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 		DowntrendMinDominance: j.DowntrendMinDominance,
 		SidewaysMinDominance:  j.SidewaysMinDominance,
 		SetupMinScore:         j.SetupMinScore,
+		UptrendTimeframe:      j.UptrendTimeframe,
+		DowntrendTimeframe:    j.DowntrendTimeframe,
+		SidewaysTimeframe:     j.SidewaysTimeframe,
+		SetupTimeframe:        j.SetupTimeframe,
 	}
+	// Backfill empty timeframes from pre-existing configs.
+	if cfg.UptrendTimeframe == "" {
+		cfg.UptrendTimeframe = "1h"
+	}
+	if cfg.DowntrendTimeframe == "" {
+		cfg.DowntrendTimeframe = "1h"
+	}
+	if cfg.SidewaysTimeframe == "" {
+		cfg.SidewaysTimeframe = "1h"
+	}
+	if cfg.SetupTimeframe == "" {
+		cfg.SetupTimeframe = "1h"
+	}
+	return cfg
 }
 
 // Get returns the config for a user, or defaults if none saved.

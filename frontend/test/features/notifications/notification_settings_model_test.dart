@@ -18,6 +18,10 @@ void main() {
       expect(s.downtrendMinDominance, 0.75);
       expect(s.sidewaysMinDominance, 0.75);
       expect(s.setupMinScore, 0.75);
+      expect(s.uptrendTimeframe, '1h');
+      expect(s.downtrendTimeframe, '1h');
+      expect(s.sidewaysTimeframe, '1h');
+      expect(s.setupTimeframe, '1h');
     });
 
     test('isEnabled maps types correctly', () {
@@ -66,6 +70,10 @@ void main() {
         'settings.notify.downtrendMinDom': 0.60,
         'settings.notify.sidewaysMinDom': 0.70,
         'settings.notify.setupMinScore': 0.85,
+        'settings.notify.uptrendTf': '15m',
+        'settings.notify.downtrendTf': '4h',
+        'settings.notify.sidewaysTf': '1d',
+        'settings.notify.setupTf': '5m',
       });
       final prefs = await PreferencesService.create();
       final s = NotificationSettings.fromPrefs(prefs);
@@ -80,6 +88,10 @@ void main() {
       expect(s.downtrendMinDominance, 0.60);
       expect(s.sidewaysMinDominance, 0.70);
       expect(s.setupMinScore, 0.85);
+      expect(s.uptrendTimeframe, '15m');
+      expect(s.downtrendTimeframe, '4h');
+      expect(s.sidewaysTimeframe, '1d');
+      expect(s.setupTimeframe, '5m');
     });
 
     test('save persists all values', () async {
@@ -97,6 +109,10 @@ void main() {
         downtrendMinDominance: 0.80,
         sidewaysMinDominance: 0.55,
         setupMinScore: 0.90,
+        uptrendTimeframe: '15m',
+        downtrendTimeframe: '4h',
+        sidewaysTimeframe: '1d',
+        setupTimeframe: '5m',
       );
       s.save(prefs);
       expect(prefs.notificationsEnabled, isFalse);
@@ -110,6 +126,10 @@ void main() {
       expect(prefs.downtrendMinDominance, 0.80);
       expect(prefs.sidewaysMinDominance, 0.55);
       expect(prefs.setupMinScore, 0.90);
+      expect(prefs.uptrendTimeframe, '15m');
+      expect(prefs.downtrendTimeframe, '4h');
+      expect(prefs.sidewaysTimeframe, '1d');
+      expect(prefs.setupTimeframe, '5m');
     });
 
     test('fromPrefs uses defaults when no keys set', () async {
@@ -126,6 +146,8 @@ void main() {
       expect(s.news, isTrue);
       expect(s.uptrendMinDominance, 0.75);
       expect(s.setupMinScore, 0.75);
+      expect(s.uptrendTimeframe, '1h');
+      expect(s.setupTimeframe, '1h');
     });
 
     test('toJson produces backend-compatible format', () {
@@ -155,6 +177,10 @@ void main() {
       expect(json['downtrend_min_dominance'], 0.65);
       expect(json['sideways_min_dominance'], 0.70);
       expect(json['setup_min_score'], 0.90);
+      expect(json['uptrend_timeframe'], '1h');
+      expect(json['downtrend_timeframe'], '1h');
+      expect(json['sideways_timeframe'], '1h');
+      expect(json['setup_timeframe'], '1h');
     });
 
     test('applyFromJson merges server values', () {
@@ -172,6 +198,40 @@ void main() {
       // Unset fields keep defaults.
       expect(s.downtrend, isTrue);
       expect(s.sidewaysMinDominance, 0.75);
+    });
+
+    test('toJson includes timeframes', () {
+      final s = NotificationSettings(
+        social: true,
+        macro: true,
+        uptrend: true,
+        downtrend: true,
+        sideways: true,
+        setupOfDay: true,
+        news: true,
+        uptrendTimeframe: '15m',
+        downtrendTimeframe: '4h',
+        sidewaysTimeframe: '1d',
+        setupTimeframe: '5m',
+      );
+      final json = s.toJson('u1');
+      expect(json['uptrend_timeframe'], '15m');
+      expect(json['downtrend_timeframe'], '4h');
+      expect(json['sideways_timeframe'], '1d');
+      expect(json['setup_timeframe'], '5m');
+    });
+
+    test('applyFromJson merges timeframes', () {
+      final s = NotificationSettings.defaults();
+      s.applyFromJson({
+        'uptrend_timeframe': '15m',
+        'setup_timeframe': '4h',
+      });
+      expect(s.uptrendTimeframe, '15m');
+      expect(s.setupTimeframe, '4h');
+      // Unset timeframes keep defaults.
+      expect(s.downtrendTimeframe, '1h');
+      expect(s.sidewaysTimeframe, '1h');
     });
   });
 }

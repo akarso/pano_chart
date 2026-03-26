@@ -53,6 +53,15 @@ class _FakeSocialApi implements SocialApi {
     if (shouldThrow) throw Exception('network error');
     unsubscribedHandles.add(handle);
   }
+
+  @override
+  Future<void> updateSettings({
+    required String userId,
+    required String handle,
+    required SocialAccountSettings settings,
+  }) async {
+    // no-op for tests
+  }
 }
 
 void main() {

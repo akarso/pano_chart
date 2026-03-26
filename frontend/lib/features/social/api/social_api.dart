@@ -18,4 +18,11 @@ abstract class SocialApi {
 
   /// Returns the account IDs the given [userId] is subscribed to.
   Future<SocialAccountsResponse> fetchAccounts(String userId);
+
+  /// Syncs per-account filter settings to the server for push filtering.
+  Future<void> updateSettings({
+    required String userId,
+    required String handle,
+    required SocialAccountSettings settings,
+  });
 }

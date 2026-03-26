@@ -9,4 +9,5 @@ type Post struct {
 	URL       string // permalink
 	Timestamp int64  // unix timestamp of publication
 	IsRetweet bool   // true when this is a retweet / boost
+	IsReply   bool   // true when this is a reply to another post
 }

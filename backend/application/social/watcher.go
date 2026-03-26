@@ -115,6 +115,7 @@ func (w *Watcher) pollNext() {
 		// Update last seen — both in DB and in the scheduler's in-memory copy
 		// so subsequent polls don't re-dispatch the same posts.
 		acc.LastSeenPostID = newPosts[0].ID
+		acc.LastSeenTimestamp = newPosts[0].Timestamp
 		acc.LastPolledAt = time.Now().Unix()
 		if err := w.accounts.Upsert(acc); err != nil {
 			log.Printf("[social] upsert %s: %v", acc.ID, err)

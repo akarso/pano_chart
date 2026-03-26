@@ -150,6 +150,7 @@ void main() {
         expect(req.url.path, '/api/social/feed');
         expect(req.url.queryParameters['handle'], 'alice');
         expect(req.url.queryParameters['omit_retweets'], 'true');
+        expect(req.url.queryParameters['omit_replies'], 'true');
         expect(req.url.queryParameters['min_length'], '50');
         expect(req.url.queryParameters['keywords'], 'bitcoin,eth');
         return http.Response(
@@ -167,6 +168,7 @@ void main() {
         'alice',
         settings: const SocialAccountSettings(
           omitRetweets: true,
+          omitReplies: true,
           minLength: 50,
           keywords: ['bitcoin', 'eth'],
         ),
@@ -176,6 +178,7 @@ void main() {
     test('fetchFeed omits filter params when settings are default', () async {
       final client = http_testing.MockClient((req) async {
         expect(req.url.queryParameters.containsKey('omit_retweets'), isFalse);
+        expect(req.url.queryParameters.containsKey('omit_replies'), isFalse);
         expect(req.url.queryParameters.containsKey('min_length'), isFalse);
         expect(req.url.queryParameters.containsKey('keywords'), isFalse);
         return http.Response(

@@ -56,32 +56,39 @@ func (s *SQLiteAccountStore) migrate() error {
 		platform         TEXT NOT NULL,
 		handle           TEXT NOT NULL,
 		last_seen_post   TEXT NOT NULL DEFAULT '',
+		last_seen_ts     INTEGER NOT NULL DEFAULT 0,
 		last_polled_at   INTEGER NOT NULL DEFAULT 0,
 		last_used_at     INTEGER NOT NULL DEFAULT 0
 	)`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add last_seen_ts if the table existed before this column.
+	_, _ = s.db.Exec(`ALTER TABLE social_accounts ADD COLUMN last_seen_ts INTEGER NOT NULL DEFAULT 0`)
+	return nil
 }
 
 func (s *SQLiteAccountStore) Upsert(account domain.Account) error {
-	_, err := s.db.Exec(`INSERT INTO social_accounts (id, platform, handle, last_seen_post, last_polled_at, last_used_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+	_, err := s.db.Exec(`INSERT INTO social_accounts (id, platform, handle, last_seen_post, last_seen_ts, last_polled_at, last_used_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			last_seen_post = excluded.last_seen_post,
+			last_seen_ts   = excluded.last_seen_ts,
 			last_polled_at = excluded.last_polled_at,
 			last_used_at   = excluded.last_used_at`,
 		account.ID, account.Platform, account.Handle,
-		account.LastSeenPostID, account.LastPolledAt, account.LastUsedAt,
+		account.LastSeenPostID, account.LastSeenTimestamp, account.LastPolledAt, account.LastUsedAt,
 	)
 	return err
 }
 
 func (s *SQLiteAccountStore) Get(accountID string) (*domain.Account, error) {
-	row := s.db.QueryRow(`SELECT id, platform, handle, last_seen_post, last_polled_at, last_used_at
+	row := s.db.QueryRow(`SELECT id, platform, handle, last_seen_post, last_seen_ts, last_polled_at, last_used_at
 		FROM social_accounts WHERE id = ?`, accountID)
 
 	var acc domain.Account
 	err := row.Scan(&acc.ID, &acc.Platform, &acc.Handle,
-		&acc.LastSeenPostID, &acc.LastPolledAt, &acc.LastUsedAt)
+		&acc.LastSeenPostID, &acc.LastSeenTimestamp, &acc.LastPolledAt, &acc.LastUsedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -92,7 +99,7 @@ func (s *SQLiteAccountStore) Get(accountID string) (*domain.Account, error) {
 }
 
 func (s *SQLiteAccountStore) GetAllActive() ([]domain.Account, error) {
-	rows, err := s.db.Query(`SELECT id, platform, handle, last_seen_post, last_polled_at, last_used_at
+	rows, err := s.db.Query(`SELECT id, platform, handle, last_seen_post, last_seen_ts, last_polled_at, last_used_at
 		FROM social_accounts`)
 	if err != nil {
 		return nil, err
@@ -103,7 +110,7 @@ func (s *SQLiteAccountStore) GetAllActive() ([]domain.Account, error) {
 	for rows.Next() {
 		var acc domain.Account
 		if err := rows.Scan(&acc.ID, &acc.Platform, &acc.Handle,
-			&acc.LastSeenPostID, &acc.LastPolledAt, &acc.LastUsedAt); err != nil {
+			&acc.LastSeenPostID, &acc.LastSeenTimestamp, &acc.LastPolledAt, &acc.LastUsedAt); err != nil {
 			return nil, err
 		}
 		result = append(result, acc)

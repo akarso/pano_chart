@@ -28,6 +28,10 @@ void main() {
             'downtrend_min_dominance': 0.60,
             'sideways_min_dominance': 0.70,
             'setup_min_score': 0.85,
+            'uptrend_timeframe': '15m',
+            'downtrend_timeframe': '4h',
+            'sideways_timeframe': '1d',
+            'setup_timeframe': '5m',
           }),
           200,
         );
@@ -50,6 +54,10 @@ void main() {
       expect(s.downtrendMinDominance, 0.60);
       expect(s.sidewaysMinDominance, 0.70);
       expect(s.setupMinScore, 0.85);
+      expect(s.uptrendTimeframe, '15m');
+      expect(s.downtrendTimeframe, '4h');
+      expect(s.sidewaysTimeframe, '1d');
+      expect(s.setupTimeframe, '5m');
     });
 
     test('fetch throws on non-200', () async {
@@ -93,6 +101,10 @@ void main() {
         downtrendMinDominance: 0.80,
         sidewaysMinDominance: 0.50,
         setupMinScore: 0.90,
+        uptrendTimeframe: '15m',
+        downtrendTimeframe: '4h',
+        sidewaysTimeframe: '1d',
+        setupTimeframe: '5m',
       );
 
       await api.save('u1', s);
@@ -102,6 +114,10 @@ void main() {
       expect(sentBody!['uptrend'], isTrue);
       expect(sentBody!['uptrend_min_dominance'], 0.60);
       expect(sentBody!['setup_min_score'], 0.90);
+      expect(sentBody!['uptrend_timeframe'], '15m');
+      expect(sentBody!['downtrend_timeframe'], '4h');
+      expect(sentBody!['sideways_timeframe'], '1d');
+      expect(sentBody!['setup_timeframe'], '5m');
     });
 
     test('save throws on non-200', () async {

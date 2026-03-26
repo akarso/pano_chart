@@ -1,18 +1,24 @@
 package social
 
-import "sync"
+import (
+	"sync"
+
+	appsocial "pano_chart/backend/application/social"
+)
 
 // MemorySubscriptionStore is an in-memory implementation of
 // application/social.SubscriptionStore. Suitable for MVP.
 type MemorySubscriptionStore struct {
-	mu   sync.RWMutex
-	subs map[string]map[string]bool // userID → set of accountIDs
+	mu      sync.RWMutex
+	subs    map[string]map[string]bool                 // userID → set of accountIDs
+	filters map[string]map[string]appsocial.FeedFilter // userID → accountID → filter
 }
 
 // NewMemorySubscriptionStore creates an empty in-memory subscription store.
 func NewMemorySubscriptionStore() *MemorySubscriptionStore {
 	return &MemorySubscriptionStore{
-		subs: make(map[string]map[string]bool),
+		subs:    make(map[string]map[string]bool),
+		filters: make(map[string]map[string]appsocial.FeedFilter),
 	}
 }
 
@@ -66,4 +72,30 @@ func (s *MemorySubscriptionStore) UsersForAccount(accountID string) ([]string, e
 		}
 	}
 	return users, nil
+}
+
+func (s *MemorySubscriptionStore) SetFilterConfig(userID, accountID string, config appsocial.FeedFilter) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.filters[userID] == nil {
+		s.filters[userID] = make(map[string]appsocial.FeedFilter)
+	}
+	s.filters[userID][accountID] = config
+	return nil
+}
+
+func (s *MemorySubscriptionStore) FilterConfigForAccount(accountID string) (map[string]appsocial.FeedFilter, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make(map[string]appsocial.FeedFilter)
+	for userID, accs := range s.subs {
+		if accs[accountID] {
+			if f, ok := s.filters[userID][accountID]; ok {
+				result[userID] = f
+			} else {
+				result[userID] = appsocial.FeedFilter{}
+			}
+		}
+	}
+	return result, nil
 }

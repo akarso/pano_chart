@@ -35,10 +35,10 @@ type SchedulerConfig struct {
 	MacroCheckInterval  time.Duration // how often to scan for upcoming events
 	MacroLeadTime       time.Duration // alert this far ahead of an event
 	MarketCheckInterval time.Duration // how often to check market state
-	MarketMinConfidence float64       // minimum dominance to notify
+	MarketMinConfidence float64       // minimum dominance to notify (legacy)
 	SetupCheckInterval  time.Duration // how often to check best setup
-	SetupMinScore       float64       // minimum score to notify
-	Timeframe           string        // timeframe for market + setup checks
+	SetupMinScore       float64       // minimum score to notify (legacy)
+	Timeframe           string        // fallback timeframe for legacy broadcast
 }
 
 // DefaultSchedulerConfig returns production defaults.
@@ -46,9 +46,9 @@ func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
 		MacroCheckInterval:  1 * time.Minute,
 		MacroLeadTime:       30 * time.Minute,
-		MarketCheckInterval: 1 * time.Hour,
+		MarketCheckInterval: 1 * time.Minute,
 		MarketMinConfidence: 0.75,
-		SetupCheckInterval:  1 * time.Hour,
+		SetupCheckInterval:  1 * time.Minute,
 		SetupMinScore:       0.75,
 		Timeframe:           "1h",
 	}
@@ -124,12 +124,12 @@ func (s *Scheduler) CheckMacroEvents(ctx context.Context) {
 	s.checkMacroEvents(ctx)
 }
 
-// CheckMarketState evaluates market dominance and notifies once per day.
+// CheckMarketState evaluates market dominance and notifies.
 func (s *Scheduler) CheckMarketState(ctx context.Context) {
 	s.checkMarketState(ctx)
 }
 
-// CheckSetupOfDay evaluates the best setup and notifies once per day.
+// CheckSetupOfDay evaluates the best setup and notifies.
 func (s *Scheduler) CheckSetupOfDay(ctx context.Context) {
 	s.checkSetupOfDay(ctx)
 }
@@ -170,31 +170,65 @@ func (s *Scheduler) checkMacroEvents(ctx context.Context) {
 	}
 }
 
+// collectTimeframes returns the distinct set of timeframes needed from
+// the user configs. Each regime and setup may use a different timeframe.
+func collectTimeframes(configs []NotificationConfig) map[string]struct{} {
+	tfs := map[string]struct{}{}
+	for _, cfg := range configs {
+		if cfg.Uptrend {
+			tfs[cfg.UptrendTimeframe] = struct{}{}
+		}
+		if cfg.Downtrend {
+			tfs[cfg.DowntrendTimeframe] = struct{}{}
+		}
+		if cfg.Sideways {
+			tfs[cfg.SidewaysTimeframe] = struct{}{}
+		}
+		if cfg.SetupOfDay {
+			tfs[cfg.SetupTimeframe] = struct{}{}
+		}
+	}
+	return tfs
+}
+
 func (s *Scheduler) checkMarketState(ctx context.Context) {
 	if s.market == nil {
 		return
 	}
 
-	summary, err := s.market.Calculate(s.cfg.Timeframe)
-	if err != nil {
-		log.Printf("[notify-scheduler] market state error: %v", err)
-		return
-	}
-
-	// Per-user path: check each user's regime toggles and thresholds.
+	// Per-user path: pre-compute breadth for each needed timeframe,
+	// then evaluate each user's regime thresholds per their chosen timeframe.
 	if s.configs != nil {
 		configs, err := s.configs.All()
 		if err != nil {
 			log.Printf("[notify-scheduler] fetch configs error: %v", err)
 			return
 		}
+
+		tfs := collectTimeframes(configs)
+		summaries := make(map[string]mkt.Summary, len(tfs))
+		for tf := range tfs {
+			summary, err := s.market.Calculate(tf)
+			if err != nil {
+				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
+				continue
+			}
+			summaries[tf] = summary
+		}
+
 		for _, cfg := range configs {
-			s.checkMarketForUser(ctx, cfg, summary)
+			s.checkMarketForUser(ctx, cfg, summaries)
 		}
 		return
 	}
 
 	// Legacy broadcast path (no config store).
+	summary, err := s.market.Calculate(s.cfg.Timeframe)
+	if err != nil {
+		log.Printf("[notify-scheduler] market state error: %v", err)
+		return
+	}
+
 	if summary.Confidence < s.cfg.MarketMinConfidence {
 		return
 	}
@@ -223,27 +257,40 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 }
 
 // checkMarketForUser evaluates the market breadth against a single user's
-// enabled regimes and thresholds. The first regime to cross its dominance
-// threshold wins (strongest is picked when multiple qualify).
-func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summary mkt.Summary) {
+// enabled regimes and thresholds. Each regime may reference a different
+// timeframe. The strongest qualifying regime wins.
+func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.Summary) {
 	type candidate struct {
 		label     string
 		dominance float64
+		timeframe string
 	}
 
 	var candidates []candidate
 
-	// Uptrend — maps to Breadth.Trend (strong directional moves).
-	if cfg.Uptrend && summary.Breadth.Trend >= cfg.UptrendMinDominance {
-		candidates = append(candidates, candidate{"Uptrend", summary.Breadth.Trend})
+	// Uptrend — maps to Breadth.Trend.
+	if cfg.Uptrend {
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok {
+			if sum.Breadth.Trend >= cfg.UptrendMinDominance {
+				candidates = append(candidates, candidate{"Uptrend", sum.Breadth.Trend, cfg.UptrendTimeframe})
+			}
+		}
 	}
-	// Downtrend — maps to Breadth.Breakout (sharp expansions, often directional).
-	if cfg.Downtrend && summary.Breadth.Breakout >= cfg.DowntrendMinDominance {
-		candidates = append(candidates, candidate{"Downtrend", summary.Breadth.Breakout})
+	// Downtrend — maps to Breadth.Breakout.
+	if cfg.Downtrend {
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok {
+			if sum.Breadth.Breakout >= cfg.DowntrendMinDominance {
+				candidates = append(candidates, candidate{"Downtrend", sum.Breadth.Breakout, cfg.DowntrendTimeframe})
+			}
+		}
 	}
-	// Sideways — maps to Breadth.Sideways (includes compression-like behavior).
-	if cfg.Sideways && summary.Breadth.Sideways >= cfg.SidewaysMinDominance {
-		candidates = append(candidates, candidate{"Sideways", summary.Breadth.Sideways})
+	// Sideways — maps to Breadth.Sideways.
+	if cfg.Sideways {
+		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok {
+			if sum.Breadth.Sideways >= cfg.SidewaysMinDominance {
+				candidates = append(candidates, candidate{"Sideways", sum.Breadth.Sideways, cfg.SidewaysTimeframe})
+			}
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -258,15 +305,15 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		}
 	}
 
-	body := fmt.Sprintf("Market is %s (%.0f%% dominance)", best.label, best.dominance*100)
+	body := fmt.Sprintf("Market is %s (%.0f%% dominance, %s)", best.label, best.dominance*100, best.timeframe)
 	dateKey := s.now().Format("2006-01-02")
 
 	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
-		Data:  map[string]string{"type": string(TypeMarket)},
-		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, dateKey),
+		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
+		Key:   fmt.Sprintf("market_%s_%s", best.timeframe, dateKey),
 	})
 }
 
@@ -275,41 +322,66 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		return
 	}
 
-	best, err := s.setups.BestSetup(ctx, s.cfg.Timeframe)
-	if err != nil {
-		log.Printf("[notify-scheduler] best setup error: %v", err)
-		return
-	}
-
-	body := fmt.Sprintf("%s (%0.f%%)", best.Symbol, best.Score*100)
-	dateKey := s.now().Format("2006-01-02")
-
-	// Per-user path: check each user's setup toggle and threshold.
+	// Per-user path: compute best setup per needed timeframe.
 	if s.configs != nil {
 		configs, err := s.configs.All()
 		if err != nil {
 			log.Printf("[notify-scheduler] fetch configs for setup error: %v", err)
 			return
 		}
+
+		// Collect distinct setup timeframes.
+		tfs := map[string]struct{}{}
 		for _, cfg := range configs {
-			if !cfg.SetupOfDay || best.Score < cfg.SetupMinScore {
+			if cfg.SetupOfDay {
+				tfs[cfg.SetupTimeframe] = struct{}{}
+			}
+		}
+
+		setups := make(map[string]setup.SetupScores, len(tfs))
+		for tf := range tfs {
+			best, err := s.setups.BestSetup(ctx, tf)
+			if err != nil {
+				log.Printf("[notify-scheduler] best setup %s error: %v", tf, err)
 				continue
 			}
+			setups[tf] = best
+		}
+
+		dateKey := s.now().Format("2006-01-02")
+		for _, cfg := range configs {
+			if !cfg.SetupOfDay {
+				continue
+			}
+			best, ok := setups[cfg.SetupTimeframe]
+			if !ok || best.Score < cfg.SetupMinScore {
+				continue
+			}
+			body := fmt.Sprintf("%s (%0.f%%, %s)", best.Symbol, best.Score*100, cfg.SetupTimeframe)
 			_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
 				Type:  TypeSetup,
 				Title: "Setup of the Day",
 				Body:  body,
-				Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
-				Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
+				Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol, "timeframe": cfg.SetupTimeframe},
+				Key:   fmt.Sprintf("setup_%s_%s_%s", best.Symbol, cfg.SetupTimeframe, dateKey),
 			})
 		}
 		return
 	}
 
 	// Legacy broadcast path.
+	best, err := s.setups.BestSetup(ctx, s.cfg.Timeframe)
+	if err != nil {
+		log.Printf("[notify-scheduler] best setup error: %v", err)
+		return
+	}
+
 	if best.Score < s.cfg.SetupMinScore {
 		return
 	}
+
+	body := fmt.Sprintf("%s (%0.f%%)", best.Symbol, best.Score*100)
+	dateKey := s.now().Format("2006-01-02")
 
 	_ = s.engine.Send(ctx, Notification{
 		Type:  TypeSetup,

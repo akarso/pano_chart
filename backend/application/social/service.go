@@ -13,6 +13,7 @@ import (
 // returned to the caller. Zero-value fields mean "no filter".
 type FeedFilter struct {
 	OmitRetweets bool     // if true, exclude retweets
+	OmitReplies  bool     // if true, exclude replies
 	MinLength    int      // minimum Title length (0 = no minimum)
 	Keywords     []string // if non-empty, post Title must contain at least one
 }
@@ -101,6 +102,12 @@ func (s *Service) AccountsForUser(userID string) ([]string, error) {
 	return s.subs.AccountsForUser(userID)
 }
 
+// SetFilterConfig stores per-user per-account filter settings.
+func (s *Service) SetFilterConfig(userID, handle string, config FeedFilter) error {
+	accID := s.provider.Platform() + ":" + handle
+	return s.subs.SetFilterConfig(userID, accID, config)
+}
+
 // FilteredFeed fetches posts for a handle and applies the given filter.
 func (s *Service) FilteredFeed(handle string, filter FeedFilter) ([]domain.Post, error) {
 	posts, err := s.Feed(handle)
@@ -112,13 +119,16 @@ func (s *Service) FilteredFeed(handle string, filter FeedFilter) ([]domain.Post,
 
 // applyFilter returns only the posts that pass all filter criteria.
 func applyFilter(posts []domain.Post, f FeedFilter) []domain.Post {
-	if !f.OmitRetweets && f.MinLength <= 0 && len(f.Keywords) == 0 {
+	if !f.OmitRetweets && !f.OmitReplies && f.MinLength <= 0 && len(f.Keywords) == 0 {
 		return posts // nothing to filter
 	}
 
 	result := make([]domain.Post, 0, len(posts))
 	for _, p := range posts {
 		if f.OmitRetweets && p.IsRetweet {
+			continue
+		}
+		if f.OmitReplies && p.IsReply {
 			continue
 		}
 		if f.MinLength > 0 && utf8.RuneCountInString(p.Title) < f.MinLength {

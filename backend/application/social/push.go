@@ -58,7 +58,7 @@ func (c *PushConsumer) Run(ctx context.Context) {
 }
 
 // handleBatch groups posts by account, resolves subscribers → device tokens,
-// and sends one notification per token.
+// applies per-user filter settings, and sends one notification per token.
 func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 	// Group posts by account to avoid duplicate lookups.
 	byAccount := make(map[string][]domain.Post)
@@ -67,39 +67,49 @@ func (c *PushConsumer) handleBatch(ctx context.Context, posts []domain.Post) {
 	}
 
 	for accountID, accountPosts := range byAccount {
-		users, err := c.subs.UsersForAccount(accountID)
+		// Load per-user filter configs for this account.
+		filtersByUser, err := c.subs.FilterConfigForAccount(accountID)
 		if err != nil {
-			log.Printf("[push] users for %s: %v", accountID, err)
+			log.Printf("[push] filters for %s: %v", accountID, err)
 			continue
 		}
-		log.Printf("[push] account %s: %d subscribers", accountID, len(users))
-		if len(users) == 0 {
+		log.Printf("[push] account %s: %d subscribers", accountID, len(filtersByUser))
+		if len(filtersByUser) == 0 {
 			continue
 		}
 
-		tokens, err := c.devices.TokensForUsers(users)
-		if err != nil {
-			log.Printf("[push] tokens for %s: %v", accountID, err)
-			continue
-		}
-		log.Printf("[push] account %s: %d device tokens", accountID, len(tokens))
-		if len(tokens) == 0 {
-			continue
-		}
-
-		// Build notification content from the first (newest) post.
-		newest := accountPosts[0]
 		title := fmt.Sprintf("@%s", extractHandle(accountID))
-		body := newest.Title
-		if len(accountPosts) > 1 {
-			body = fmt.Sprintf("%s (+%d more)", newest.Title, len(accountPosts)-1)
-		}
 
-		for _, token := range tokens {
-			if err := c.push.Send(ctx, token, title, body, map[string]string{"type": "twitter"}); err != nil {
-				log.Printf("[push] send to token …%s: %v", lastN(token, 8), err)
-			} else {
-				log.Printf("[push] sent to …%s: %s", lastN(token, 8), title)
+		for userID, filter := range filtersByUser {
+			// Apply this user's filter to the posts.
+			filtered := applyFilter(accountPosts, filter)
+			if len(filtered) == 0 {
+				log.Printf("[push] all posts filtered for user %s on %s", userID, accountID)
+				continue
+			}
+
+			tokens, err := c.devices.TokensForUsers([]string{userID})
+			if err != nil {
+				log.Printf("[push] tokens for user %s: %v", userID, err)
+				continue
+			}
+			if len(tokens) == 0 {
+				continue
+			}
+
+			// Build notification body from filtered posts.
+			newest := filtered[0]
+			body := newest.Title
+			if len(filtered) > 1 {
+				body = fmt.Sprintf("%s (+%d more)", newest.Title, len(filtered)-1)
+			}
+
+			for _, token := range tokens {
+				if err := c.push.Send(ctx, token, title, body, map[string]string{"type": "twitter"}); err != nil {
+					log.Printf("[push] send to token …%s: %v", lastN(token, 8), err)
+				} else {
+					log.Printf("[push] sent to …%s: %s", lastN(token, 8), title)
+				}
 			}
 		}
 	}

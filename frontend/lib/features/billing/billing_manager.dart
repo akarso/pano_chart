@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
-import 'api/sol_price_info.dart';
 import 'api/subscription_api.dart';
 import 'trial_manager.dart';
 
@@ -222,35 +221,6 @@ class BillingManager {
       debugPrint('[BillingManager] Status check failed: $e');
     }
     _notify();
-  }
-
-  // ---- Solana payment ----
-
-  /// Fetches the current SOL price and required amount for a subscription.
-  Future<SolPriceInfo> getSolPrice() async {
-    return _api.getSolPrice();
-  }
-
-  /// Verifies a Solana transaction signature with the backend.
-  /// Returns `true` if the subscription was activated, `false` otherwise.
-  Future<bool> verifySolanaPayment(String txSignature) async {
-    _busy = true;
-    _notify();
-    try {
-      await _api.verifyPurchase(
-        provider: 'solana',
-        purchaseToken: txSignature,
-        userId: _userId,
-      );
-      await refreshStatus();
-      return _status.active;
-    } catch (e) {
-      debugPrint('[BillingManager] Solana verification failed: $e');
-      return false;
-    } finally {
-      _busy = false;
-      _notify();
-    }
   }
 
   void _notify() {

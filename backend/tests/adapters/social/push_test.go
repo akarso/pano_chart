@@ -343,6 +343,105 @@ func TestPushConsumer_NoDeviceTokens_NoSends(t *testing.T) {
 	}
 }
 
+func TestPushConsumer_FiltersPostsByUserConfig(t *testing.T) {
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	_ = subStore.Subscribe("u1", "twitter:elonmusk")
+	_ = subStore.Subscribe("u2", "twitter:elonmusk")
+
+	// u1 has a minLength=10 filter — short posts should be filtered out.
+	_ = subStore.SetFilterConfig("u1", "twitter:elonmusk", appsocial.FeedFilter{MinLength: 10})
+	// u2 has no filter (default) — should receive everything.
+
+	devStore := newMemDeviceStore()
+	_ = devStore.Register("u1", "d1", "tok-u1", "android")
+	_ = devStore.Register("u2", "d2", "tok-u2", "ios")
+
+	notifier := &stubNotifier{}
+
+	ch := make(chan []domain.Post, 1)
+	consumer := appsocial.NewPushConsumer(ch, subStore, devStore, notifier)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go consumer.Run(ctx)
+
+	// Send a short post (< 10 chars). u1 should not receive it, u2 should.
+	ch <- []domain.Post{
+		{ID: "p1", AccountID: "twitter:elonmusk", Title: "🚀", Timestamp: 2000},
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	sends := notifier.getSends()
+	if len(sends) != 1 {
+		t.Fatalf("expected 1 send (only u2), got %d", len(sends))
+	}
+	if sends[0].Token != "tok-u2" {
+		t.Fatalf("expected send to tok-u2, got '%s'", sends[0].Token)
+	}
+}
+
+func TestPushConsumer_OmitRetweetsFilter(t *testing.T) {
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	_ = subStore.Subscribe("u1", "twitter:alice")
+	_ = subStore.SetFilterConfig("u1", "twitter:alice", appsocial.FeedFilter{OmitRetweets: true})
+
+	devStore := newMemDeviceStore()
+	_ = devStore.Register("u1", "d1", "tok-u1", "android")
+
+	notifier := &stubNotifier{}
+
+	ch := make(chan []domain.Post, 1)
+	consumer := appsocial.NewPushConsumer(ch, subStore, devStore, notifier)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go consumer.Run(ctx)
+
+	// Send a retweet — should be filtered out.
+	ch <- []domain.Post{
+		{ID: "rt1", AccountID: "twitter:alice", Title: "RT @bob: great stuff", IsRetweet: true, Timestamp: 3000},
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	if len(notifier.getSends()) != 0 {
+		t.Fatal("expected 0 sends — retweet should be filtered")
+	}
+}
+
+func TestPushConsumer_OmitRepliesFilter(t *testing.T) {
+	subStore := infrasocial.NewMemorySubscriptionStore()
+	_ = subStore.Subscribe("u1", "twitter:alice")
+	_ = subStore.SetFilterConfig("u1", "twitter:alice", appsocial.FeedFilter{OmitReplies: true})
+
+	devStore := newMemDeviceStore()
+	_ = devStore.Register("u1", "d1", "tok-u1", "android")
+
+	notifier := &stubNotifier{}
+
+	ch := make(chan []domain.Post, 1)
+	consumer := appsocial.NewPushConsumer(ch, subStore, devStore, notifier)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go consumer.Run(ctx)
+
+	// Send a reply — should be filtered out.
+	ch <- []domain.Post{
+		{ID: "r1", AccountID: "twitter:alice", Title: "@bob nice post", IsReply: true, Timestamp: 4000},
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	if len(notifier.getSends()) != 0 {
+		t.Fatal("expected 0 sends — reply should be filtered")
+	}
+}
+
 // ── Device Register/Unregister handler tests ────────────────────────────────
 
 func TestDeviceRegisterHandler_Success(t *testing.T) {

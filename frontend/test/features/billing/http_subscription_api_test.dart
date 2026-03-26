@@ -120,50 +120,6 @@ void main() {
     });
   });
 
-  group('getSolPrice', () {
-    test('parses SOL price response', () async {
-      final client = MockClient((req) async {
-        expect(req.url.toString(),
-            'http://localhost:8080/api/sol/price');
-        expect(req.method, 'GET');
-        return http.Response(
-          jsonEncode({
-            'sol_price': 130.5,
-            'required_sol': 0.038238,
-            'price_usd': 4.99,
-            'wallet': 'SomeWalletAddress123',
-          }),
-          200,
-        );
-      });
-
-      final api = HttpSubscriptionApi(
-        client: client,
-        baseUrl: 'http://localhost:8080',
-      );
-
-      final info = await api.getSolPrice();
-
-      expect(info.solPrice, 130.5);
-      expect(info.requiredSOL, 0.038238);
-      expect(info.priceUSD, 4.99);
-      expect(info.wallet, 'SomeWalletAddress123');
-    });
-
-    test('throws on non-200 response', () async {
-      final client = MockClient((_) async {
-        return http.Response('service unavailable', 503);
-      });
-
-      final api = HttpSubscriptionApi(
-        client: client,
-        baseUrl: 'http://localhost:8080',
-      );
-
-      expect(() => api.getSolPrice(), throwsException);
-    });
-  });
-
   group('SubscriptionStatus', () {
     test('inactive factory', () {
       final s = SubscriptionStatus.inactive();

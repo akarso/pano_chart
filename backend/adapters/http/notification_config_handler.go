@@ -30,6 +30,10 @@ type notificationConfigDTO struct {
 	DowntrendMinDominance float64 `json:"downtrend_min_dominance"`
 	SidewaysMinDominance  float64 `json:"sideways_min_dominance"`
 	SetupMinScore         float64 `json:"setup_min_score"`
+	UptrendTimeframe      string  `json:"uptrend_timeframe,omitempty"`
+	DowntrendTimeframe    string  `json:"downtrend_timeframe,omitempty"`
+	SidewaysTimeframe     string  `json:"sideways_timeframe,omitempty"`
+	SetupTimeframe        string  `json:"setup_timeframe,omitempty"`
 }
 
 func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
@@ -46,6 +50,10 @@ func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
 		DowntrendMinDominance: cfg.DowntrendMinDominance,
 		SidewaysMinDominance:  cfg.SidewaysMinDominance,
 		SetupMinScore:         cfg.SetupMinScore,
+		UptrendTimeframe:      cfg.UptrendTimeframe,
+		DowntrendTimeframe:    cfg.DowntrendTimeframe,
+		SidewaysTimeframe:     cfg.SidewaysTimeframe,
+		SetupTimeframe:        cfg.SetupTimeframe,
 	}
 }
 
@@ -63,6 +71,10 @@ func fromDTO(dto notificationConfigDTO) appnotify.NotificationConfig {
 		DowntrendMinDominance: dto.DowntrendMinDominance,
 		SidewaysMinDominance:  dto.SidewaysMinDominance,
 		SetupMinScore:         dto.SetupMinScore,
+		UptrendTimeframe:      dto.UptrendTimeframe,
+		DowntrendTimeframe:    dto.DowntrendTimeframe,
+		SidewaysTimeframe:     dto.SidewaysTimeframe,
+		SetupTimeframe:        dto.SetupTimeframe,
 	}
 }
 

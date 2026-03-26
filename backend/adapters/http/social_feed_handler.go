@@ -27,6 +27,7 @@ type socialPostDTO struct {
 	URL       string `json:"url"`
 	Timestamp int64  `json:"timestamp"`
 	IsRetweet bool   `json:"is_retweet"`
+	IsReply   bool   `json:"is_reply"`
 }
 
 type socialFeedResponse struct {
@@ -52,6 +53,9 @@ func (h *SocialFeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	filter := appsocial.FeedFilter{}
 	if r.URL.Query().Get("omit_retweets") == "true" {
 		filter.OmitRetweets = true
+	}
+	if r.URL.Query().Get("omit_replies") == "true" {
+		filter.OmitReplies = true
 	}
 	if ml := r.URL.Query().Get("min_length"); ml != "" {
 		if v, err := strconv.Atoi(ml); err == nil && v > 0 {
@@ -84,6 +88,7 @@ func (h *SocialFeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			URL:       p.URL,
 			Timestamp: p.Timestamp,
 			IsRetweet: p.IsRetweet,
+			IsReply:   p.IsReply,
 		}
 	}
 

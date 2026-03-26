@@ -12,12 +12,28 @@ import (
 )
 
 type fakeMarketProvider struct {
-	summary mkt.Summary
-	err     error
+	summaries map[string]mkt.Summary // keyed by timeframe
+	err       error
 }
 
-func (f *fakeMarketProvider) Calculate(_ string) (mkt.Summary, error) {
-	return f.summary, f.err
+func (f *fakeMarketProvider) Calculate(tf string) (mkt.Summary, error) {
+	if f.err != nil {
+		return mkt.Summary{}, f.err
+	}
+	if s, ok := f.summaries[tf]; ok {
+		return s, nil
+	}
+	// Fallback: return first entry (backwards compat for single-tf tests).
+	for _, s := range f.summaries {
+		return s, nil
+	}
+	return mkt.Summary{}, nil
+}
+
+// singleMarket is a helper that builds a fakeMarketProvider for one timeframe.
+func singleMarket(tf string, s mkt.Summary) *fakeMarketProvider {
+	s.Timeframe = tf
+	return &fakeMarketProvider{summaries: map[string]mkt.Summary{tf: s}}
 }
 
 type fakeSetupProvider struct {
@@ -44,14 +60,11 @@ func TestScheduler_MarketState_HighConfidence(t *testing.T) {
 	eng := notifications.NewEngine(spy, cfg)
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			Timeframe:   "1h",
-			State:       mkt.StateTrend,
-			Confidence:  0.82,
-			SymbolCount: 100,
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		State:       mkt.StateTrend,
+		Confidence:  0.82,
+		SymbolCount: 100,
+	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckMarketState(context.Background())
@@ -71,12 +84,10 @@ func TestScheduler_MarketState_LowConfidence_Suppressed(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			State:      mkt.StateSideways,
-			Confidence: 0.50,
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		State:      mkt.StateSideways,
+		Confidence: 0.50,
+	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckMarketState(context.Background())
@@ -90,9 +101,9 @@ func TestScheduler_MarketState_OncePerDay(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{State: mkt.StateTrend, Confidence: 0.9, Timeframe: "1h"},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		State: mkt.StateTrend, Confidence: 0.9,
+	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckMarketState(context.Background())

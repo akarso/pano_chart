@@ -34,6 +34,7 @@ class HttpSocialApi implements SocialApi {
   }) async {
     final params = <String, String>{'handle': handle};
     if (settings.omitRetweets) params['omit_retweets'] = 'true';
+    if (settings.omitReplies) params['omit_replies'] = 'true';
     if (settings.minLength > 0) {
       params['min_length'] = settings.minLength.toString();
     }
@@ -115,5 +116,31 @@ class HttpSocialApi implements SocialApi {
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     return SocialAccountsResponse.fromJson(json);
+  }
+
+  @override
+  Future<void> updateSettings({
+    required String userId,
+    required String handle,
+    required SocialAccountSettings settings,
+  }) async {
+    final uri =
+        Uri.parse(baseUrl).replace(path: '/api/social/subscribe/settings');
+    final body = jsonEncode({
+      'user_id': userId,
+      'handle': handle,
+      ...settings.toJson(),
+    });
+
+    final response = await client
+        .put(uri, body: body, headers: {'Content-Type': 'application/json'})
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) {
+      throw HttpSocialApiException(
+        statusCode: response.statusCode,
+        message: 'Update settings error: ${response.statusCode}',
+      );
+    }
   }
 }

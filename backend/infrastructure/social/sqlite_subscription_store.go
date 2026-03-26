@@ -2,6 +2,7 @@ package social
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 
 	appsocial "pano_chart/backend/application/social"
@@ -50,8 +51,9 @@ func (s *SQLiteSubscriptionStore) Close() error {
 
 func (s *SQLiteSubscriptionStore) migrate() error {
 	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS social_subscriptions (
-		user_id    TEXT NOT NULL,
-		account_id TEXT NOT NULL,
+		user_id       TEXT NOT NULL,
+		account_id    TEXT NOT NULL,
+		filter_config TEXT NOT NULL DEFAULT '{}',
 		PRIMARY KEY (user_id, account_id)
 	)`)
 	if err != nil {
@@ -59,7 +61,12 @@ func (s *SQLiteSubscriptionStore) migrate() error {
 	}
 	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_subs_account
 		ON social_subscriptions(account_id)`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migration: add filter_config if the table existed before this column.
+	_, _ = s.db.Exec(`ALTER TABLE social_subscriptions ADD COLUMN filter_config TEXT NOT NULL DEFAULT '{}'`)
+	return nil
 }
 
 func (s *SQLiteSubscriptionStore) Subscribe(userID, accountID string) error {
@@ -117,4 +124,57 @@ func (s *SQLiteSubscriptionStore) UsersForAccount(accountID string) ([]string, e
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (s *SQLiteSubscriptionStore) SetFilterConfig(userID, accountID string, config appsocial.FeedFilter) error {
+	data, err := json.Marshal(filterConfigJSON{
+		OmitRetweets: config.OmitRetweets,
+		OmitReplies:  config.OmitReplies,
+		MinLength:    config.MinLength,
+		Keywords:     config.Keywords,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal filter config: %w", err)
+	}
+	_, err = s.db.Exec(`UPDATE social_subscriptions SET filter_config = ?
+		WHERE user_id = ? AND account_id = ?`, string(data), userID, accountID)
+	return err
+}
+
+func (s *SQLiteSubscriptionStore) FilterConfigForAccount(accountID string) (map[string]appsocial.FeedFilter, error) {
+	rows, err := s.db.Query(`SELECT user_id, filter_config FROM social_subscriptions
+		WHERE account_id = ?`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string]appsocial.FeedFilter)
+	for rows.Next() {
+		var userID, raw string
+		if err := rows.Scan(&userID, &raw); err != nil {
+			return nil, err
+		}
+		var cfg filterConfigJSON
+		if raw != "" && raw != "{}" {
+			if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+				continue // skip malformed
+			}
+		}
+		result[userID] = appsocial.FeedFilter{
+			OmitRetweets: cfg.OmitRetweets,
+			OmitReplies:  cfg.OmitReplies,
+			MinLength:    cfg.MinLength,
+			Keywords:     cfg.Keywords,
+		}
+	}
+	return result, rows.Err()
+}
+
+// filterConfigJSON is the JSON representation stored in the filter_config column.
+type filterConfigJSON struct {
+	OmitRetweets bool     `json:"omit_retweets,omitempty"`
+	OmitReplies  bool     `json:"omit_replies,omitempty"`
+	MinLength    int      `json:"min_length,omitempty"`
+	Keywords     []string `json:"keywords,omitempty"`
 }

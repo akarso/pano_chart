@@ -114,6 +114,9 @@ func parseRSS(accountID string, data []byte) ([]domain.Post, error) {
 		isRT := strings.HasPrefix(title, "RT @") ||
 			(author != "" && !strings.EqualFold(strings.TrimPrefix(author, "@"), ownHandle))
 
+		// Detect replies: title starts with "@" but is not a retweet.
+		isReply := !isRT && strings.HasPrefix(title, "@")
+
 		posts = append(posts, domain.Post{
 			ID:        item.GUID,
 			AccountID: accountID,
@@ -122,6 +125,7 @@ func parseRSS(accountID string, data []byte) ([]domain.Post, error) {
 			URL:       item.Link,
 			Timestamp: ts,
 			IsRetweet: isRT,
+			IsReply:   isReply,
 		})
 	}
 	return posts, nil

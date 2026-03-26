@@ -116,6 +116,10 @@ class SocialFeedViewModel {
       }).toList(),
     );
     onChanged?.call();
+    // Sync filter settings to server (fire-and-forget for push filtering).
+    _api
+        .updateSettings(userId: _userId, handle: handle, settings: settings)
+        .catchError((_) {});
     refreshFeeds();
   }
 

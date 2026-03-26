@@ -159,14 +159,11 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			Timeframe:   "1h",
-			State:       mkt.StateTrend,
-			Breadth:     mkt.Breadth{Trend: 0.82, Sideways: 0.10, Breakout: 0.05},
-			SymbolCount: 100,
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		State:       mkt.StateTrend,
+		Breadth:     mkt.Breadth{Trend: 0.82, Sideways: 0.10, Breakout: 0.05},
+		SymbolCount: 100,
+	})
 
 	cfgStore := newMemConfigStore()
 	_ = cfgStore.Save(notifications.NotificationConfig{
@@ -175,8 +172,10 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 		Downtrend:           false,
 		Sideways:            false,
 		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
 		SetupOfDay:          true,
 		SetupMinScore:       0.75,
+		SetupTimeframe:      "1h",
 	})
 
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
@@ -202,12 +201,9 @@ func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			Timeframe: "1h",
-			Breadth:   mkt.Breadth{Trend: 0.60, Sideways: 0.30},
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.60, Sideways: 0.30},
+	})
 
 	cfgStore := newMemConfigStore()
 	_ = cfgStore.Save(notifications.NotificationConfig{
@@ -216,6 +212,8 @@ func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 		Sideways:             true,
 		UptrendMinDominance:  0.75,
 		SidewaysMinDominance: 0.75,
+		UptrendTimeframe:     "1h",
+		SidewaysTimeframe:    "1h",
 	})
 
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
@@ -234,18 +232,16 @@ func TestScheduler_PerUser_DisabledRegime_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			Timeframe: "1h",
-			Breadth:   mkt.Breadth{Trend: 0.85},
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+	})
 
 	cfgStore := newMemConfigStore()
 	_ = cfgStore.Save(notifications.NotificationConfig{
 		UserID:              "u1",
 		Uptrend:             false,
 		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
 	})
 
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
@@ -264,12 +260,9 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := &fakeMarketProvider{
-		summary: mkt.Summary{
-			Timeframe: "1h",
-			Breadth:   mkt.Breadth{Trend: 0.78, Sideways: 0.82},
-		},
-	}
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.78, Sideways: 0.82},
+	})
 
 	cfgStore := newMemConfigStore()
 	_ = cfgStore.Save(notifications.NotificationConfig{
@@ -278,6 +271,8 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 		Sideways:             true,
 		UptrendMinDominance:  0.75,
 		SidewaysMinDominance: 0.75,
+		UptrendTimeframe:     "1h",
+		SidewaysTimeframe:    "1h",
 	})
 
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
@@ -289,7 +284,7 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 		t.Fatalf("expected 1 notification, got %d", spy.userCount())
 	}
 	body := spy.lastUserSend().n.Body
-	if body != "Market is Sideways (82% dominance)" {
+	if body != "Market is Sideways (82% dominance, 1h)" {
 		t.Fatalf("expected sideways to win, got: %s", body)
 	}
 }
@@ -310,14 +305,16 @@ func TestScheduler_PerUser_SetupWithCustomThreshold(t *testing.T) {
 
 	cfgStore := newMemConfigStore()
 	_ = cfgStore.Save(notifications.NotificationConfig{
-		UserID:        "u1",
-		SetupOfDay:    true,
-		SetupMinScore: 0.85,
+		UserID:         "u1",
+		SetupOfDay:     true,
+		SetupMinScore:  0.85,
+		SetupTimeframe: "1h",
 	})
 	_ = cfgStore.Save(notifications.NotificationConfig{
-		UserID:        "u2",
-		SetupOfDay:    true,
-		SetupMinScore: 0.75,
+		UserID:         "u2",
+		SetupOfDay:     true,
+		SetupMinScore:  0.75,
+		SetupTimeframe: "1h",
 	})
 
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
@@ -372,5 +369,146 @@ func TestEngine_SendToUser_QuietHours(t *testing.T) {
 	_ = eng.SendToUser(context.Background(), "u1", n)
 	if spy.userCount() != 0 {
 		t.Fatal("expected suppressed during quiet hours")
+	}
+}
+
+// ── Multi-timeframe tests ───────────────────────────────────────────────────
+
+func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	// 15m shows uptrend at 80%, 1h shows uptrend at 60%.
+	market := &fakeMarketProvider{
+		summaries: map[string]mkt.Summary{
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80}},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.60}},
+		},
+	}
+
+	cfgStore := newMemConfigStore()
+	// User wants uptrend on 15m — should trigger.
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "u1",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "15m",
+	})
+	// User wants uptrend on 1h — should NOT trigger (60% < 75%).
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "u2",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 notification (u1 only), got %d", spy.userCount())
+	}
+	rec := spy.lastUserSend()
+	if rec.userID != "u1" {
+		t.Fatalf("expected user u1, got %s", rec.userID)
+	}
+	if rec.n.Body != "Market is Uptrend (80% dominance, 15m)" {
+		t.Fatalf("unexpected body: %s", rec.n.Body)
+	}
+}
+
+func TestScheduler_PerUser_SetupDifferentTimeframes(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{
+			Symbol:    "ETHUSDT",
+			BestSetup: setup.CompressionBreakout,
+			Score:     0.85,
+		},
+	}
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:         "u1",
+		SetupOfDay:     true,
+		SetupMinScore:  0.80,
+		SetupTimeframe: "15m",
+	})
+
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckSetupOfDay(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 setup notification, got %d", spy.userCount())
+	}
+	body := spy.lastUserSend().n.Body
+	if body != "ETHUSDT (85%, 15m)" {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestConfigStore_TimeframeRoundtrip(t *testing.T) {
+	store := openTestConfigStore(t)
+	cfg := notifications.NotificationConfig{
+		UserID:              "u1",
+		Uptrend:             true,
+		UptrendTimeframe:    "15m",
+		DowntrendTimeframe:  "4h",
+		SidewaysTimeframe:   "1d",
+		SetupTimeframe:      "5m",
+		UptrendMinDominance: 0.80,
+	}
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+	got, err := store.Get("u1")
+	if err != nil {
+		t.Fatalf("get error: %v", err)
+	}
+	if got.UptrendTimeframe != "15m" {
+		t.Fatalf("expected 15m, got %s", got.UptrendTimeframe)
+	}
+	if got.DowntrendTimeframe != "4h" {
+		t.Fatalf("expected 4h, got %s", got.DowntrendTimeframe)
+	}
+	if got.SidewaysTimeframe != "1d" {
+		t.Fatalf("expected 1d, got %s", got.SidewaysTimeframe)
+	}
+	if got.SetupTimeframe != "5m" {
+		t.Fatalf("expected 5m, got %s", got.SetupTimeframe)
+	}
+}
+
+func TestConfigStore_BackfillsEmptyTimeframes(t *testing.T) {
+	store := openTestConfigStore(t)
+	// Simulate a legacy config without timeframe fields (stored as empty strings).
+	cfg := notifications.NotificationConfig{
+		UserID:  "u-legacy",
+		Uptrend: true,
+		// All timeframe fields are zero-value ("").
+	}
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("save error: %v", err)
+	}
+	got, err := store.Get("u-legacy")
+	if err != nil {
+		t.Fatalf("get error: %v", err)
+	}
+	// Should backfill to "1h".
+	if got.UptrendTimeframe != "1h" {
+		t.Fatalf("expected 1h backfill, got %s", got.UptrendTimeframe)
+	}
+	if got.SetupTimeframe != "1h" {
+		t.Fatalf("expected 1h backfill, got %s", got.SetupTimeframe)
 	}
 }

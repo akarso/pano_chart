@@ -26,34 +26,11 @@ class NotificationSettingsPage extends StatefulWidget {
 class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   late NotificationSettings _settings;
 
-  late final TextEditingController _uptrendCtl;
-  late final TextEditingController _downtrendCtl;
-  late final TextEditingController _sidewaysCtl;
-  late final TextEditingController _setupCtl;
-
   @override
   void initState() {
     super.initState();
     _settings = NotificationSettings.fromPrefs(widget.prefs);
-    _uptrendCtl = TextEditingController(
-        text: _pct(_settings.uptrendMinDominance));
-    _downtrendCtl = TextEditingController(
-        text: _pct(_settings.downtrendMinDominance));
-    _sidewaysCtl = TextEditingController(
-        text: _pct(_settings.sidewaysMinDominance));
-    _setupCtl =
-        TextEditingController(text: _pct(_settings.setupMinScore));
-
     _fetchServerConfig();
-  }
-
-  @override
-  void dispose() {
-    _uptrendCtl.dispose();
-    _downtrendCtl.dispose();
-    _sidewaysCtl.dispose();
-    _setupCtl.dispose();
-    super.dispose();
   }
 
   /// Fetches server-side config and merges into local state.
@@ -63,13 +40,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     try {
       final remote = await api.fetch(widget.prefs.userId);
       if (!mounted) return;
-      setState(() {
-        _settings = remote;
-        _uptrendCtl.text = _pct(_settings.uptrendMinDominance);
-        _downtrendCtl.text = _pct(_settings.downtrendMinDominance);
-        _sidewaysCtl.text = _pct(_settings.sidewaysMinDominance);
-        _setupCtl.text = _pct(_settings.setupMinScore);
-      });
+      setState(() => _settings = remote);
       _settings.save(widget.prefs);
     } catch (_) {
       // Use local values on network failure.
@@ -92,14 +63,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     }
   }
 
-  static String _pct(double v) => '${(v * 100).round()}';
-
-  double? _parsePct(String text) {
-    final n = int.tryParse(text);
-    if (n == null || n < 0 || n > 100) return null;
-    return n / 100;
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -113,47 +76,59 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             (v) => _update(() => _settings.social = v),
           ),
           _sectionTitle('Market'),
-          _toggle(
-            'Uptrend',
-            _settings.uptrend,
-            (v) => _update(() => _settings.uptrend = v),
+          _regimeRow(
+            label: 'Uptrend',
+            enabled: _settings.uptrend,
+            onToggle: (v) => _update(() => _settings.uptrend = v),
+            timeframe: _settings.uptrendTimeframe,
+            onTimeframe: (v) =>
+                _update(() => _settings.uptrendTimeframe = v),
           ),
-          _thresholdField(_uptrendCtl, 'min. dominance', (v) {
-            _settings.uptrendMinDominance = v;
-            _settings.save(widget.prefs);
-            _syncToServer();
-          }),
-          _toggle(
-            'Downtrend',
-            _settings.downtrend,
-            (v) => _update(() => _settings.downtrend = v),
+          _slider(
+            'min. dominance',
+            _settings.uptrendMinDominance,
+            (v) => _update(() => _settings.uptrendMinDominance = v),
           ),
-          _thresholdField(_downtrendCtl, 'min. dominance', (v) {
-            _settings.downtrendMinDominance = v;
-            _settings.save(widget.prefs);
-            _syncToServer();
-          }),
-          _toggle(
-            'Sideways',
-            _settings.sideways,
-            (v) => _update(() => _settings.sideways = v),
+          _regimeRow(
+            label: 'Downtrend',
+            enabled: _settings.downtrend,
+            onToggle: (v) => _update(() => _settings.downtrend = v),
+            timeframe: _settings.downtrendTimeframe,
+            onTimeframe: (v) =>
+                _update(() => _settings.downtrendTimeframe = v),
           ),
-          _thresholdField(_sidewaysCtl, 'min. dominance', (v) {
-            _settings.sidewaysMinDominance = v;
-            _settings.save(widget.prefs);
-            _syncToServer();
-          }),
+          _slider(
+            'min. dominance',
+            _settings.downtrendMinDominance,
+            (v) => _update(() => _settings.downtrendMinDominance = v),
+          ),
+          _regimeRow(
+            label: 'Sideways',
+            enabled: _settings.sideways,
+            onToggle: (v) => _update(() => _settings.sideways = v),
+            timeframe: _settings.sidewaysTimeframe,
+            onTimeframe: (v) =>
+                _update(() => _settings.sidewaysTimeframe = v),
+          ),
+          _slider(
+            'min. dominance',
+            _settings.sidewaysMinDominance,
+            (v) => _update(() => _settings.sidewaysMinDominance = v),
+          ),
           const SizedBox(height: 8),
-          _toggle(
-            'Best Setup (daily)',
-            _settings.setupOfDay,
-            (v) => _update(() => _settings.setupOfDay = v),
+          _regimeRow(
+            label: 'Best Setup (daily)',
+            enabled: _settings.setupOfDay,
+            onToggle: (v) => _update(() => _settings.setupOfDay = v),
+            timeframe: _settings.setupTimeframe,
+            onTimeframe: (v) =>
+                _update(() => _settings.setupTimeframe = v),
           ),
-          _thresholdField(_setupCtl, 'min. quality score', (v) {
-            _settings.setupMinScore = v;
-            _settings.save(widget.prefs);
-            _syncToServer();
-          }),
+          _slider(
+            'min. quality score',
+            _settings.setupMinScore,
+            (v) => _update(() => _settings.setupMinScore = v),
+          ),
           _sectionTitle('Macro'),
           _toggle(
             'Macro Events (30 min before)',
@@ -190,32 +165,78 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     );
   }
 
-  Widget _thresholdField(
-    TextEditingController controller,
+  /// A row combining a toggle switch with a timeframe dropdown.
+  Widget _regimeRow({
+    required String label,
+    required bool enabled,
+    required ValueChanged<bool> onToggle,
+    required String timeframe,
+    required ValueChanged<String> onTimeframe,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: SwitchListTile(
+              title: Text(label),
+              value: enabled,
+              activeColor: const Color(0xFF42A5F5),
+              onChanged: onToggle,
+            ),
+          ),
+          _timeframeDropdown(timeframe, onTimeframe),
+        ],
+      ),
+    );
+  }
+
+  Widget _timeframeDropdown(
+    String value,
+    ValueChanged<String> onChanged,
+  ) {
+    return DropdownButton<String>(
+      value: value,
+      underline: const SizedBox.shrink(),
+      items: kTimeframes
+          .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
+          .toList(),
+      onChanged: (v) {
+        if (v != null) onChanged(v);
+      },
+    );
+  }
+
+  Widget _slider(
     String label,
+    double value,
     ValueChanged<double> onChanged,
   ) {
+    final pct = (value * 100).round();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           const SizedBox(width: 48),
           Expanded(
-            child: TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: label,
-                suffixText: '%',
-                isDense: true,
-              ),
-              onSubmitted: (text) {
-                final v = _parsePct(text);
-                if (v != null) onChanged(v);
-              },
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$label: $pct%',
+                  style: const TextStyle(fontSize: 12),
+                ),
+                Slider(
+                  value: value,
+                  min: 0.50,
+                  max: 1.0,
+                  divisions: 10,
+                  label: '$pct%',
+                  onChanged: (v) => onChanged(v),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: 16),
         ],
       ),
     );

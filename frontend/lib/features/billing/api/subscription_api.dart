@@ -1,5 +1,3 @@
-import 'sol_price_info.dart';
-
 /// Port defining the subscription verification service interface.
 ///
 /// Decouples the billing layer from the concrete HTTP implementation.
@@ -14,9 +12,6 @@ abstract class SubscriptionApi {
 
   /// Queries the backend for the current subscription status of [userId].
   Future<SubscriptionStatus> getStatus(String userId);
-
-  /// Fetches the current SOL price and required amount for a subscription.
-  Future<SolPriceInfo> getSolPrice();
 }
 
 /// Immutable value object describing the user's subscription state.

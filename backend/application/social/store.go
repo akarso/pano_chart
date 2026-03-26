@@ -37,6 +37,13 @@ type SubscriptionStore interface {
 
 	// UsersForAccount returns all user IDs subscribed to the given account.
 	UsersForAccount(accountID string) ([]string, error)
+
+	// SetFilterConfig stores per-user per-account filter settings.
+	SetFilterConfig(userID, accountID string, config FeedFilter) error
+
+	// FilterConfigForAccount returns the filter config for each subscriber
+	// of the given account. The map key is the user ID.
+	FilterConfigForAccount(accountID string) (map[string]FeedFilter, error)
 }
 
 // DeviceTokenStore persists FCM device tokens keyed by user.

@@ -32,7 +32,6 @@ import (
 	"pano_chart/backend/infrastructure/payment"
 	"pano_chart/backend/infrastructure/rankings"
 	"pano_chart/backend/infrastructure/snapshot"
-	"pano_chart/backend/infrastructure/solana"
 	"pano_chart/backend/infrastructure/symbol_universe"
 
 	appnotify "pano_chart/backend/application/notifications"
@@ -326,24 +325,6 @@ func main() {
 		log.Println("[main] Google Play provider not configured (missing env vars)")
 	}
 
-	// --- Solana payment provider ---
-	solWallet := os.Getenv("SOLANA_WALLET_ADDRESS")
-	solRPC := os.Getenv("SOLANA_RPC_URL")
-	var solProvider *solana.Provider
-	if solWallet != "" {
-		solCfg := solana.Config{
-			WalletAddress:    solWallet,
-			PriceUSD:         4.99,
-			SubscriptionDays: 30,
-			RPCURL:           solRPC,
-		}
-		solProvider = solana.NewProvider(solCfg, nil)
-		providerRegistry.Register(solProvider)
-		log.Printf("[main] Solana provider registered (wallet=%s)\n", solWallet)
-	} else {
-		log.Println("[main] Solana provider not configured (SOLANA_WALLET_ADDRESS not set)")
-	}
-
 	subscriptionSvc := usecases.NewSubscriptionService(paymentRepo, paymentRepo)
 	verifyPurchaseUC := usecases.NewVerifyPurchase(providerRegistry, subscriptionSvc)
 	log.Printf("[main] Payment infrastructure initialized (db=%s)\n", paymentDBPath)
@@ -550,10 +531,6 @@ func main() {
 	}
 	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseHandler(verifyPurchaseUC))
 	mux.Handle("/api/subscription/status", adhttp.NewSubscriptionStatusHandler(subscriptionSvc))
-	if solProvider != nil {
-		mux.Handle("/api/sol/price", adhttp.NewSolPriceHandler(solProvider, solWallet, 4.99))
-		log.Println("[main] /api/sol/price endpoint registered")
-	}
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
 	mux.Handle("/api/market/regime", regimeHandler)
@@ -570,6 +547,7 @@ func main() {
 	// Social endpoints
 	mux.Handle("/api/social/subscribe", adhttp.NewSocialSubscribeHandler(socialService))
 	mux.Handle("/api/social/unsubscribe", adhttp.NewSocialUnsubscribeHandler(socialService))
+	mux.Handle("/api/social/subscribe/settings", adhttp.NewSocialSubscribeSettingsHandler(socialService))
 	mux.Handle("/api/social/feed", adhttp.NewSocialFeedHandler(socialService))
 	mux.Handle("/api/social/accounts", adhttp.NewSocialAccountsHandler(socialService))
 	log.Println("[main] /api/social/* endpoints registered")

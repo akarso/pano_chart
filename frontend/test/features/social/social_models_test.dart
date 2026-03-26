@@ -65,6 +65,35 @@ void main() {
 
       expect(post.isRetweet, isTrue);
     });
+
+    test('isReply defaults to false when absent', () {
+      final json = {
+        'id': 'p1',
+        'account_id': 'twitter:x',
+        'author': 'x',
+        'title': 'Hello',
+        'url': 'https://x.com/1',
+        'timestamp': 1700000000,
+      };
+      final post = SocialPost.fromJson(json);
+
+      expect(post.isReply, isFalse);
+    });
+
+    test('isReply parsed from JSON', () {
+      final json = {
+        'id': 'r1',
+        'account_id': 'twitter:x',
+        'author': 'x',
+        'title': '@someone nice post',
+        'url': 'https://x.com/r1',
+        'timestamp': 1700000000,
+        'is_reply': true,
+      };
+      final post = SocialPost.fromJson(json);
+
+      expect(post.isReply, isTrue);
+    });
   });
 
   group('SocialFeedResponse', () {

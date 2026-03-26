@@ -15,6 +15,11 @@ type NotificationConfig struct {
 	DowntrendMinDominance float64
 	SidewaysMinDominance  float64
 	SetupMinScore         float64
+
+	UptrendTimeframe   string // e.g. "1h", "15m"
+	DowntrendTimeframe string
+	SidewaysTimeframe  string
+	SetupTimeframe     string
 }
 
 // DefaultNotificationConfig returns sane defaults for a new user.
@@ -32,6 +37,10 @@ func DefaultNotificationConfig(userID string) NotificationConfig {
 		DowntrendMinDominance: 0.75,
 		SidewaysMinDominance:  0.75,
 		SetupMinScore:         0.75,
+		UptrendTimeframe:      "1h",
+		DowntrendTimeframe:    "1h",
+		SidewaysTimeframe:     "1h",
+		SetupTimeframe:        "1h",
 	}
 }
 

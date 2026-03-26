@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:pano_chart_frontend/features/billing/api/sol_price_info.dart';
 import 'package:pano_chart_frontend/features/billing/api/subscription_api.dart';
 import 'package:pano_chart_frontend/features/billing/billing_manager.dart';
 import 'package:pano_chart_frontend/features/billing/trial_manager.dart';
@@ -27,16 +26,6 @@ class _FakeSubscriptionApi implements SubscriptionApi {
   @override
   Future<SubscriptionStatus> getStatus(String userId) async {
     return statusToReturn;
-  }
-
-  @override
-  Future<SolPriceInfo> getSolPrice() async {
-    return const SolPriceInfo(
-      solPrice: 130.0,
-      requiredSOL: 0.038385,
-      priceUSD: 4.99,
-      wallet: 'FakeWallet123',
-    );
   }
 }
 
