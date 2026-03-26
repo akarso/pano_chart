@@ -13,8 +13,12 @@ import 'package:pano_chart_frontend/features/market_state/http_regime_api.dart';
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/composite_index_data.dart';
 import 'package:pano_chart_frontend/features/market_state/regime_data.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
   // ---- Data Model Tests ----
 
   group('TransitionData', () {
@@ -25,6 +29,7 @@ void main() {
         'probabilities': {
           'trend': 0.42,
           'sideways': 0.28,
+          'compression': 0.0,
           'expansion': 0.30,
         },
         'horizon': '12 candles',
@@ -35,6 +40,7 @@ void main() {
       expect(data.currentRegime, 'compression');
       expect(data.probabilities.trend, 0.42);
       expect(data.probabilities.sideways, 0.28);
+      expect(data.probabilities.compression, 0.0);
       expect(data.probabilities.expansion, 0.30);
       expect(data.horizon, '12 candles');
     });
@@ -46,6 +52,7 @@ void main() {
         'probabilities': {
           'trend': 0,
           'sideways': 1,
+          'compression': 0,
           'expansion': 0,
         },
         'horizon': '12 candles',
@@ -54,6 +61,7 @@ void main() {
       final data = TransitionData.fromJson(json);
       expect(data.probabilities.trend, 0.0);
       expect(data.probabilities.sideways, 1.0);
+      expect(data.probabilities.compression, 0.0);
       expect(data.probabilities.expansion, 0.0);
     });
   });
@@ -72,6 +80,7 @@ void main() {
             'probabilities': {
               'trend': 0.42,
               'sideways': 0.28,
+              'compression': 0.0,
               'expansion': 0.30,
             },
             'horizon': '12 candles',
@@ -105,6 +114,7 @@ void main() {
             'probabilities': {
               'trend': 0.2,
               'sideways': 0.7,
+              'compression': 0.0,
               'expansion': 0.1,
             },
             'horizon': '12 candles',
@@ -152,7 +162,7 @@ void main() {
         state: 'sideways',
         confidence: 0.6,
         breadth: MarketBreadth(
-          sideways: 0.6, compression: 0.2, breakout: 0.1, trend: 0.1,
+          sideways: 0.6, compression: 0.2, expansion: 0.1, trend: 0.1,
         ),
         symbolCount: 50,
       ));
@@ -171,7 +181,7 @@ void main() {
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
           sidewaysBreadth: 0.10,
-          breakoutBreadth: 0.05,
+          expansionBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,
@@ -183,6 +193,7 @@ void main() {
         probabilities: TransitionProbabilities(
           trend: 0.42,
           sideways: 0.28,
+          compression: 0.0,
           expansion: 0.30,
         ),
         horizon: '12 candles',
@@ -216,7 +227,7 @@ void main() {
         state: 'trend',
         confidence: 0.8,
         breadth: MarketBreadth(
-          sideways: 0.1, compression: 0.1, breakout: 0.0, trend: 0.8,
+          sideways: 0.1, compression: 0.1, expansion: 0.0, trend: 0.8,
         ),
         symbolCount: 50,
       ));
@@ -260,7 +271,7 @@ void main() {
         state: 'sideways',
         confidence: 0.5,
         breadth: MarketBreadth(
-          sideways: 1.0, compression: 0.0, breakout: 0.0, trend: 0.0,
+          sideways: 1.0, compression: 0.0, expansion: 0.0, trend: 0.0,
         ),
         symbolCount: 10,
       ));
@@ -279,7 +290,7 @@ void main() {
         metrics: RegimeMetrics(
           trendBreadth: 0.1,
           sidewaysBreadth: 0.5,
-          breakoutBreadth: 0.05,
+          expansionBreadth: 0.05,
           compressionBreadth: 0.1,
           volatilityExpansion: 1.0,
           dispersion: 0.02,
@@ -291,6 +302,7 @@ void main() {
         probabilities: TransitionProbabilities(
           trend: 0.20,
           sideways: 0.65,
+          compression: 0.0,
           expansion: 0.15,
         ),
         horizon: '12 candles',

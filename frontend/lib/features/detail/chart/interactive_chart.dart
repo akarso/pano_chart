@@ -34,6 +34,7 @@ class InteractiveChart extends StatefulWidget {
   final EventsViewModel? eventsViewModel;
   final ValueChanged<String>? onNavigateToEvent;
   final SocialFeedViewModel? socialFeedViewModel;
+  final VoidCallback? onNavigateToFeed;
 
   /// Per-candle volatility buckets (aligned 1:1 with series.candles).
   /// Null entries mean no bucket matched that candle.
@@ -61,6 +62,7 @@ class InteractiveChart extends StatefulWidget {
     this.eventsViewModel,
     this.onNavigateToEvent,
     this.socialFeedViewModel,
+    this.onNavigateToFeed,
     this.volatilityAligned,
     this.height = 360,
     this.warmupCount = 0,
@@ -502,22 +504,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                     ),
                   ),
 
-                  // ── Event overlay (full height so future dashed lines reach x-axis) ──
-                  if (widget.eventsViewModel != null &&
-                      widget.eventsViewModel!.state.showEvents)
-                    Positioned(
-                      left: 0,
-                      top: 0,
-                      width: chartW,
-                      height: priceH + volumeH + volH + oscH + behH + xAxisH,
-                      child: ChartEventOverlay(
-                        markers: _buildEventMarkers(chartW),
-                        onNavigateToEvent: widget.onNavigateToEvent,
-                        priceAreaHeight: priceH,
-                      ),
-                    ),
-
-                  // ── Social overlay (blue markers) ──
+                  // ── Social overlay (blue markers — below events) ──
                   if (widget.socialFeedViewModel != null &&
                       widget.socialFeedViewModel!.showOnChart &&
                       widget.socialFeedViewModel!.state.posts.isNotEmpty)
@@ -528,6 +515,22 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       height: priceH + volumeH + volH + oscH + behH + xAxisH,
                       child: ChartSocialOverlay(
                         markers: _buildSocialMarkers(chartW),
+                        priceAreaHeight: priceH,
+                        onNavigateToFeed: widget.onNavigateToFeed,
+                      ),
+                    ),
+
+                  // ── Event overlay (on top — higher tap priority) ──
+                  if (widget.eventsViewModel != null &&
+                      widget.eventsViewModel!.state.showEvents)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: chartW,
+                      height: priceH + volumeH + volH + oscH + behH + xAxisH,
+                      child: ChartEventOverlay(
+                        markers: _buildEventMarkers(chartW),
+                        onNavigateToEvent: widget.onNavigateToEvent,
                         priceAreaHeight: priceH,
                       ),
                     ),

@@ -197,7 +197,7 @@ func main() {
 	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
 
 	// --- Overview cache TTL ---
-	overviewCacheTTL := 45 * time.Second // default
+	overviewCacheTTL := 3 * time.Minute // default
 	if ttlStr := os.Getenv("OVERVIEW_CACHE_TTL_SECONDS"); ttlStr != "" {
 		if secs, err := strconv.Atoi(ttlStr); err == nil {
 			if secs < 5 {
@@ -238,7 +238,7 @@ func main() {
 	)
 
 	// --- Rankings cache TTL ---
-	rankingsCacheTTL := 60 * time.Second // default
+	rankingsCacheTTL := 3 * time.Minute // default
 	if ttlStr := os.Getenv("RANKINGS_CACHE_TTL_SECONDS"); ttlStr != "" {
 		if secs, err := strconv.Atoi(ttlStr); err == nil {
 			if secs < 10 {
@@ -340,7 +340,7 @@ func main() {
 		cachedUniverse, candleRepo, exchangeInfoURL, tickerURL,
 	)
 	compositeService := metrics.NewCompositeIndexService(candleProvider, rankingWorkers)
-	compositeCacheTTL := 45 * time.Second
+	compositeCacheTTL := 3 * time.Minute
 	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite")
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
@@ -390,7 +390,7 @@ func main() {
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
-	setupService.SetMarketProvider(marketService)
+	setupService.SetMarketProvider(metricsService)
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
@@ -499,15 +499,19 @@ func main() {
 				macroProvider = &eventsAdapter{uc: eventsUC}
 			}
 
+			setupScanAdapter := infranotify.NewSetupScanAdapter(setupService, rankingsUC)
+
 			notifyScheduler := appnotify.NewScheduler(
 				notifyEngine,
-				marketService, // implements MarketProvider (Calculate)
-				nil,           // setup provider — wired in a future PR
+				metricsService,   // implements MarketProvider (CalculateRegime)
+				setupScanAdapter, // scans top-ranked symbols for best setup
 				macroProvider,
 				appnotify.DefaultSchedulerConfig(),
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
-			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
+			// Subscription gating disabled: in beta all users receive
+			// pro-level notifications. Re-enable once subscriptions are live.
+			// notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
 			go notifyScheduler.Run(socialCtx)
 			log.Println("[main] Notification engine + scheduler started")
 		}
@@ -593,5 +597,6 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 	return a.uc.Execute(ctx, usecases.GetEventsRequest{
 		DateFrom: from,
 		DateTo:   to,
+		Country:  "United States",
 	})
 }

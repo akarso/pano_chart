@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../domain/news_article.dart';
 import 'news_view_model.dart';
@@ -82,7 +84,12 @@ class _NewsArticleScreenState extends State<NewsArticleScreen> {
     }
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.fromLTRB(
+        20,
+        20,
+        20,
+        20 + MediaQuery.of(context).padding.bottom,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -133,39 +140,70 @@ class _NewsArticleScreenState extends State<NewsArticleScreen> {
             ),
           ],
           const SizedBox(height: 20),
-          // Body rendered as paragraphs
-          ..._renderBody(article.body),
+          MarkdownBody(
+            data: article.body,
+            selectable: true,
+            onTapLink: (text, href, title) {
+              if (href != null) {
+                launchUrl(Uri.parse(href),
+                    mode: LaunchMode.externalApplication);
+              }
+            },
+            styleSheet: MarkdownStyleSheet(
+              p: const TextStyle(
+                color: Colors.white70,
+                fontSize: 15,
+                height: 1.6,
+              ),
+              h1: const TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+              h2: const TextStyle(
+                color: Colors.white,
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+              ),
+              h3: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+              listBullet: const TextStyle(
+                color: Colors.white70,
+                fontSize: 15,
+              ),
+              code: const TextStyle(
+                color: Color(0xFF00E676),
+                backgroundColor: Color(0xFF2A2A2A),
+                fontSize: 13,
+              ),
+              codeblockDecoration: BoxDecoration(
+                color: const Color(0xFF1E1E1E),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              blockquoteDecoration: BoxDecoration(
+                border: Border(
+                  left: BorderSide(
+                    color: Colors.grey[600]!,
+                    width: 3,
+                  ),
+                ),
+              ),
+              blockquotePadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              a: const TextStyle(
+                color: Color(0xFF00E676),
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  /// Renders the markdown body as styled text paragraphs.
-  ///
-  /// Splits on double newlines for paragraphs and renders each
-  /// as a [SelectableText] widget with appropriate spacing.
-  List<Widget> _renderBody(String body) {
-    final paragraphs = body.split(RegExp(r'\n\n+'));
-    final widgets = <Widget>[];
-    for (final p in paragraphs) {
-      final trimmed = p.trim();
-      if (trimmed.isEmpty) continue;
-      widgets.add(
-        Padding(
-          padding: const EdgeInsets.only(bottom: 14),
-          child: SelectableText(
-            trimmed,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 15,
-              height: 1.6,
-            ),
-          ),
-        ),
-      );
-    }
-    return widgets;
-  }
 }
 
 /// Colored status chip for the article detail view.

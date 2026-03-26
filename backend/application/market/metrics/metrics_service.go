@@ -2,9 +2,11 @@ package metrics
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
+	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -135,16 +137,105 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 	}
 	breadth := scoreBreadth(seriesList, timeframe)
 
+	// Derive expansion breadth: amplify raw breakout average with volatility
+	// so the exposed metric reflects the same "expansion" concept used in
+	// regime scoring (breakout activity + elevated volatility).
+	expansionBreadth := math.Min(breadth.expansion*(1+math.Max(0, volExpansion-1.0)*1.5), 1.0)
+
 	metrics := mkt.RegimeMetrics{
 		TrendBreadth:        breadth.trend,
 		SidewaysBreadth:     breadth.sideways,
 		CompressionBreadth:  breadth.compression,
-		BreakoutBreadth:     breadth.breakout,
+		ExpansionBreadth:    expansionBreadth,
 		VolatilityExpansion: volExpansion,
 		Dispersion:          disp,
 	}
 
+	// --- Health dampening (backported from MarketStateService) ---
+	// Fetch evaluation snapshots for trend health and silent detection.
+	var effectiveTrend, breakdownRate float64
+	evaluations, evalErr := s.evalProvider.GetLatestEvaluations(timeframe)
+	hasHealthData := false
+
+	if evalErr == nil && len(evaluations) > 0 {
+		var healthyCount, effectiveSum, breakdowns float64
+		for _, e := range evaluations {
+			if e.ATR == 0 {
+				continue
+			}
+			// Only consider tokens where trend is the dominant regime.
+			breakoutMax := math.Max(e.BreakoutUpScore, e.BreakoutDownScore)
+			ts := math.Abs(e.TrendScore)
+			if ts < e.SidewaysScore || ts < e.CompressionScore || ts < breakoutMax {
+				continue
+			}
+			healthyCount++
+			state := "uptrend"
+			if e.Bias == "down" {
+				state = "downtrend"
+			}
+			h := appmarket.ComputeTrendHealth(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn)
+			effectiveSum += h
+			if h < 0.4 {
+				breakdowns++
+			}
+		}
+		if healthyCount > 0 {
+			hasHealthData = true
+			effectiveTrend = effectiveSum / float64(len(evaluations))
+			breakdownRate = breakdowns / healthyCount
+
+			// Dampen trend breadth when health is poor.
+			dampBreadth := mkt.Breadth{
+				Trend:       breadth.trend,
+				Sideways:    breadth.sideways,
+				Compression: breadth.compression,
+				Expansion:   breadth.expansion,
+			}
+			dampBreadth = appmarket.DampenTrendByHealth(dampBreadth, effectiveTrend, breakdownRate)
+			breadth.trend = dampBreadth.Trend
+			breadth.sideways = dampBreadth.Sideways
+			breadth.compression = dampBreadth.Compression
+			breadth.expansion = dampBreadth.Expansion
+		}
+	}
+
 	regime, prevalence, scores := detectRegime(breadth, volExpansion)
+
+	// --- Indecisive guard ---
+	regime, prevalence = applyIndecisiveGuard(regime, scores)
+
+	// --- Silent override ---
+	// Only when dominant regime is sideways or indecisive, returns are flat,
+	// and volume is not elevated.
+	if (regime == mkt.RegimeSideways || regime == mkt.RegimeIndecisive) && evalErr == nil && len(evaluations) > 0 {
+		avgAbsReturn, avgVolume, medianVolume := appmarket.AggregateActivityMetrics(evaluations)
+		hasVolumeData := medianVolume > 0
+		volumeNormal := hasVolumeData && avgVolume <= medianVolume*1.5
+		if hasVolumeData && avgAbsReturn < 0.5 && volumeNormal {
+			regime = mkt.RegimeSilent
+		}
+	}
+
+	label := appmarket.BuildMarketLabel(breadth.trend, effectiveTrend)
+	_ = hasHealthData
+
+	// Compute directional bias from aggregate returns.
+	// Hard gate: if aggregate return is negative, bias cannot be "up".
+	// If positive, cannot be "down".  The return sign is the truth.
+	bias := "neutral"
+	if len(results) > 0 {
+		var returnSum float64
+		for _, r := range results {
+			returnSum += r.ret
+		}
+		avgReturn := returnSum / float64(len(results))
+		if avgReturn > 0 {
+			bias = "up"
+		} else if avgReturn < 0 {
+			bias = "down"
+		}
+	}
 
 	// Notify observer (e.g. regime history tracker) — fire-and-forget.
 	if s.observer != nil {
@@ -152,10 +243,14 @@ func (s *MetricsService) CalculateRegime(ctx context.Context, timeframe string) 
 	}
 
 	return mkt.RegimeSummary{
-		Timeframe:  timeframe,
-		Regime:     regime,
-		Prevalence: prevalence,
-		Scores:     scores,
-		Metrics:    metrics,
+		Timeframe:      timeframe,
+		Regime:         regime,
+		Prevalence:     prevalence,
+		Scores:         scores,
+		Metrics:        metrics,
+		Bias:           bias,
+		EffectiveTrend: effectiveTrend,
+		BreakdownRate:  breakdownRate,
+		Label:          label,
 	}, nil
 }

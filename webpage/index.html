@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pano Charts — Market Screener</title>
+  <link rel="icon" type="image/png" href="assets/img/icon2.png">
+  <link rel="stylesheet" href="assets/css/style.css?v=3">
+</head>
+<body>
+
+  <header>
+    <img src="assets/img/icon2.png" alt="Pano Charts" class="logo">
+    <h1>Pano Charts</h1>
+    <p class="tagline">Crypto market screener with custom technical analysis scoring</p>
+    <nav>
+      <a target="_blank" href="https://play.google.com/store/apps/details?id=com.akarso.panocharts">Download</a>
+      <a href="#about">About</a>
+      <a href="help.html">Help</a>
+      <a href="blog.html">Blog</a>
+      <a href="news.html">News</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+
+    <!-- About -->
+    <section id="about">
+      <h2>About</h2>
+      <p>
+        Pano Charts is an app I personally found lacking when trading, so decided to write one.
+        I wanted a quick screener with plenty of tiny charts to be able to compare at a glance, quickly.
+        Did that, and then thought "how about actually sorting them a bit?". Created a few simple sorting criteria and
+        I thought I would like to be able to sort by sideways action, as my favourite trading setup. So added
+        sideways action detection algorithm. Actually five of them, trying to nail the best one. Then also compression
+        and breakout ranking, because it seemed logical: sideways -> compression -> breakout -> trend. So this is all now
+        in the app, but I was lacking confirmation phase, so added detailed view with indicators I found to be most useful
+        (RSI, EMA clouds, ATR). While at it, I thought it would be good to add some context and ended up including
+        macro event list. Put event labels on the chart and "why not extend it into the future a bit?", so now you have future
+        events on the x axis as well. Then I thought "what about Fear &amp; Greed index?", and added that too. 
+        And a bubble maps, while at it. So now it's a full blown app, and I use it every day, and I hope you will find it useful too.
+      </p>
+    </section>
+
+    <!-- Tagline -->
+    <section id="tagline">
+      <h2>Tagline</h2>
+      <p class="tagline-hero">150 charts. One glance. Every edge.</p>
+    </section>
+
+    <!-- Screenshots -->
+    <section id="screenshots">
+      <h2>Screenshots</h2>
+      <div class="screenshot-grid">
+        <img src="assets/img/screenshots/1.jpg" alt="Screenshot 1" class="screenshot-thumb" loading="lazy">
+        <img src="assets/img/screenshots/2.jpg" alt="Screenshot 2" class="screenshot-thumb" loading="lazy">
+        <img src="assets/img/screenshots/3.jpg" alt="Screenshot 3" class="screenshot-thumb" loading="lazy">
+        <img src="assets/img/screenshots/4.jpg" alt="Screenshot 4" class="screenshot-thumb" loading="lazy">
+        <img src="assets/img/screenshots/5.jpg" alt="Screenshot 5" class="screenshot-thumb" loading="lazy">
+      </div>
+    </section>
+
+    <!-- Lightbox overlay -->
+    <div id="lightbox" class="lightbox" hidden>
+      <button class="lb-close" aria-label="Close">&times;</button>
+      <button class="lb-prev" aria-label="Previous">&#8249;</button>
+      <img class="lb-img" src="" alt="">
+      <button class="lb-next" aria-label="Next">&#8250;</button>
+      <span class="lb-counter"></span>
+    </div>
+
+    <!-- Download -->
+    <section id="download">
+      <h2>Download</h2>
+      <p>
+      <a style="font-size: larger; color: aqua;" href="https://play.google.com/store/apps/details?id=com.akarso.panocharts" target="_blank">Get Pano Charts on Google Play</a>
+    </p>
+    </section>    
+
+    <!-- What it is -->
+    <section id="what-it-is">
+      <h2>What it is</h2>
+      <p>
+        Pano Charts is a crypto market screener built for traders who move fast.
+        Instead of flipping between dozens of browser tabs, you get all 150 top tokens
+        laid out as tiny interactive charts — sorted, scored, and color-coded by
+        the patterns that actually matter: sideways consolidation, compression squeezes,
+        breakout momentum, and trend strength. Tap any symbol and you're instantly
+        in a full candlestick chart with indicators, macro event markers projected
+        into the future, volatility activity overlay, crowd-positioning gauges, and
+        one-tap links to your exchange. Whether you're scanning for your next entry
+        or monitoring open positions, Pano Charts turns hours of manual chart-flipping
+        into seconds of structured insight.
+      </p>
+    </section>
+
+    <!-- What it does -->
+    <section id="what-it-does">
+      <h2>What it does</h2>
+      <ul class="feature-list">
+        <li><strong>150-token sparkline grid</strong> — see every top crypto at a glance, with real-time flash-dot updates and hi-res normalized sparklines</li>
+        <li><strong>Custom scoring engine</strong> — proprietary algorithms rank tokens by sideways structure, compression, breakout strength, and trend predictability</li>
+        <li><strong>Interactive candlestick charts</strong> — pinch-zoom, pan, crosshair readout, with RSI, EMA clouds, and ATR indicators</li>
+        <li><strong>Volatility activity overlay</strong> — shows which hours (or days) are historically most active, derived from 150 days of minute-level data with adaptive color-coding</li>
+        <li><strong>Macro event timeline</strong> — economic events plotted directly on the chart, including future projections so you can see what's coming</li>
+        <li><strong>Market regime detection</strong> — classifies overall market state (compression, sideways, trend, expansion) with transition probability forecasts</li>
+        <li><strong>Crowd positioning gauges</strong> — fragility scores, funding rates, and OI data reveal when the crowd is dangerously one-sided</li>
+        <li><strong>Retail behavior engine</strong> — greed, fear, patience, and panic dimensions per token, so you can trade against the herd</li>
+        <li><strong>Setup quality scores</strong> — independent ratings for compression breakouts, trend continuations, and range reversions, with a unified confidence indicator (green/yellow/red dot) showing how trustworthy the setup is right now</li>
+        <li><strong>Confidence-aware breakout probability</strong> — raw breakout scores are adjusted by signal confidence so weak-context spikes don't mislead you</li>
+        <li><strong>Signal labels</strong> — up to 3 plain-English labels per token ("Breakout pressure building", "Crowded longs") with strength indicators</li>
+        <li><strong>Bubble map</strong> — market-cap visualization - volume and price change mode</li>
+        <li><strong>Fear &amp; Greed index</strong> — classic sentiment gauge always one tap away</li>
+        <li><strong>News feed</strong> — curated crypto articles without leaving the app</li>
+        <li><strong>Auto-refresh</strong> — staggered live updates across all views, from 10-second intervals on 1m charts to hourly on dailies</li>
+        <li><strong>One-tap trade execution</strong> — jump directly to your preferred exchange with the symbol pre-loaded</li>
+        <li><strong>Favourites &amp; filters</strong> — star tokens, hide stablecoins, toggle columns, sort by any metric</li>
+      </ul>
+    </section>
+
+    <!-- Contact -->
+    <section id="contact">
+      <h2>Contact</h2>
+      <p>Questions, feedback or bug reports? Reach out:</p>
+      <ul class="contact-list">
+        <li><strong>Email:</strong> <a href="mailto:info@panocharts.com">info@panocharts.com</a></li>
+        <li><strong>Telegram:</strong> <a href="https://t.me/panocharts" target="_blank" rel="noopener">t.me/panocharts</a></li>
+      </ul>
+    </section>
+
+  </main>
+
+  <footer>
+    <p>&copy; 2026 Pano Charts. All rights reserved. · <a href="privacy_policy.html">Privacy Policy</a></p>
+  </footer>
+
+  <!-- Cookie consent banner -->
+  <div id="cookie-banner" class="cookie-banner" hidden>
+    <p>"The generation that refused to accept cookies, is now giving AI access to their desktops, files and bank accounts." FYI I am not using cookies on this page.</p>
+    <button id="cookie-ok">OK</button>
+  </div>
+
+  <script>
+    // Cookie consent (ironic edition)
+    (() => {
+      const banner = document.getElementById('cookie-banner');
+      if (!banner) return;
+      if (document.cookie.includes('cookie_consent=1')) return;
+      banner.hidden = false;
+      document.getElementById('cookie-ok').addEventListener('click', () => {
+        document.cookie = 'cookie_consent=1;max-age=31536000;path=/;SameSite=Lax';
+        banner.hidden = true;
+      });
+    })();
+
+    document.querySelectorAll('nav a[href^="#"]').forEach(a => {
+      a.addEventListener('click', e => {
+        e.preventDefault();
+        const target = document.querySelector(a.getAttribute('href'));
+        if (target) target.scrollIntoView({ behavior: 'smooth' });
+      });
+    });
+
+    // Lightbox
+    (() => {
+      const lb = document.getElementById('lightbox');
+      if (!lb) return;
+      const img = lb.querySelector('.lb-img');
+      const counter = lb.querySelector('.lb-counter');
+      const thumbs = [...document.querySelectorAll('.screenshot-thumb')];
+      let idx = 0;
+
+      function show(i) {
+        idx = (i + thumbs.length) % thumbs.length;
+        img.src = thumbs[idx].src;
+        img.alt = thumbs[idx].alt;
+        counter.textContent = `${idx + 1} / ${thumbs.length}`;
+        lb.hidden = false;
+      }
+
+      thumbs.forEach((t, i) => t.addEventListener('click', () => show(i)));
+      lb.querySelector('.lb-close').addEventListener('click', () => lb.hidden = true);
+      lb.querySelector('.lb-prev').addEventListener('click', () => show(idx - 1));
+      lb.querySelector('.lb-next').addEventListener('click', () => show(idx + 1));
+      lb.addEventListener('click', e => { if (e.target === lb) lb.hidden = true; });
+      document.addEventListener('keydown', e => {
+        if (lb.hidden) return;
+        if (e.key === 'Escape') lb.hidden = true;
+        if (e.key === 'ArrowLeft') show(idx - 1);
+        if (e.key === 'ArrowRight') show(idx + 1);
+      });
+    })();
+  </script>
+
+</body>
+</html>

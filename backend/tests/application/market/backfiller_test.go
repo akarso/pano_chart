@@ -3,6 +3,7 @@ package market_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -233,10 +234,13 @@ func TestBackfiller_DetectsRegimeVariation(t *testing.T) {
 		rangeSize := 5.0              // stable moderate wicks
 		candles[i] = domain.NewCandleUnsafe(sym, tf, bfTS(i), p, p+rangeSize, p-rangeSize, p, 1000)
 	}
-	// Second 40%: flat at the last trending close, very tight range.
+	// Second 40%: oscillate around the last trending close — genuine
+	// sideways behavior that the scoring calculators recognise clearly.
 	flatClose := 50000.0 + float64(boundary-1)*2.0
 	for i := boundary; i < n; i++ {
-		candles[i] = domain.NewCandleUnsafe(sym, tf, bfTS(i), flatClose, flatClose+0.5, flatClose-0.5, flatClose, 1000)
+		offset := 8.0 * math.Sin(float64(i)*0.5)
+		c := flatClose + offset
+		candles[i] = domain.NewCandleUnsafe(sym, tf, bfTS(i), c, c+3, c-3, c, 1000)
 	}
 
 	provider := &backfillCandleProvider{

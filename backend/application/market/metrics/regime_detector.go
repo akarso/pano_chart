@@ -12,8 +12,12 @@ import (
 // Returns the dominant regime, its prevalence (0–1), and the full scores.
 func detectRegime(b breadthValues, volatility float64) (mkt.Regime, float64, mkt.RegimeScores) {
 	scores := regimeScores(b, volatility)
+	regime, prevalence := dominantRegime(scores)
+	return regime, prevalence, scores
+}
 
-	// Find dominant regime.
+// dominantRegime picks the regime with the highest softmax score.
+func dominantRegime(scores mkt.RegimeScores) (mkt.Regime, float64) {
 	type entry struct {
 		regime mkt.Regime
 		score  float64
@@ -30,8 +34,33 @@ func detectRegime(b breadthValues, volatility float64) (mkt.Regime, float64, mkt
 			best = c
 		}
 	}
+	return best.regime, best.score
+}
 
-	return best.regime, best.score, scores
+// applyIndecisiveGuard overrides the regime to indecisive when no regime
+// clearly dominates. This prevents low-confidence notifications.
+//   - Rule 1: dominant score < 50% → indecisive
+//   - Rule 2: gap between top two < 20pp → indecisive
+func applyIndecisiveGuard(regime mkt.Regime, scores mkt.RegimeScores) (mkt.Regime, float64) {
+	vals := [4]float64{scores.Expansion, scores.Compression, scores.Trend, scores.Sideways}
+	first, second := topTwoFloats(vals[:])
+	if first < 0.50 || (first-second) < 0.20 {
+		return mkt.RegimeIndecisive, first
+	}
+	return regime, first
+}
+
+// topTwoFloats returns the two highest values from a slice.
+func topTwoFloats(vals []float64) (first, second float64) {
+	for _, v := range vals {
+		if v >= first {
+			second = first
+			first = v
+		} else if v > second {
+			second = v
+		}
+	}
+	return
 }
 
 // regimeScores computes soft prevalence scores for all four regimes.
@@ -54,7 +83,7 @@ func regimeScores(b breadthValues, volatility float64) mkt.RegimeScores {
 	// --- Raw evidence for each regime ---
 
 	// Expansion: breakout activity + high volatility.
-	expRaw := b.breakout*2 + math.Max(0, volatility-1.0)*3
+	expRaw := b.expansion*2 + math.Max(0, volatility-1.0)*3
 
 	// Compression: direct from the real compression detector.
 	compRaw := b.compression * 3
@@ -63,9 +92,7 @@ func regimeScores(b breadthValues, volatility float64) mkt.RegimeScores {
 	trendRaw := b.trend * 3
 
 	// Sideways: direct from the real sideways detector.
-	// A small floor (0.1) ensures sideways wins when no other signal is present,
-	// mirroring the intuition that "absence of evidence" = sideways.
-	sidRaw := b.sideways*2 + 0.1
+	sidRaw := b.sideways * 2
 
 	// --- Softmax normalisation ---
 	raws := [4]float64{

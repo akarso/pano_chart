@@ -220,9 +220,10 @@ func TestTracker_sameRegimeIncrementsDuration(t *testing.T) {
 	repo := newTestRepo(t)
 	tracker := regimehistory.NewTracker(repo)
 
-	_ = tracker.Update("4h", mkt.RegimeTrend, 1000)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 2000)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 3000)
+	// Each timestamp must cross a 4h candle boundary (14400s) to increment.
+	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
 
 	latest, _ := repo.GetLatest("4h")
 	if latest.DurationCandles != 3 {
@@ -230,13 +231,28 @@ func TestTracker_sameRegimeIncrementsDuration(t *testing.T) {
 	}
 }
 
+func TestTracker_duplicateCallWithinSameBoundaryIsNoop(t *testing.T) {
+	repo := newTestRepo(t)
+	tracker := regimehistory.NewTracker(repo)
+
+	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 14401) // same 4h boundary
+	_ = tracker.Update("4h", mkt.RegimeTrend, 14500) // same 4h boundary
+
+	latest, _ := repo.GetLatest("4h")
+	if latest.DurationCandles != 1 {
+		t.Errorf("duration: got %d, want 1 (duplicates should be skipped)", latest.DurationCandles)
+	}
+}
+
 func TestTracker_regimeChangeClosesAndOpensNew(t *testing.T) {
 	repo := newTestRepo(t)
 	tracker := regimehistory.NewTracker(repo)
 
-	_ = tracker.Update("4h", mkt.RegimeCompression, 1000)
-	_ = tracker.Update("4h", mkt.RegimeCompression, 2000)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 3000)
+	// Timestamps cross 4h boundaries (14400s each).
+	_ = tracker.Update("4h", mkt.RegimeCompression, 14400)
+	_ = tracker.Update("4h", mkt.RegimeCompression, 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
 
 	periods, _ := repo.GetHistory("4h", 50)
 	if len(periods) != 2 {
@@ -244,7 +260,7 @@ func TestTracker_regimeChangeClosesAndOpensNew(t *testing.T) {
 	}
 
 	// First period should be closed.
-	if periods[0].EndTimestamp == nil || *periods[0].EndTimestamp != 3000 {
+	if periods[0].EndTimestamp == nil || *periods[0].EndTimestamp != 43200 {
 		t.Errorf("first period end: %v", periods[0].EndTimestamp)
 	}
 	if periods[0].DurationCandles != 2 {
@@ -281,11 +297,11 @@ func TestService_GetHistory(t *testing.T) {
 		t.Errorf("expected 0 periods, got %d", len(h.Periods))
 	}
 
-	// Add some history.
+	// Add some history with timestamps crossing 4h boundaries.
 	tracker := regimehistory.NewTracker(repo)
-	_ = tracker.Update("4h", mkt.RegimeSideways, 1000)
-	_ = tracker.Update("4h", mkt.RegimeSideways, 2000)
-	_ = tracker.Update("4h", mkt.RegimeCompression, 3000)
+	_ = tracker.Update("4h", mkt.RegimeSideways, 14400)
+	_ = tracker.Update("4h", mkt.RegimeSideways, 28800)
+	_ = tracker.Update("4h", mkt.RegimeCompression, 43200)
 
 	h, _ = svc.GetHistory("4h", 50)
 	if h.CurrentAge != 1 {
@@ -309,9 +325,9 @@ func TestService_CurrentAge(t *testing.T) {
 	}
 
 	tracker := regimehistory.NewTracker(repo)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 1000)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 2000)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 3000)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
 
 	age, _ = svc.CurrentAge("4h")
 	if age != 3 {
@@ -327,8 +343,9 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	historySvc := regimehistory.NewService(repo)
 
 	// Build up regime history: 20 candles of compression.
+	// Each timestamp crosses a 4h boundary (14400s apart).
 	for i := 0; i < 20; i++ {
-		_ = tracker.Update("4h", mkt.RegimeCompression, int64(1000+i*100))
+		_ = tracker.Update("4h", mkt.RegimeCompression, int64(14400+i*14400))
 	}
 
 	provider := &fakeTransitionRegimeProvider{
@@ -357,7 +374,7 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	}
 
 	// Probabilities should be non-negative and sum to 1.
-	sum := result.Probabilities.Trend + result.Probabilities.Sideways + result.Probabilities.Expansion
+	sum := result.Probabilities.Trend + result.Probabilities.Sideways + result.Probabilities.Compression + result.Probabilities.Expansion
 	if sum < 0.999 || sum > 1.001 {
 		t.Errorf("probability sum: %f", sum)
 	}

@@ -1,30 +1,37 @@
 package infrastructure
 
 import (
+	"context"
 	"sync/atomic"
+
 	infra "pano_chart/backend/infrastructure"
+
+	"golang.org/x/time/rate"
 )
 
+// RateLimiter controls the rate of outbound API requests using a token-bucket algorithm.
 type RateLimiter struct {
-	tokensPerMinute int
-	bucket          chan struct{}
+	limiter *rate.Limiter
 }
 
-// NewRateLimiter creates a new RateLimiter with the given tokens per minute.
+// NewRateLimiter creates a rate limiter that allows tokensPerMinute requests per minute
+// with a small burst to absorb short spikes.
 func NewRateLimiter(tokensPerMinute int) *RateLimiter {
+	rps := float64(tokensPerMinute) / 60.0
+	burst := tokensPerMinute / 6
+	if burst < 1 {
+		burst = 1
+	}
 	return &RateLimiter{
-		tokensPerMinute: tokensPerMinute,
-		bucket:          make(chan struct{}, tokensPerMinute),
+		limiter: rate.NewLimiter(rate.Limit(rps), burst),
 	}
 }
 
-// Acquire blocks until a token is available.
+// Acquire blocks until the rate limiter allows the next request.
 func (r *RateLimiter) Acquire() {
 	atomic.AddInt64(&infra.GlobalMetrics.TokenAcquires, 1)
-	r.bucket <- struct{}{}
+	_ = r.limiter.Wait(context.Background())
 }
 
-// Release returns a token to the bucket.
-func (r *RateLimiter) Release() {
-	<-r.bucket
-}
+// Release is a no-op retained for backward compatibility.
+func (r *RateLimiter) Release() {}

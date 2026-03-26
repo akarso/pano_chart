@@ -55,7 +55,8 @@ func TestConfigStore_SaveAndGet(t *testing.T) {
 	cfg := notifications.NotificationConfig{
 		UserID:                "u1",
 		Social:                false,
-		Macro:                 true,
+		MacroHigh:             true,
+		MacroModerate:         false,
 		News:                  false,
 		Uptrend:               true,
 		Downtrend:             false,
@@ -73,7 +74,7 @@ func TestConfigStore_SaveAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get error: %v", err)
 	}
-	if got.Social != false || got.Macro != true || got.News != false {
+	if got.Social != false || got.MacroHigh != true || got.MacroModerate != false || got.News != false {
 		t.Fatal("toggle mismatch")
 	}
 	if got.UptrendMinDominance != 0.80 {
@@ -159,10 +160,8 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.Summary{
-		State:       mkt.StateTrend,
-		Breadth:     mkt.Breadth{Trend: 0.82, Sideways: 0.10, Breakout: 0.05},
-		SymbolCount: 100,
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -201,8 +200,8 @@ func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.Summary{
-		Breadth: mkt.Breadth{Trend: 0.60, Sideways: 0.30},
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.60, Sideways: 0.30},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -232,8 +231,8 @@ func TestScheduler_PerUser_DisabledRegime_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.Summary{
-		Breadth: mkt.Breadth{Trend: 0.85},
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.85},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -260,8 +259,8 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.Summary{
-		Breadth: mkt.Breadth{Trend: 0.40, Sideways: 0.45, Compression: 0.10, Breakout: 0.05},
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.40, Sideways: 0.45, Compression: 0.10},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -383,9 +382,9 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 
 	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
-		summaries: map[string]mkt.Summary{
-			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Breakout: 0.05}},
-			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.30, Compression: 0.10, Breakout: 0.10}},
+		summaries: map[string]mkt.RegimeSummary{
+			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}},
+			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}},
 		},
 	}
 

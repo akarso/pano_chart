@@ -41,6 +41,7 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context, exchangeInfoU
 		fmt.Printf("[BinanceExchangeInfoUniverse] error creating exchangeInfo request: %v\n", err)
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "PanoChart/1.0")
 	resp, err := b.client.Do(req)
 	if err != nil {
 		fmt.Printf("[BinanceExchangeInfoUniverse] error performing exchangeInfo request: %v\n", err)
@@ -88,6 +89,7 @@ func (b *BinanceExchangeInfoUniverse) Symbols(ctx context.Context, exchangeInfoU
 		fmt.Printf("[BinanceExchangeInfoUniverse] error creating ticker request: %v\n", err)
 		return nil, err
 	}
+	treq.Header.Set("User-Agent", "PanoChart/1.0")
 	tresp, err := b.client.Do(treq)
 	if err != nil {
 		fmt.Printf("[BinanceExchangeInfoUniverse] error performing ticker request: %v\n", err)

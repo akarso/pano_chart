@@ -67,6 +67,7 @@ class PreferencesService {
   static const _keyMacroInfluence = 'settings.macroInfluenceFilter';
   static const _keyCustomExchangeName = 'settings.customExchangeName';
   static const _keyCustomExchangeUrl = 'settings.customExchangeUrl';
+  static const _keyHasSeenAbout = 'app.hasSeenAbout';
 
   final SharedPreferences _prefs;
 
@@ -194,7 +195,12 @@ class PreferencesService {
 
   static const _keyShowSocialOnChart = 'settings.showSocialOnChart';
   static const _keyNotificationsEnabled = 'settings.notificationsEnabled';
-  static const _keyNotifyMacro = 'settings.notify.macro';
+
+  bool get hasSeenAbout => _prefs.getBool(_keyHasSeenAbout) ?? false;
+  set hasSeenAbout(bool v) => _prefs.setBool(_keyHasSeenAbout, v);
+
+  static const _keyNotifyMacroHigh = 'settings.notify.macroHigh';
+  static const _keyNotifyMacroModerate = 'settings.notify.macroModerate';
   static const _keyNotifyUptrend = 'settings.notify.uptrend';
   static const _keyNotifyDowntrend = 'settings.notify.downtrend';
   static const _keyNotifySideways = 'settings.notify.sideways';
@@ -218,8 +224,11 @@ class PreferencesService {
   set notificationsEnabled(bool v) =>
       _prefs.setBool(_keyNotificationsEnabled, v);
 
-  bool get notifyMacro => _prefs.getBool(_keyNotifyMacro) ?? true;
-  set notifyMacro(bool v) => _prefs.setBool(_keyNotifyMacro, v);
+  bool get notifyMacroHigh => _prefs.getBool(_keyNotifyMacroHigh) ?? true;
+  set notifyMacroHigh(bool v) => _prefs.setBool(_keyNotifyMacroHigh, v);
+
+  bool get notifyMacroModerate => _prefs.getBool(_keyNotifyMacroModerate) ?? true;
+  set notifyMacroModerate(bool v) => _prefs.setBool(_keyNotifyMacroModerate, v);
 
   bool get notifyUptrend => _prefs.getBool(_keyNotifyUptrend) ?? true;
   set notifyUptrend(bool v) => _prefs.setBool(_keyNotifyUptrend, v);

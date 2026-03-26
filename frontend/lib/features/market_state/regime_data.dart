@@ -3,15 +3,23 @@ class RegimeData {
   final String timeframe;
   final String regime;
   final double prevalence;
+  final String bias;
   final RegimeScores scores;
   final RegimeMetrics metrics;
+  final double effectiveTrend;
+  final double breakdownRate;
+  final String label;
 
   const RegimeData({
     required this.timeframe,
     required this.regime,
     required this.prevalence,
+    this.bias = 'neutral',
     required this.scores,
     required this.metrics,
+    this.effectiveTrend = 0.0,
+    this.breakdownRate = 0.0,
+    this.label = '',
   });
 
   factory RegimeData.fromJson(Map<String, dynamic> json) {
@@ -19,10 +27,14 @@ class RegimeData {
       timeframe: json['timeframe'] as String,
       regime: json['regime'] as String,
       prevalence: (json['prevalence'] as num).toDouble(),
+      bias: json['bias'] as String? ?? 'neutral',
       scores:
           RegimeScores.fromJson(json['scores'] as Map<String, dynamic>),
       metrics:
           RegimeMetrics.fromJson(json['metrics'] as Map<String, dynamic>),
+      effectiveTrend: (json['effectiveTrend'] as num?)?.toDouble() ?? 0.0,
+      breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0.0,
+      label: json['label'] as String? ?? '',
     );
   }
 }
@@ -55,7 +67,7 @@ class RegimeScores {
 class RegimeMetrics {
   final double trendBreadth;
   final double sidewaysBreadth;
-  final double breakoutBreadth;
+  final double expansionBreadth;
   final double compressionBreadth;
   final double volatilityExpansion;
   final double dispersion;
@@ -63,7 +75,7 @@ class RegimeMetrics {
   const RegimeMetrics({
     required this.trendBreadth,
     required this.sidewaysBreadth,
-    required this.breakoutBreadth,
+    required this.expansionBreadth,
     required this.compressionBreadth,
     required this.volatilityExpansion,
     required this.dispersion,
@@ -73,7 +85,7 @@ class RegimeMetrics {
     return RegimeMetrics(
       trendBreadth: (json['trendBreadth'] as num).toDouble(),
       sidewaysBreadth: (json['sidewaysBreadth'] as num?)?.toDouble() ?? 0.0,
-      breakoutBreadth: (json['breakoutBreadth'] as num?)?.toDouble() ?? 0.0,
+      expansionBreadth: (json['expansionBreadth'] as num?)?.toDouble() ?? 0.0,
       compressionBreadth: (json['compressionBreadth'] as num).toDouble(),
       volatilityExpansion: (json['volatilityExpansion'] as num).toDouble(),
       dispersion: (json['dispersion'] as num).toDouble(),

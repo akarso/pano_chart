@@ -246,7 +246,9 @@ func TestDetectRegime_Expansion(t *testing.T) {
 
 func TestDetectRegime_Sideways(t *testing.T) {
 	// Flat candles: zero return → zero trend breadth; consistent ATR → zero
-	// compression breadth.  Volatility ≈ 1.0 (short == long).  → sideways.
+	// compression breadth.  Volatility ≈ 1.0 (short == long).
+	// SidewaysV5 also returns 0 for perfectly flat data (no oscillation),
+	// so no regime has strong evidence → indecisive.
 	sym := makeSymR("BTCUSDT")
 	tf := makeTimeframeR("4h")
 
@@ -266,14 +268,14 @@ func TestDetectRegime_Sideways(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if result.Regime != mkt.RegimeSideways {
-		t.Errorf("expected sideways, got %s (metrics: trend=%.4f, comp=%.4f, vol=%.4f)",
+	if result.Regime != mkt.RegimeIndecisive {
+		t.Errorf("expected indecisive (no clear signal), got %s (metrics: trend=%.4f, comp=%.4f, vol=%.4f)",
 			result.Regime, result.Metrics.TrendBreadth,
 			result.Metrics.CompressionBreadth, result.Metrics.VolatilityExpansion)
 	}
-	// Sideways prevalence should be the dominant score and > 0.
+	// Prevalence should be the dominant (low) score.
 	if result.Prevalence < 0.1 {
-		t.Errorf("expected sideways prevalence > 0.1, got %f", result.Prevalence)
+		t.Errorf("expected prevalence > 0.1, got %f", result.Prevalence)
 	}
 	// Scores should sum to ~1.0.
 	sum := result.Scores.Expansion + result.Scores.Compression +
@@ -298,9 +300,9 @@ func TestDetectRegime_NoSymbols(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// No symbols → zero candles → zero breadth → sideways
-	if result.Regime != mkt.RegimeSideways {
-		t.Errorf("expected sideways, got %s", result.Regime)
+	// No symbols → zero candles → zero breadth → indecisive (no evidence).
+	if result.Regime != mkt.RegimeIndecisive {
+		t.Errorf("expected indecisive, got %s", result.Regime)
 	}
 }
 
@@ -364,6 +366,109 @@ func TestDetectRegime_Dispersion(t *testing.T) {
 	}
 }
 
+func TestDetectRegime_MixedDirectionNotTrend(t *testing.T) {
+	// Two symbols trending in opposite directions (BTC up, ETH down).
+	// The direction agreement penalty dampens trend breadth — half the lost
+	// trend is retained as undirected trend energy, so the regime may still
+	// be classified as trend but with reduced breadth compared to the
+	// single-direction case.  We verify trend breadth is dampened.
+	sym1 := makeSymR("BTCUSDT")
+	sym2 := makeSymR("ETHUSDT")
+	tf := makeTimeframeR("4h")
+
+	btcCandles := makeTrendingCandles(sym1, tf, 50000) // strong uptrend
+
+	// ETH: strong downtrend (mirror of the uptrend pattern).
+	ethCandles := make([]fakeRegimeCandle, 110)
+	for i := 0; i < 110; i++ {
+		p := 3000.0 * (1 - 0.005*float64(i))
+		ethCandles[i] = fakeRegimeCandle{
+			symbol: sym2, timeframe: tf, ts: tsR(i),
+			open: p * 1.005, high: p * 1.01, low: p * 0.99, close: p,
+		}
+	}
+
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym1, sym2},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": btcCandles,
+			"ETHUSDT:4h": ethCandles,
+		},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// --- baseline: single-direction trend breadth ---
+	singleProvider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym1},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": btcCandles,
+		},
+	}
+	singleComposite := metrics.NewCompositeIndexService(singleProvider, 5)
+	singleSvc := metrics.NewMetricsService(singleComposite, singleProvider, evalProvider)
+	singleResult, err := singleSvc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Metrics.TrendBreadth >= singleResult.Metrics.TrendBreadth {
+		t.Errorf("mixed-direction trend breadth (%.4f) should be lower than single-direction (%.4f)",
+			result.Metrics.TrendBreadth, singleResult.Metrics.TrendBreadth)
+	}
+}
+
+func TestDetectRegime_Bias_FollowsAggregateReturn(t *testing.T) {
+	// When aggregate return is negative, bias must be "down", never "up".
+	sym1 := makeSymR("BTCUSDT")
+	sym2 := makeSymR("ETHUSDT")
+	tf := makeTimeframeR("4h")
+
+	// Both tokens trend down.
+	mkDown := func(sym domain.Symbol, base float64) []fakeRegimeCandle {
+		candles := make([]fakeRegimeCandle, 110)
+		for i := 0; i < 110; i++ {
+			p := base * (1 - 0.005*float64(i))
+			candles[i] = fakeRegimeCandle{
+				symbol: sym, timeframe: tf, ts: tsR(i),
+				open: p * 1.005, high: p * 1.01, low: p * 0.99, close: p,
+			}
+		}
+		return candles
+	}
+
+	provider := &fakeRegimeCandleProvider{
+		symbols: []domain.Symbol{sym1, sym2},
+		candles: map[string][]fakeRegimeCandle{
+			"BTCUSDT:4h": mkDown(sym1, 50000),
+			"ETHUSDT:4h": mkDown(sym2, 3000),
+		},
+	}
+
+	evalProvider := &fakeRegimeEvalProvider{evals: []domain.EvaluationSnapshot{}}
+	compositeService := metrics.NewCompositeIndexService(provider, 5)
+	svc := metrics.NewMetricsService(compositeService, provider, evalProvider)
+
+	result, err := svc.CalculateRegime(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Bias == "up" {
+		t.Errorf("bias must not be 'up' when aggregate return is negative; got %q", result.Bias)
+	}
+	if result.Bias != "down" {
+		t.Errorf("expected bias 'down', got %q", result.Bias)
+	}
+}
+
 // --- Handler Tests ---
 
 type fakeRegimeCalc struct {
@@ -390,7 +495,7 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 			Metrics: mkt.RegimeMetrics{
 				TrendBreadth:        0.18,
 				SidewaysBreadth:     0.10,
-				BreakoutBreadth:     0.05,
+				ExpansionBreadth:    0.05,
 				CompressionBreadth:  0.34,
 				VolatilityExpansion: 0.82,
 				Dispersion:          0.21,
@@ -420,7 +525,7 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 		Metrics struct {
 			TrendBreadth        float64 `json:"trendBreadth"`
 			SidewaysBreadth     float64 `json:"sidewaysBreadth"`
-			BreakoutBreadth     float64 `json:"breakoutBreadth"`
+			ExpansionBreadth    float64 `json:"expansionBreadth"`
 			CompressionBreadth  float64 `json:"compressionBreadth"`
 			VolatilityExpansion float64 `json:"volatilityExpansion"`
 			Dispersion          float64 `json:"dispersion"`
@@ -449,8 +554,8 @@ func TestRegimeHandler_DefaultParams(t *testing.T) {
 	if resp.Metrics.SidewaysBreadth != 0.10 {
 		t.Errorf("expected sidewaysBreadth 0.10, got %f", resp.Metrics.SidewaysBreadth)
 	}
-	if resp.Metrics.BreakoutBreadth != 0.05 {
-		t.Errorf("expected breakoutBreadth 0.05, got %f", resp.Metrics.BreakoutBreadth)
+	if resp.Metrics.ExpansionBreadth != 0.05 {
+		t.Errorf("expected expansionBreadth 0.05, got %f", resp.Metrics.ExpansionBreadth)
 	}
 	if resp.Metrics.CompressionBreadth != 0.34 {
 		t.Errorf("expected compressionBreadth 0.34, got %f", resp.Metrics.CompressionBreadth)
@@ -520,7 +625,7 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 			Metrics: mkt.RegimeMetrics{
 				TrendBreadth:        0.987654321,
 				SidewaysBreadth:     0.444444444,
-				BreakoutBreadth:     0.666666666,
+				ExpansionBreadth:    0.666666666,
 				CompressionBreadth:  0.111111111,
 				VolatilityExpansion: 1.555555555,
 				Dispersion:          0.333333333,
@@ -544,7 +649,7 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 		Metrics struct {
 			TrendBreadth        float64 `json:"trendBreadth"`
 			SidewaysBreadth     float64 `json:"sidewaysBreadth"`
-			BreakoutBreadth     float64 `json:"breakoutBreadth"`
+			ExpansionBreadth    float64 `json:"expansionBreadth"`
 			CompressionBreadth  float64 `json:"compressionBreadth"`
 			VolatilityExpansion float64 `json:"volatilityExpansion"`
 			Dispersion          float64 `json:"dispersion"`
@@ -564,7 +669,7 @@ func TestRegimeHandler_RoundsValues(t *testing.T) {
 	check("scores.trend", resp.Scores.Trend, 0.4444)
 	check("trendBreadth", resp.Metrics.TrendBreadth, 0.9877)
 	check("sidewaysBreadth", resp.Metrics.SidewaysBreadth, 0.4444)
-	check("breakoutBreadth", resp.Metrics.BreakoutBreadth, 0.6667)
+	check("expansionBreadth", resp.Metrics.ExpansionBreadth, 0.6667)
 	check("compressionBreadth", resp.Metrics.CompressionBreadth, 0.1111)
 	check("volatilityExpansion", resp.Metrics.VolatilityExpansion, 1.5556)
 	check("dispersion", resp.Metrics.Dispersion, 0.3333)

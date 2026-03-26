@@ -37,38 +37,45 @@ func (e *TransitionEngine) Calculate(
 	}
 }
 
-// fromCompression uses breakout-pressure to split probability between trend
+// fromCompression uses expansion-pressure to split probability between trend
 // and expansion.  When pressure is low the market is likely to stay in
 // compression (mapped into the sideways bucket here).
 func (e *TransitionEngine) fromCompression(compBreadth, volSlope float64, age int) mkt.TransitionProbabilities {
-	pressure := BreakoutPressure(compBreadth, volSlope, age)
+	pressure := ExpansionPressure(compBreadth, volSlope, age)
 
-	// pressure → breakout probability; the complement stays sideways-ish.
+	// pressure → breakout probability; the complement splits between
+	// staying compressed (dominant) and drifting to sideways.
 	trendP := pressure * 0.6
 	expansionP := pressure * 0.4
-	sidewaysP := 1 - trendP - expansionP
+	remaining := 1 - trendP - expansionP
+	compressionP := remaining * 0.6
+	sidewaysP := remaining * 0.4
 
 	return mkt.TransitionProbabilities{
-		Trend:     trendP,
-		Sideways:  sidewaysP,
-		Expansion: expansionP,
+		Trend:       trendP,
+		Sideways:    sidewaysP,
+		Compression: compressionP,
+		Expansion:   expansionP,
 	}
 }
 
-// fromTrend: strong trends tend to persist; breakout pressure can signal
+// fromTrend: strong trends tend to persist; expansion pressure can signal
 // reversal toward expansion.
 func (e *TransitionEngine) fromTrend(compBreadth, volSlope float64, age int) mkt.TransitionProbabilities {
-	pressure := BreakoutPressure(compBreadth, volSlope, age)
+	pressure := ExpansionPressure(compBreadth, volSlope, age)
 
 	// continuation probability decreases with pressure.
 	trendP := 0.6 * (1 - pressure)
 	expansionP := 0.2 + 0.3*pressure
-	sidewaysP := 1 - trendP - expansionP
+	remaining := 1 - trendP - expansionP
+	compressionP := remaining * 0.15
+	sidewaysP := remaining * 0.85
 
 	return mkt.TransitionProbabilities{
-		Trend:     trendP,
-		Sideways:  sidewaysP,
-		Expansion: expansionP,
+		Trend:       trendP,
+		Sideways:    sidewaysP,
+		Compression: compressionP,
+		Expansion:   expansionP,
 	}
 }
 
@@ -76,28 +83,34 @@ func (e *TransitionEngine) fromTrend(compBreadth, volSlope float64, age int) mkt
 // to sideways or compression (represented by sideways here).
 func (e *TransitionEngine) fromExpansion() mkt.TransitionProbabilities {
 	return mkt.TransitionProbabilities{
-		Trend:     0.25,
-		Sideways:  0.55,
-		Expansion: 0.20,
+		Trend:       0.25,
+		Sideways:    0.40,
+		Compression: 0.15,
+		Expansion:   0.20,
 	}
 }
 
-// fromSideways: sideways drifts toward breakout targets as compressionBreadth
+// fromSideways: sideways drifts toward expansion targets as compressionBreadth
 // rises.  The compression pressure is split 60/40 between trend and expansion.
 func (e *TransitionEngine) fromSideways(compBreadth float64) mkt.TransitionProbabilities {
 	pressureShift := compBreadth * 0.5
 	trendP := 0.2 + pressureShift*0.6
 	expansionP := 0.1 + pressureShift*0.4
-	sidewaysP := 1 - trendP - expansionP
+	remaining := 1 - trendP - expansionP
 
 	// guard against negative values when compBreadth is very high
-	if sidewaysP < 0 {
-		sidewaysP = 0
+	if remaining < 0 {
+		remaining = 0
 	}
 
+	// compression probability scales with compressionBreadth
+	compressionP := remaining * compBreadth * 0.4
+	sidewaysP := remaining - compressionP
+
 	return mkt.TransitionProbabilities{
-		Trend:     trendP,
-		Sideways:  sidewaysP,
-		Expansion: expansionP,
+		Trend:       trendP,
+		Sideways:    sidewaysP,
+		Compression: compressionP,
+		Expansion:   expansionP,
 	}
 }

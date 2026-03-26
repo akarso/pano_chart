@@ -158,6 +158,12 @@
       "languageVersion": "3.1"
     },
     {
+      "name": "flutter_markdown",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/flutter_markdown-0.7.7+1",
+      "packageUri": "lib/",
+      "languageVersion": "3.4"
+    },
+    {
       "name": "flutter_svg",
       "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/flutter_svg-2.0.9",
       "packageUri": "lib/",
@@ -254,6 +260,12 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "markdown",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/markdown-7.3.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.2"
+    },
+    {
       "name": "matcher",
       "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/matcher-0.12.17",
       "packageUri": "lib/",
@@ -270,6 +282,18 @@
       "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/meta-1.16.0",
       "packageUri": "lib/",
       "languageVersion": "2.12"
+    },
+    {
+      "name": "package_info_plus",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/package_info_plus-8.3.1",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
+      "name": "package_info_plus_platform_interface",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/package_info_plus_platform_interface-3.2.1",
+      "packageUri": "lib/",
+      "languageVersion": "2.18"
     },
     {
       "name": "path",
@@ -516,6 +540,12 @@
       "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/web-1.1.1",
       "packageUri": "lib/",
       "languageVersion": "3.4"
+    },
+    {
+      "name": "win32",
+      "rootUri": "file:///Users/akarso/.pub-cache/hosted/pub.dev/win32-5.15.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.8"
     },
     {
       "name": "xdg_directories",

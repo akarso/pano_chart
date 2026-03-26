@@ -27,11 +27,13 @@ class TransitionData {
 class TransitionProbabilities {
   final double trend;
   final double sideways;
+  final double compression;
   final double expansion;
 
   const TransitionProbabilities({
     required this.trend,
     required this.sideways,
+    required this.compression,
     required this.expansion,
   });
 
@@ -39,6 +41,7 @@ class TransitionProbabilities {
     return TransitionProbabilities(
       trend: (json['trend'] as num).toDouble(),
       sideways: (json['sideways'] as num).toDouble(),
+      compression: (json['compression'] as num?)?.toDouble() ?? 0.0,
       expansion: (json['expansion'] as num).toDouble(),
     );
   }

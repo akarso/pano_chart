@@ -13,9 +13,9 @@ import (
 
 // ---------- provider ports ----------
 
-// MarketProvider returns the current market state for a timeframe.
+// MarketProvider returns the current regime summary for a timeframe.
 type MarketProvider interface {
-	Calculate(timeframe string) (mkt.Summary, error)
+	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
 }
 
 // SetupProvider returns the best setup for a timeframe.
@@ -160,13 +160,54 @@ func (s *Scheduler) checkMacroEvents(ctx context.Context) {
 		return
 	}
 
+	var upcoming []domain.Event
 	for _, ev := range events {
 		diff := ev.Timestamp().Sub(now)
 		if diff < 0 || diff > s.cfg.MacroLeadTime+time.Minute {
 			continue
 		}
+		upcoming = append(upcoming, ev)
+	}
 
-		minutes := int(diff.Minutes())
+	if len(upcoming) == 0 {
+		return
+	}
+
+	// Per-user path: filter events by impact preference.
+	if s.configs != nil {
+		configs, err := s.configs.All()
+		if err != nil {
+			log.Printf("[notify-scheduler] fetch configs error: %v", err)
+			return
+		}
+
+		for _, ev := range upcoming {
+			minutes := int(ev.Timestamp().Sub(now).Minutes())
+			body := fmt.Sprintf("%s in ~%d minutes", ev.Title(), minutes)
+			n := Notification{
+				Type:  TypeMacro,
+				Title: "Upcoming Macro Event",
+				Body:  body,
+				Data:  map[string]string{"type": string(TypeMacro)},
+				Key:   "macro_" + ev.ID(),
+			}
+
+			for _, cfg := range configs {
+				if !s.userWantsMacro(cfg, ev.Impact()) {
+					continue
+				}
+				if !s.userHasProAccess(ctx, cfg.UserID) {
+					continue
+				}
+				_ = s.engine.SendToUser(ctx, cfg.UserID, n)
+			}
+		}
+		return
+	}
+
+	// Legacy broadcast path (no config store).
+	for _, ev := range upcoming {
+		minutes := int(ev.Timestamp().Sub(now).Minutes())
 		body := fmt.Sprintf("%s in ~%d minutes", ev.Title(), minutes)
 
 		_ = s.engine.Send(ctx, Notification{
@@ -176,6 +217,19 @@ func (s *Scheduler) checkMacroEvents(ctx context.Context) {
 			Data:  map[string]string{"type": string(TypeMacro)},
 			Key:   "macro_" + ev.ID(),
 		})
+	}
+}
+
+// userWantsMacro returns true if the user's config allows notifications for
+// the given event impact level.
+func (s *Scheduler) userWantsMacro(cfg NotificationConfig, impact domain.EventImpact) bool {
+	switch impact {
+	case domain.EventImpactHigh:
+		return cfg.MacroHigh
+	case domain.EventImpactMedium:
+		return cfg.MacroModerate
+	default:
+		return false // low-impact events never trigger notifications
 	}
 }
 
@@ -205,8 +259,8 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		return
 	}
 
-	// Per-user path: pre-compute breadth for each needed timeframe,
-	// then evaluate each user's regime thresholds per their chosen timeframe.
+	// Per-user path: pre-compute regime for each needed timeframe,
+	// then evaluate each user's score thresholds per their chosen timeframe.
 	if s.configs != nil {
 		configs, err := s.configs.All()
 		if err != nil {
@@ -214,14 +268,23 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 			return
 		}
 
+		if len(configs) == 0 {
+			log.Printf("[notify-scheduler] market: no user configs found — skipping")
+			return
+		}
+
 		tfs := collectTimeframes(configs)
-		summaries := make(map[string]mkt.Summary, len(tfs))
+		summaries := make(map[string]mkt.RegimeSummary, len(tfs))
 		for tf := range tfs {
-			summary, err := s.market.Calculate(tf)
+			summary, err := s.market.CalculateRegime(ctx, tf)
 			if err != nil {
 				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
 				continue
 			}
+			log.Printf("[notify-scheduler] market %s: regime=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
+				tf, summary.Regime, summary.Prevalence,
+				summary.Scores.Trend, summary.Scores.Sideways,
+				summary.Scores.Compression, summary.Scores.Expansion)
 			summaries[tf] = summary
 		}
 
@@ -232,32 +295,37 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	}
 
 	// Legacy broadcast path (no config store).
-	summary, err := s.market.Calculate(s.cfg.Timeframe)
+	summary, err := s.market.CalculateRegime(ctx, s.cfg.Timeframe)
 	if err != nil {
 		log.Printf("[notify-scheduler] market state error: %v", err)
 		return
 	}
 
-	if summary.Confidence < s.cfg.MarketMinConfidence {
+	if summary.Prevalence < s.cfg.MarketMinConfidence {
 		return
 	}
 
 	var msg string
-	switch summary.State {
-	case mkt.StateSideways:
+	switch summary.Regime {
+	case mkt.RegimeSideways:
 		msg = "Market mostly sideways today"
-	case mkt.StateTrend:
+	case mkt.RegimeTrend:
 		if summary.Label != "" {
 			msg = summary.Label
 		} else {
 			msg = "Market trending today"
 		}
-	case mkt.StateCompression:
+	case mkt.RegimeCompression:
 		msg = "Market in compression — expansion likely"
-	case mkt.StateBreakout:
-		msg = "Market breakout in progress"
+	case mkt.RegimeExpansion:
+		msg = "Market expansion in progress"
+	case mkt.RegimeSilent:
+		msg = "Market is quiet — low activity"
+	case mkt.RegimeIndecisive:
+		// Do not push for indecisive — nothing actionable.
+		return
 	default:
-		msg = "Market regime: " + string(summary.State)
+		msg = "Market regime: " + string(summary.Regime)
 	}
 
 	_ = s.engine.Send(ctx, Notification{
@@ -265,27 +333,16 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		Title: "Market Update",
 		Body:  msg,
 		Data:  map[string]string{"type": string(TypeMarket)},
-		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
+		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.Regime),
 	})
 }
 
-// normalizeBreadth returns the fraction of a single breadth value relative
-// to the sum of all four breadth components.  This converts the raw breadth
-// (which may not sum to exactly 1.0 depending on the upstream scoring) into
-// an intuitive percentage that matches the "prevalence" shown on screen.
-func normalizeBreadth(b mkt.Breadth, value float64) float64 {
-	total := b.Trend + b.Sideways + b.Compression + b.Breakout
-	if total == 0 {
-		return 0
-	}
-	return value / total
-}
-
-// checkMarketForUser evaluates the market breadth against a single user's
+// checkMarketForUser evaluates the regime scores against a single user's
 // enabled regimes and thresholds. Each regime may reference a different
 // timeframe. The strongest qualifying regime wins.
-func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.Summary) {
+func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.RegimeSummary) {
 	if !s.userHasProAccess(ctx, cfg.UserID) {
+		log.Printf("[notify-scheduler] market: user=%s blocked by subscription check", cfg.UserID)
 		return
 	}
 
@@ -297,10 +354,11 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 
 	var candidates []candidate
 
-	// Uptrend — maps to Breadth.Trend.
+	// Uptrend — maps to Scores.Trend.
+	// Skip if the regime is indecisive — nothing actionable.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok {
-			p := normalizeBreadth(sum.Breadth, sum.Breadth.Trend)
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+			p := sum.Scores.Trend
 			if p >= cfg.UptrendMinDominance {
 				lbl := "Uptrend"
 				if sum.Label != "" {
@@ -310,26 +368,35 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 			}
 		}
 	}
-	// Downtrend — maps to Breadth.Breakout.
+	// Downtrend — maps to Scores.Expansion (breakout/expansion activity).
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok {
-			p := normalizeBreadth(sum.Breadth, sum.Breadth.Breakout)
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+			p := sum.Scores.Expansion
 			if p >= cfg.DowntrendMinDominance {
-				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
+				candidates = append(candidates, candidate{"Expansion", p, cfg.DowntrendTimeframe})
 			}
 		}
 	}
-	// Sideways — maps to Breadth.Sideways.
+	// Sideways — maps to Scores.Sideways.
 	if cfg.Sideways {
-		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok {
-			p := normalizeBreadth(sum.Breadth, sum.Breadth.Sideways)
+		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+			lbl := "Sideways"
+			if sum.Regime == mkt.RegimeSilent {
+				lbl = "Silent"
+			}
+			p := sum.Scores.Sideways
 			if p >= cfg.SidewaysMinDominance {
-				candidates = append(candidates, candidate{"Sideways", p, cfg.SidewaysTimeframe})
+				candidates = append(candidates, candidate{lbl, p, cfg.SidewaysTimeframe})
 			}
 		}
 	}
 
 	if len(candidates) == 0 {
+		log.Printf("[notify-scheduler] market: user=%s no regime exceeds threshold (uptrend=%v/%.0f%% downtrend=%v/%.0f%% sideways=%v/%.0f%%)",
+			cfg.UserID,
+			cfg.Uptrend, cfg.UptrendMinDominance*100,
+			cfg.Downtrend, cfg.DowntrendMinDominance*100,
+			cfg.Sideways, cfg.SidewaysMinDominance*100)
 		return
 	}
 
@@ -381,6 +448,8 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 				log.Printf("[notify-scheduler] best setup %s error: %v", tf, err)
 				continue
 			}
+			log.Printf("[notify-scheduler] setup %s: best=%s score=%.2f confidence=%.2f",
+				tf, best.Symbol, best.Score, best.Confidence)
 			setups[tf] = best
 		}
 
@@ -390,10 +459,13 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 				continue
 			}
 			if !s.userHasProAccess(ctx, cfg.UserID) {
+				log.Printf("[notify-scheduler] setup: user=%s blocked by subscription check", cfg.UserID)
 				continue
 			}
 			best, ok := setups[cfg.SetupTimeframe]
 			if !ok || best.Score < cfg.SetupMinScore {
+				log.Printf("[notify-scheduler] setup: user=%s score=%.2f below threshold=%.2f",
+					cfg.UserID, best.Score, cfg.SetupMinScore)
 				continue
 			}
 			// Confidence gate: only notify when contextual confidence is sufficient.

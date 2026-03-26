@@ -27,7 +27,7 @@ class BillingManager {
   InAppPurchase get _iap => _iapOverride ?? InAppPurchase.instance;
 
   /// The subscription product ID configured in Google Play Console.
-  static const String kProductId = 'pano_pro_monthly';
+  static const String kProductId = 'com.akarso.panocharts';
 
   /// Current subscription state as reported by the backend.
   SubscriptionStatus _status = SubscriptionStatus.inactive();
@@ -44,8 +44,32 @@ class BillingManager {
   /// True when the user may use all features — either via an active
   /// subscription or an active trial.  When no [TrialManager] is set
   /// (e.g. tests / non-Android), defaults to `true`.
-  bool get hasFullAccess =>
-      status.active || (_trialManager?.isTrialActive() ?? true);
+  ///
+  /// In debug builds, [debugOverrideAccess] takes priority when non-null.
+  bool get hasFullAccess {
+    if (kDebugMode && _debugOverrideAccess != null) {
+      return _debugOverrideAccess!;
+    }
+    return status.active || (_trialManager?.isTrialActive() ?? true);
+  }
+
+  // ---- debug helpers (stripped from release builds) ----
+
+  bool? _debugOverrideAccess;
+
+  /// The label of the active debug override, or null if using real state.
+  String? get debugOverrideLabel => _debugOverrideLabel;
+  String? _debugOverrideLabel;
+
+  /// Forces a specific access level in debug builds. Pass null to reset.
+  void debugSetAccess({required bool? fullAccess, String? label}) {
+    assert(() {
+      _debugOverrideAccess = fullAccess;
+      _debugOverrideLabel = fullAccess == null ? null : (label ?? (fullAccess ? 'PRO' : 'FREE'));
+      onChanged?.call();
+      return true;
+    }());
+  }
 
   /// Days left in the free trial (0 when expired or not available).
   int get trialDaysRemaining => _trialManager?.daysRemaining() ?? 0;

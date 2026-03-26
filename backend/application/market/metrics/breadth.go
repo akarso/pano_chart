@@ -13,14 +13,15 @@ type breadthValues struct {
 	trend       float64
 	sideways    float64
 	compression float64
-	breakout    float64
+	expansion   float64
 }
 
 // scoreBreadth computes market-wide breadth values by running the real
 // domain/scoring calculators on each symbol's candle window and averaging.
 //
-// This replaces the former proxyBreadth heuristic with the exact same
-// algorithms used by the overview/rankings pipeline.
+// Direction agreement: if tokens disagree on trend direction (some up,
+// some down), the trend breadth is dampened.  Mixed-direction trends
+// are not a market trend — they indicate indecision or rotation.
 func scoreBreadth(seriesList []domain.CandleSeries, timeframe string) breadthValues {
 	if len(seriesList) == 0 {
 		return breadthValues{}
@@ -34,6 +35,7 @@ func scoreBreadth(seriesList []domain.CandleSeries, timeframe string) breadthVal
 	breakCfg := scoring.DefaultBreakoutConfig()
 
 	var trendSum, sidSum, compSum, breakSum float64
+	var upDir, downDir int
 	count := 0
 
 	for _, cs := range seriesList {
@@ -50,6 +52,16 @@ func scoreBreadth(seriesList []domain.CandleSeries, timeframe string) breadthVal
 			trendSum += math.Abs(ts)
 		}
 
+		// Track direction from period return.
+		candles := cs.All()
+		first := candles[0].Close()
+		last := candles[len(candles)-1].Close()
+		if last > first {
+			upDir++
+		} else if last < first {
+			downDir++
+		}
+
 		// Sideways: already [0, 1].
 		ss, err := sidewaysCalc.Score(cs)
 		if err == nil {
@@ -57,7 +69,6 @@ func scoreBreadth(seriesList []domain.CandleSeries, timeframe string) breadthVal
 		}
 
 		// Compression + Breakout: already [0, 1].
-		candles := cs.All()
 		compResult := scoring.DetectCompression(candles, compCfg)
 		compSum += compResult.Score
 
@@ -70,11 +81,24 @@ func scoreBreadth(seriesList []domain.CandleSeries, timeframe string) breadthVal
 	}
 
 	n := float64(count)
+
+	// Direction agreement: 1.0 = all tokens agree, 0.0 = perfect 50/50 split.
+	// Mixed-direction trends dampen trend breadth.
+	agreement := scoring.DirectionAgreement(upDir, downDir)
+	rawTrend := trendSum / n
+	dampened := rawTrend * agreement
+	// Redistribute only half the lost trend to sideways — the other half
+	// stays as undirected trend energy so trend is not fully erased during
+	// normal market rotation.
+	lost := rawTrend - dampened
+	dampened += lost * 0.5
+	sidSum += lost * 0.5 * n
+
 	return breadthValues{
-		trend:       trendSum / n,
+		trend:       dampened,
 		sideways:    sidSum / n,
 		compression: compSum / n,
-		breakout:    breakSum / n,
+		expansion:   breakSum / n,
 	}
 }
 

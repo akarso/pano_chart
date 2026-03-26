@@ -42,13 +42,13 @@ class MarketStateData {
 class MarketBreadth {
   final double sideways;
   final double compression;
-  final double breakout;
+  final double expansion;
   final double trend;
 
   const MarketBreadth({
     required this.sideways,
     required this.compression,
-    required this.breakout,
+    required this.expansion,
     required this.trend,
   });
 
@@ -56,7 +56,7 @@ class MarketBreadth {
     return MarketBreadth(
       sideways: (json['sideways'] as num).toDouble(),
       compression: (json['compression'] as num).toDouble(),
-      breakout: (json['breakout'] as num).toDouble(),
+      expansion: (json['expansion'] as num).toDouble(),
       trend: (json['trend'] as num).toDouble(),
     );
   }

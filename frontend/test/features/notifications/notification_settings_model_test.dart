@@ -8,7 +8,8 @@ void main() {
     test('defaults enables all categories', () {
       final s = NotificationSettings.defaults();
       expect(s.social, isTrue);
-      expect(s.macro, isTrue);
+      expect(s.macroHigh, isTrue);
+      expect(s.macroModerate, isTrue);
       expect(s.uptrend, isTrue);
       expect(s.downtrend, isTrue);
       expect(s.sideways, isTrue);
@@ -27,7 +28,8 @@ void main() {
     test('isEnabled maps types correctly', () {
       final s = NotificationSettings(
         social: true,
-        macro: false,
+        macroHigh: false,
+        macroModerate: false,
         uptrend: true,
         downtrend: false,
         sideways: false,
@@ -47,7 +49,8 @@ void main() {
     test('market disabled when all three regimes off', () {
       final s = NotificationSettings(
         social: true,
-        macro: true,
+        macroHigh: true,
+        macroModerate: true,
         uptrend: false,
         downtrend: false,
         sideways: false,
@@ -60,7 +63,8 @@ void main() {
     test('fromPrefs loads persisted values', () async {
       SharedPreferences.setMockInitialValues({
         'settings.notificationsEnabled': false,
-        'settings.notify.macro': false,
+        'settings.notify.macroHigh': false,
+        'settings.notify.macroModerate': true,
         'settings.notify.uptrend': true,
         'settings.notify.downtrend': false,
         'settings.notify.sideways': true,
@@ -78,7 +82,8 @@ void main() {
       final prefs = await PreferencesService.create();
       final s = NotificationSettings.fromPrefs(prefs);
       expect(s.social, isFalse);
-      expect(s.macro, isFalse);
+      expect(s.macroHigh, isFalse);
+      expect(s.macroModerate, isTrue);
       expect(s.uptrend, isTrue);
       expect(s.downtrend, isFalse);
       expect(s.sideways, isTrue);
@@ -99,7 +104,8 @@ void main() {
       final prefs = await PreferencesService.create();
       final s = NotificationSettings(
         social: false,
-        macro: true,
+        macroHigh: true,
+        macroModerate: false,
         uptrend: false,
         downtrend: true,
         sideways: false,
@@ -116,7 +122,8 @@ void main() {
       );
       s.save(prefs);
       expect(prefs.notificationsEnabled, isFalse);
-      expect(prefs.notifyMacro, isTrue);
+      expect(prefs.notifyMacroHigh, isTrue);
+      expect(prefs.notifyMacroModerate, isFalse);
       expect(prefs.notifyUptrend, isFalse);
       expect(prefs.notifyDowntrend, isTrue);
       expect(prefs.notifySideways, isFalse);
@@ -138,7 +145,8 @@ void main() {
       final s = NotificationSettings.fromPrefs(prefs);
       // social defaults to false (existing behavior), others to true.
       expect(s.social, isFalse);
-      expect(s.macro, isTrue);
+      expect(s.macroHigh, isTrue);
+      expect(s.macroModerate, isTrue);
       expect(s.uptrend, isTrue);
       expect(s.downtrend, isTrue);
       expect(s.sideways, isTrue);
@@ -153,7 +161,8 @@ void main() {
     test('toJson produces backend-compatible format', () {
       final s = NotificationSettings(
         social: true,
-        macro: false,
+        macroHigh: false,
+        macroModerate: true,
         uptrend: true,
         downtrend: false,
         sideways: true,
@@ -167,7 +176,8 @@ void main() {
       final json = s.toJson('user-1');
       expect(json['user_id'], 'user-1');
       expect(json['social'], isTrue);
-      expect(json['macro'], isFalse);
+      expect(json['macro_high'], isFalse);
+      expect(json['macro_moderate'], isTrue);
       expect(json['uptrend'], isTrue);
       expect(json['downtrend'], isFalse);
       expect(json['sideways'], isTrue);
@@ -203,7 +213,8 @@ void main() {
     test('toJson includes timeframes', () {
       final s = NotificationSettings(
         social: true,
-        macro: true,
+        macroHigh: true,
+        macroModerate: true,
         uptrend: true,
         downtrend: true,
         sideways: true,

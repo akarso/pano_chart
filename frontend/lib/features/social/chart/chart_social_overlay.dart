@@ -5,8 +5,12 @@ import 'social_chart_overlay_painter.dart';
 /// Tappable overlay showing social post markers on the detail chart.
 ///
 /// When the user taps near a marker, a popup shows the post titles.
+/// Tapping the popup navigates to the social feed page.
 class ChartSocialOverlay extends StatefulWidget {
   final List<SocialMarker> markers;
+
+  /// Called when the user taps the popup to navigate to the feed.
+  final VoidCallback? onNavigateToFeed;
 
   /// Height of the price area. Lines stop here.
   final double? priceAreaHeight;
@@ -14,6 +18,7 @@ class ChartSocialOverlay extends StatefulWidget {
   const ChartSocialOverlay({
     Key? key,
     required this.markers,
+    this.onNavigateToFeed,
     this.priceAreaHeight,
   }) : super(key: key);
 
@@ -29,39 +34,40 @@ class _ChartSocialOverlayState extends State<ChartSocialOverlay> {
     return Stack(
       children: [
         Positioned.fill(
-          child: CustomPaint(
-            painter: SocialChartOverlayPainter(
-              markers: widget.markers,
-              priceAreaHeight: widget.priceAreaHeight,
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: SocialChartOverlayPainter(
+                markers: widget.markers,
+                priceAreaHeight: widget.priceAreaHeight,
+              ),
             ),
           ),
         ),
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTapDown: _onTap,
+        // Individual tap targets at each marker position — taps between
+        // markers pass through to layers below (e.g. event overlay).
+        for (final m in widget.markers)
+          Positioned(
+            left: m.x - 20,
+            top: 0,
+            width: 40,
+            height: 20,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() =>
+                  _selected = _selected == m ? null : m),
+            ),
           ),
-        ),
+        // Dismiss layer — tapping anywhere else closes the popup.
+        if (_selected != null)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => setState(() => _selected = null),
+            ),
+          ),
         if (_selected != null) _buildPopup(context, _selected!),
       ],
     );
-  }
-
-  void _onTap(TapDownDetails details) {
-    final tapX = details.localPosition.dx;
-    const hitRadius = 20.0;
-
-    SocialMarker? closest;
-    double closestDist = double.infinity;
-    for (final m in widget.markers) {
-      final d = (m.x - tapX).abs();
-      if (d < hitRadius && d < closestDist) {
-        closest = m;
-        closestDist = d;
-      }
-    }
-
-    setState(() => _selected = closest);
   }
 
   Widget _buildPopup(BuildContext context, SocialMarker marker) {
@@ -70,7 +76,9 @@ class _ChartSocialOverlayState extends State<ChartSocialOverlay> {
       left: left,
       top: 16,
       child: GestureDetector(
-        onTap: () => setState(() => _selected = null),
+        onTap: () {
+          widget.onNavigateToFeed?.call();
+        },
         child: Material(
           color: Colors.transparent,
           child: Container(

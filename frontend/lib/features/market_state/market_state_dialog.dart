@@ -52,6 +52,8 @@ class _MarketStateDialog extends StatelessWidget {
         return Colors.blueGrey;
       case 'compression':
         return Colors.amber;
+      case 'expansion':
+        return Colors.redAccent;
       case 'breakout':
         return Colors.redAccent;
       case 'trend':
@@ -67,6 +69,8 @@ class _MarketStateDialog extends StatelessWidget {
         return Icons.swap_horiz;
       case 'compression':
         return Icons.compress;
+      case 'expansion':
+        return Icons.open_in_full;
       case 'breakout':
         return Icons.open_in_full;
       case 'trend':
@@ -111,13 +115,13 @@ class _MarketStateDialog extends StatelessWidget {
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 16),
+          _BreadthBar(label: 'Trend', value: data.breadth.trend, color: Colors.tealAccent),
+          const SizedBox(height: 6),
           _BreadthBar(label: 'Sideways', value: data.breadth.sideways, color: Colors.blueGrey),
           const SizedBox(height: 6),
           _BreadthBar(label: 'Compression', value: data.breadth.compression, color: Colors.amber),
           const SizedBox(height: 6),
-          _BreadthBar(label: 'Breakout', value: data.breadth.breakout, color: Colors.redAccent),
-          const SizedBox(height: 6),
-          _BreadthBar(label: 'Trend', value: data.breadth.trend, color: Colors.tealAccent),
+          _BreadthBar(label: 'Expansion', value: data.breadth.expansion, color: Colors.redAccent),
         ],
       ),
       actions: [
