@@ -372,3 +372,66 @@ func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
 		t.Fatal("expected notification when no subscription checker is set")
 	}
 }
+
+func TestScheduler_SetupOfDay_TrendHealthGate_Suppressed(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{
+			Symbol:      "BTCUSDT",
+			BestSetup:   setup.TrendContinuation,
+			Score:       0.85,
+			TrendHealth: 0.3, // below 0.4 gate
+		},
+	}
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckSetupOfDay(context.Background())
+	if spy.count() != 0 {
+		t.Fatal("expected no notification for trend setup with low health")
+	}
+}
+
+func TestScheduler_SetupOfDay_TrendHealthGate_Passes(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{
+			Symbol:      "BTCUSDT",
+			BestSetup:   setup.TrendContinuation,
+			Score:       0.85,
+			TrendHealth: 0.6, // above 0.4 gate
+		},
+	}
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckSetupOfDay(context.Background())
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 setup notification for healthy trend, got %d", spy.count())
+	}
+}
+
+func TestScheduler_SetupOfDay_NonTrend_SkipsHealthGate(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{
+			Symbol:      "ETHUSDT",
+			BestSetup:   setup.CompressionBreakout,
+			Score:       0.80,
+			TrendHealth: 0.1, // low, but irrelevant for compression
+		},
+	}
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckSetupOfDay(context.Background())
+	if spy.count() != 1 {
+		t.Fatalf("expected 1 notification for non-trend setup ignoring health gate, got %d", spy.count())
+	}
+}

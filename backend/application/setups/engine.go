@@ -19,7 +19,7 @@ func NewEngine() *Engine {
 }
 
 // Evaluate scores every registered setup and returns the result including the
-// best setup by highest score.
+// best setup by highest score. Trend-health context is applied as a modifier.
 func (e *Engine) Evaluate(ctx SetupContext) setup.SetupScores {
 	scores := make(map[setup.SetupType]float64, len(e.evaluators))
 
@@ -36,10 +36,12 @@ func (e *Engine) Evaluate(ctx SetupContext) setup.SetupScores {
 		}
 	}
 
-	return setup.SetupScores{
+	raw := setup.SetupScores{
 		Symbol:    ctx.Symbol,
 		BestSetup: bestSetup,
 		Score:     bestScore,
 		Scores:    scores,
 	}
+
+	return ApplyContextModifier(raw, ctx)
 }

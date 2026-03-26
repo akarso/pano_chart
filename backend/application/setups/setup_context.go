@@ -13,4 +13,7 @@ type SetupContext struct {
 	LiquidityScore float64
 
 	Volatility float64
+
+	TrendHealth float64 // 0–1 health of the underlying trend
+	Regime      string  // dominant regime label
 }

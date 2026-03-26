@@ -1292,7 +1292,23 @@ class _DetailScreenState extends State<DetailScreen> {
     // Normalize sub-scores to the total quality percentage
     final subSum = data.scores.values.fold(0.0, (a, b) => a + b);
 
-    return _fieldset('Setup Quality — $totalDisplay', [
+    // Health label color: green > 0.8, grey > 0.6, orange > 0.4, red otherwise
+    Color healthColor;
+    if (data.trendHealth > 0.8) {
+      healthColor = Colors.green;
+    } else if (data.trendHealth > 0.6) {
+      healthColor = Colors.white54;
+    } else if (data.trendHealth > 0.4) {
+      healthColor = Colors.orange;
+    } else {
+      healthColor = Colors.red;
+    }
+
+    final title = data.regime.isNotEmpty
+        ? 'Setup Quality — $totalDisplay · ${data.healthLabel}'
+        : 'Setup Quality — $totalDisplay';
+
+    return _fieldset(title, [
       for (final entry in data.scores.entries)
         _metricBar(
           '${SetupData.displayName(entry.key)}:',
@@ -1304,25 +1320,54 @@ class _DetailScreenState extends State<DetailScreen> {
         'price structure matches known setup archetypes.\n\n'
         '• Compression Breakout — tight range about to break\n'
         '• Trend Continuation — pullback within a strong trend\n'
-        '• Range Reversion — mean-reversion at range edges');
+        '• Range Reversion — mean-reversion at range edges',
+    titleSuffixColor: data.regime.isNotEmpty ? healthColor : null);
   }
 
   // ---- shared fieldset & metric bar helpers ----
 
-  Widget _fieldset(String title, List<Widget> children, {String? hint}) {
+  Widget _fieldset(String title, List<Widget> children, {String? hint, Color? titleSuffixColor}) {
+    // When titleSuffixColor is provided, colour the text after the last " · "
+    // in the title using a RichText widget, while keeping everything before
+    // it in the default style.
+    Widget titleWidget;
+    final sepIdx = title.lastIndexOf(' · ');
+    if (titleSuffixColor != null && sepIdx >= 0) {
+      final prefix = title.substring(0, sepIdx + 3);
+      final suffix = title.substring(sepIdx + 3);
+      titleWidget = RichText(
+        text: TextSpan(
+          style: const TextStyle(
+            color: Colors.white70,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+          children: [
+            TextSpan(text: prefix),
+            TextSpan(
+              text: suffix,
+              style: TextStyle(color: titleSuffixColor),
+            ),
+          ],
+        ),
+      );
+    } else {
+      titleWidget = Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white70,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
+            titleWidget,
             if (hint != null) ...[
               const SizedBox(width: 4),
               GestureDetector(

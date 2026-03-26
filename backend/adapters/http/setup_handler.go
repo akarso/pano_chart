@@ -60,11 +60,13 @@ func (h *SetupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := setupResponse{
-		Symbol:    result.Symbol,
-		Timeframe: result.Timeframe,
-		BestSetup: string(result.BestSetup),
-		Score:     result.Score,
-		Scores:    makeSetupScoresDTO(result.Scores),
+		Symbol:      result.Symbol,
+		Timeframe:   result.Timeframe,
+		BestSetup:   string(result.BestSetup),
+		Score:       result.Score,
+		Scores:      makeSetupScoresDTO(result.Scores),
+		TrendHealth: result.TrendHealth,
+		Regime:      result.Regime,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -87,11 +89,13 @@ func extractSetupSymbol(path string) (string, bool) {
 
 // DTO types for the setup response.
 type setupResponse struct {
-	Symbol    string             `json:"symbol"`
-	Timeframe string             `json:"timeframe"`
-	BestSetup string             `json:"bestSetup"`
-	Score     float64            `json:"score"`
-	Scores    map[string]float64 `json:"scores"`
+	Symbol      string             `json:"symbol"`
+	Timeframe   string             `json:"timeframe"`
+	BestSetup   string             `json:"bestSetup"`
+	Score       float64            `json:"score"`
+	Scores      map[string]float64 `json:"scores"`
+	TrendHealth float64            `json:"trendHealth"`
+	Regime      string             `json:"regime"`
 }
 
 func makeSetupScoresDTO(scores map[setup.SetupType]float64) map[string]float64 {

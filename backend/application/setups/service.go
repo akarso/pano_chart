@@ -3,7 +3,9 @@ package setups
 import (
 	"context"
 	"fmt"
+	"math"
 
+	"pano_chart/backend/application/market"
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
@@ -67,6 +69,7 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 
 // buildContext converts raw scoring output and candle data into a SetupContext.
 func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats) SetupContext {
+	regime, trendHealth := computeRegimeAndHealth(series, stats)
 	return SetupContext{
 		Symbol:           symbol,
 		CompressionScore: stats.Scores["Compression"],
@@ -74,7 +77,119 @@ func buildContext(symbol string, series domain.CandleSeries, stats usecases.Symb
 		RangeScore:       rangeFromSideways(stats.Scores),
 		VolumeScore:      volumeScore(series),
 		Volatility:       volatilityFromSeries(series),
+		TrendHealth:      trendHealth,
+		Regime:           regime,
 	}
+}
+
+// computeRegimeAndHealth determines the dominant regime and computes health.
+func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolStats) (string, float64) {
+	n := series.Len()
+	if n < 2 {
+		return "sideways", 0
+	}
+
+	regime := dominantRegime(stats.Scores)
+
+	if regime != "uptrend" && regime != "downtrend" {
+		return regime, 0
+	}
+
+	last, _ := series.At(n - 1)
+	price := last.Close()
+	atr := simpleATR(series)
+
+	recentHigh, recentLow := recentExtremes(series)
+	recentReturn := recentReturnPct(series)
+
+	health := market.ComputeTrendHealth(regime, price, recentHigh, recentLow, atr, recentReturn)
+	return regime, health
+}
+
+// dominantRegime maps the highest-scoring dimension to a regime label.
+func dominantRegime(scores map[string]float64) string {
+	trend := scores["Trend Predictability"]
+	compression := scores["Compression"]
+
+	// Consider remaining scores as sideways indicators.
+	sideways := 0.0
+	for k, v := range scores {
+		if k == "Compression" || k == "Trend Predictability" || k == "Gain/Loss" {
+			continue
+		}
+		if v > sideways {
+			sideways = v
+		}
+	}
+
+	if compression > trend && compression > sideways {
+		return "compression"
+	}
+	if trend > sideways {
+		if trend > 0.5 {
+			return "uptrend" // simplified; direction not in scores
+		}
+		return "downtrend"
+	}
+	return "sideways"
+}
+
+// simpleATR computes average true range over the series.
+func simpleATR(series domain.CandleSeries) float64 {
+	n := series.Len()
+	if n < 2 {
+		return 0
+	}
+
+	var total float64
+	for i := 1; i < n; i++ {
+		c, _ := series.At(i)
+		prev, _ := series.At(i - 1)
+
+		tr := math.Max(c.High()-c.Low(),
+			math.Max(math.Abs(c.High()-prev.Close()), math.Abs(c.Low()-prev.Close())))
+		total += tr
+	}
+	return total / float64(n-1)
+}
+
+// recentExtremes finds the highest high and lowest low over the last 20 candles.
+func recentExtremes(series domain.CandleSeries) (float64, float64) {
+	n := series.Len()
+	window := 20
+	if n < window {
+		window = n
+	}
+	high := 0.0
+	low := math.MaxFloat64
+	for i := n - window; i < n; i++ {
+		c, _ := series.At(i)
+		if c.High() > high {
+			high = c.High()
+		}
+		if c.Low() < low {
+			low = c.Low()
+		}
+	}
+	return high, low
+}
+
+// recentReturnPct returns the percentage change over the last 5 candles.
+func recentReturnPct(series domain.CandleSeries) float64 {
+	n := series.Len()
+	lookback := 5
+	if n < lookback+1 {
+		lookback = n - 1
+	}
+	if lookback <= 0 {
+		return 0
+	}
+	old, _ := series.At(n - 1 - lookback)
+	cur, _ := series.At(n - 1)
+	if old.Close() == 0 {
+		return 0
+	}
+	return (cur.Close() - old.Close()) / old.Close()
 }
 
 // rangeFromSideways derives a range score from sideways scores.

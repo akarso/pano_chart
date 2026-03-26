@@ -88,6 +88,8 @@ func TestEngine_TrendWinsWhenDominant(t *testing.T) {
 		RangeScore:       0.1,
 		VolumeScore:      0.8,
 		Volatility:       0.1,
+		TrendHealth:      0.9,
+		Regime:           "uptrend",
 	}
 	result := eng.Evaluate(ctx)
 
