@@ -8,6 +8,8 @@ const (
 	StateCompression State = "compression"
 	StateBreakout    State = "breakout"
 	StateTrend       State = "trend"
+	StateSilent      State = "silent"
+	StateIndecisive  State = "indecisive"
 )
 
 // Breadth holds the proportionally-weighted breadth for each regime.

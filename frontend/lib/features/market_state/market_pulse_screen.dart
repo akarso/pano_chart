@@ -928,6 +928,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Colors.redAccent;
       case 'trend':
         return bias == 'down' ? Colors.redAccent : Colors.tealAccent;
+      case 'silent':
+        return Colors.white;
+      case 'indecisive':
+        return const Color(0xFFB0C4DE);
       default:
         return Colors.grey;
     }
@@ -943,6 +947,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Icons.open_in_full;
       case 'trend':
         return bias == 'down' ? Icons.trending_down : Icons.trending_up;
+      case 'silent':
+        return Icons.horizontal_rule;
+      case 'indecisive':
+        return Icons.help_outline;
       default:
         return Icons.help_outline;
     }
@@ -958,6 +966,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Colors.tealAccent;
       case 'expansion':
         return Colors.redAccent;
+      case 'silent':
+        return Colors.white;
+      case 'indecisive':
+        return const Color(0xFFB0C4DE);
       default:
         return Colors.grey;
     }
@@ -973,6 +985,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Icons.trending_up;
       case 'expansion':
         return Icons.open_in_full;
+      case 'silent':
+        return Icons.horizontal_rule;
+      case 'indecisive':
+        return Icons.help_outline;
       default:
         return Icons.help_outline;
     }

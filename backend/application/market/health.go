@@ -1,5 +1,7 @@
 package market
 
+import mkt "pano_chart/backend/domain/market"
+
 // ComputeTrendHealth returns a 0–1 score indicating how "healthy" a trend
 // is for the given token. A score near 1 means the trend is intact; near 0
 // means it is breaking down.
@@ -60,4 +62,39 @@ func clamp(v, min, max float64) float64 {
 		return max
 	}
 	return v
+}
+
+// DampenTrendByHealth reduces trend breadth when trend health is poor and
+// redistributes the lost weight proportionally among the other regimes so
+// the four breadth values still sum to ~1.0.
+//
+// The dampening factor combines two signals:
+//   - effectiveTrend: average health of trending tokens (0–1)
+//   - breakdownRate:  fraction of trending tokens breaking down (0–1)
+//
+// A healthy market (effectiveTrend=0.8, breakdownRate=0.1) barely dampens.
+// A breaking market (effectiveTrend=0.2, breakdownRate=0.8) dramatically
+// reduces the trend prevalence, allowing other regimes to surface.
+func DampenTrendByHealth(b mkt.Breadth, effectiveTrend, breakdownRate float64) mkt.Breadth {
+	// Health factor: high effective trend → factor near 1.0.
+	// Breakdown penalty: high breakdown rate → extra reduction.
+	healthFactor := clamp(effectiveTrend*1.5, 0, 1) // 0.67+ health → full credit
+	breakdownPenalty := breakdownRate * 0.5         // up to 50% penalty from breakdowns
+	dampFactor := clamp(healthFactor-breakdownPenalty, 0.1, 1.0)
+
+	lost := b.Trend * (1.0 - dampFactor)
+	b.Trend *= dampFactor
+
+	// Redistribute lost weight proportionally to other regimes.
+	otherSum := b.Sideways + b.Compression + b.Breakout
+	if otherSum > 0 && lost > 0 {
+		b.Sideways += lost * (b.Sideways / otherSum)
+		b.Compression += lost * (b.Compression / otherSum)
+		b.Breakout += lost * (b.Breakout / otherSum)
+	} else if lost > 0 {
+		// All other regimes are zero — assign to sideways as default.
+		b.Sideways += lost
+	}
+
+	return b
 }

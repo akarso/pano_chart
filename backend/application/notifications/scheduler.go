@@ -256,6 +256,11 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		msg = "Market in compression — expansion likely"
 	case mkt.StateBreakout:
 		msg = "Market breakout in progress"
+	case mkt.StateSilent:
+		msg = "Market is quiet — low activity"
+	case mkt.StateIndecisive:
+		// Do not push for indecisive — nothing actionable.
+		return
 	default:
 		msg = "Market regime: " + string(summary.State)
 	}
@@ -298,8 +303,9 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	var candidates []candidate
 
 	// Uptrend — maps to Breadth.Trend.
+	// Skip if the state is indecisive — nothing actionable.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok {
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.State != mkt.StateIndecisive {
 			p := normalizeBreadth(sum.Breadth, sum.Breadth.Trend)
 			if p >= cfg.UptrendMinDominance {
 				lbl := "Uptrend"
@@ -312,7 +318,7 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	}
 	// Downtrend — maps to Breadth.Breakout.
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok {
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.State != mkt.StateIndecisive {
 			p := normalizeBreadth(sum.Breadth, sum.Breadth.Breakout)
 			if p >= cfg.DowntrendMinDominance {
 				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
@@ -321,10 +327,14 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	}
 	// Sideways — maps to Breadth.Sideways.
 	if cfg.Sideways {
-		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok {
+		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok && sum.State != mkt.StateIndecisive {
+			lbl := "Sideways"
+			if sum.State == mkt.StateSilent {
+				lbl = "Silent"
+			}
 			p := normalizeBreadth(sum.Breadth, sum.Breadth.Sideways)
 			if p >= cfg.SidewaysMinDominance {
-				candidates = append(candidates, candidate{"Sideways", p, cfg.SidewaysTimeframe})
+				candidates = append(candidates, candidate{lbl, p, cfg.SidewaysTimeframe})
 			}
 		}
 	}
