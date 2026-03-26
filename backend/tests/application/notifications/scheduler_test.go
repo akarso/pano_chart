@@ -120,9 +120,10 @@ func TestScheduler_SetupOfDay_HighScore(t *testing.T) {
 	eng.SetClock(func() time.Time { return now })
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:    "BTCUSDT",
-			BestSetup: setup.CompressionBreakout,
-			Score:     0.85,
+			Symbol:     "BTCUSDT",
+			BestSetup:  setup.CompressionBreakout,
+			Score:      0.85,
+			Confidence: 0.7,
 		},
 	}
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
@@ -373,66 +374,65 @@ func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
 	}
 }
 
-func TestScheduler_SetupOfDay_TrendHealthGate_Suppressed(t *testing.T) {
+func TestScheduler_SetupOfDay_ConfidenceGate_Suppressed(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:      "BTCUSDT",
-			BestSetup:   setup.TrendContinuation,
-			Score:       0.85,
-			TrendHealth: 0.3, // below 0.4 gate
+			Symbol:     "BTCUSDT",
+			BestSetup:  setup.TrendContinuation,
+			Score:      0.85,
+			Confidence: 0.5, // below 0.6 gate
 		},
 	}
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckSetupOfDay(context.Background())
 	if spy.count() != 0 {
-		t.Fatal("expected no notification for trend setup with low health")
+		t.Fatal("expected no notification when confidence is below gate")
 	}
 }
 
-func TestScheduler_SetupOfDay_TrendHealthGate_Passes(t *testing.T) {
+func TestScheduler_SetupOfDay_ConfidenceGate_Passes(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:          "BTCUSDT",
-			BestSetup:       setup.TrendContinuation,
-			Score:           0.85,
-			TrendHealth:     0.6, // above 0.4 gate
-			MarketEffective: 0.5, // above 0.3 gate
+			Symbol:     "BTCUSDT",
+			BestSetup:  setup.TrendContinuation,
+			Score:      0.85,
+			Confidence: 0.7, // above 0.6 gate
 		},
 	}
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckSetupOfDay(context.Background())
 	if spy.count() != 1 {
-		t.Fatalf("expected 1 setup notification for healthy trend, got %d", spy.count())
+		t.Fatalf("expected 1 setup notification for confident setup, got %d", spy.count())
 	}
 }
 
-func TestScheduler_SetupOfDay_NonTrend_SkipsHealthGate(t *testing.T) {
+func TestScheduler_SetupOfDay_ConfidenceGate_AppliesToAllRegimes(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:      "ETHUSDT",
-			BestSetup:   setup.CompressionBreakout,
-			Score:       0.80,
-			TrendHealth: 0.1, // low, but irrelevant for compression
+			Symbol:     "ETHUSDT",
+			BestSetup:  setup.CompressionBreakout,
+			Score:      0.80,
+			Confidence: 0.4, // low confidence, even for non-trend
 		},
 	}
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
 	sched.CheckSetupOfDay(context.Background())
-	if spy.count() != 1 {
-		t.Fatalf("expected 1 notification for non-trend setup ignoring health gate, got %d", spy.count())
+	if spy.count() != 0 {
+		t.Fatal("expected no notification for non-trend setup with low confidence")
 	}
 }

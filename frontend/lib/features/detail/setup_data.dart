@@ -8,6 +8,7 @@ class SetupData {
   final double trendHealth;
   final String regime;
   final double marketEffective;
+  final double confidence;
 
   const SetupData({
     required this.symbol,
@@ -18,6 +19,7 @@ class SetupData {
     required this.trendHealth,
     required this.regime,
     required this.marketEffective,
+    required this.confidence,
   });
 
   factory SetupData.fromJson(Map<String, dynamic> json) {
@@ -31,6 +33,7 @@ class SetupData {
       trendHealth: (json['trendHealth'] as num?)?.toDouble() ?? 0.0,
       regime: json['regime'] as String? ?? '',
       marketEffective: (json['marketEffective'] as num?)?.toDouble() ?? 0.0,
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -47,6 +50,21 @@ class SetupData {
     if (marketEffective > 0.6) return 'Favorable market';
     if (marketEffective >= 0.4) return 'Neutral market';
     return 'Unfavorable market';
+  }
+
+  /// Human-readable confidence label.
+  String get confidenceLabel {
+    if (confidence > 0.75) return 'High';
+    if (confidence > 0.55) return 'Medium';
+    return 'Low';
+  }
+
+  /// Confidence dot color indicator.
+  /// Green (>0.75), Yellow (>0.55), Red (<=0.55).
+  String get confidenceDot {
+    if (confidence > 0.75) return '\u25CF'; // ● green
+    if (confidence > 0.55) return '\u25CF'; // ● yellow
+    return '\u25CF'; // ● red
   }
 
   /// Human-readable display name for a setup type key.

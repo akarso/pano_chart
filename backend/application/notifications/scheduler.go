@@ -396,12 +396,9 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 			if !ok || best.Score < cfg.SetupMinScore {
 				continue
 			}
-			// Health gate: skip trend-based setups with weak trend health
-			// or unfavorable market conditions.
-			if best.BestSetup == setup.TrendContinuation {
-				if best.TrendHealth < 0.4 || best.MarketEffective < 0.3 {
-					continue
-				}
+			// Confidence gate: only notify when contextual confidence is sufficient.
+			if best.Confidence < 0.6 {
+				continue
 			}
 			body := fmt.Sprintf("%s (%0.f%%, %s)", best.Symbol, best.Score*100, cfg.SetupTimeframe)
 			_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
@@ -426,12 +423,9 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		return
 	}
 
-	// Health gate: skip trend-based setups with weak trend health
-	// or unfavorable market conditions.
-	if best.BestSetup == setup.TrendContinuation {
-		if best.TrendHealth < 0.4 || best.MarketEffective < 0.3 {
-			return
-		}
+	// Confidence gate: only notify when contextual confidence is sufficient.
+	if best.Confidence < 0.6 {
+		return
 	}
 
 	body := fmt.Sprintf("%s (%0.f%%)", best.Symbol, best.Score*100)

@@ -10,6 +10,7 @@ import (
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
+	"pano_chart/backend/domain/risk"
 	"pano_chart/backend/domain/setup"
 )
 
@@ -18,13 +19,19 @@ type MarketProvider interface {
 	Calculate(timeframe string) (mkt.Summary, error)
 }
 
+// FragilityProvider returns the crowding / fragility assessment for a symbol.
+type FragilityProvider interface {
+	Get(ctx context.Context, symbol, timeframe string) (risk.Fragility, error)
+}
+
 // SetupService orchestrates candle retrieval, score computation, and setup
 // evaluation for a single symbol.
 type SetupService struct {
-	candleRepo     ports.CandleRepositoryPort
-	scorer         usecases.SymbolScorer
-	engine         *Engine
-	marketProvider MarketProvider // optional; nil means no market modifier
+	candleRepo        ports.CandleRepositoryPort
+	scorer            usecases.SymbolScorer
+	engine            *Engine
+	marketProvider    MarketProvider    // optional; nil means no market modifier
+	fragilityProvider FragilityProvider // optional; nil means crowding = 0
 }
 
 const candleLimit = 200
@@ -41,6 +48,11 @@ func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScor
 // SetMarketProvider injects the market state provider (optional).
 func (s *SetupService) SetMarketProvider(mp MarketProvider) {
 	s.marketProvider = mp
+}
+
+// SetFragilityProvider injects the fragility/crowding provider (optional).
+func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
+	s.fragilityProvider = fp
 }
 
 // Evaluate fetches candles, computes underlying scores, builds a SetupContext,
@@ -83,6 +95,15 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 			result = ApplyMarketModifier(result, summary.EffectiveTrend)
 		}
 	}
+
+	// Populate confidence inputs and compute unified confidence.
+	result.VolatilityFit = VolatilityFit(result.Regime, ctx.Volatility)
+	if s.fragilityProvider != nil {
+		if frag, err := s.fragilityProvider.Get(context.Background(), symbol, timeframe); err == nil {
+			result.Crowding = frag.Score
+		}
+	}
+	result.Confidence = ComputeConfidence(result)
 
 	return result, nil
 }

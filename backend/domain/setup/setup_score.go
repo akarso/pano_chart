@@ -24,4 +24,11 @@ type SetupScores struct {
 
 	// Market-level context.
 	MarketEffective float64 // 0–1; aggregate market trend strength
+
+	// Confidence inputs.
+	Crowding      float64 // 0–1; position crowding / fragility (high = dangerous)
+	VolatilityFit float64 // 0–1; how suitable current volatility is for this regime
+
+	// Unified confidence score.
+	Confidence float64 // 0–1; contextual validity of the setup
 }

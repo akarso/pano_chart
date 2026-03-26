@@ -399,6 +399,7 @@ func main() {
 	riskProvider := apprisk.NewCandleBasedDataProvider(candleRepo)
 	riskService := apprisk.NewService(riskEngine, riskProvider)
 	fragilityHandler := adhttp.NewFragilityHandler(riskService)
+	setupService.SetFragilityProvider(riskService)
 
 	// --- Behavior engine ---
 	behaviorEngine := appbehavior.NewEngine()

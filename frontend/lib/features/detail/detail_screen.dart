@@ -1304,9 +1304,19 @@ class _DetailScreenState extends State<DetailScreen> {
       healthColor = Colors.red;
     }
 
+    // Confidence dot color: green > 0.75, yellow > 0.55, red otherwise
+    Color confidenceColor;
+    if (data.confidence > 0.75) {
+      confidenceColor = Colors.green;
+    } else if (data.confidence > 0.55) {
+      confidenceColor = Colors.amber;
+    } else {
+      confidenceColor = Colors.red;
+    }
+
     final title = data.regime.isNotEmpty
-        ? 'Setup Quality — $totalDisplay · ${data.healthLabel} · ${data.marketLabel}'
-        : 'Setup Quality — $totalDisplay';
+        ? 'Setup Quality \u2014 $totalDisplay \u00b7 ${data.confidenceDot}'
+        : 'Setup Quality \u2014 $totalDisplay';
 
     return _fieldset(title, [
       for (final entry in data.scores.entries)
@@ -1320,8 +1330,9 @@ class _DetailScreenState extends State<DetailScreen> {
         'price structure matches known setup archetypes.\n\n'
         '• Compression Breakout — tight range about to break\n'
         '• Trend Continuation — pullback within a strong trend\n'
-        '• Range Reversion — mean-reversion at range edges',
-    titleSuffixColor: data.regime.isNotEmpty ? healthColor : null);
+        '• Range Reversion — mean-reversion at range edges\n\n'
+        'Confidence: ${data.confidenceLabel}',
+    titleSuffixColor: data.regime.isNotEmpty ? confidenceColor : null);
   }
 
   // ---- shared fieldset & metric bar helpers ----

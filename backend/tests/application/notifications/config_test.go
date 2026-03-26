@@ -297,9 +297,10 @@ func TestScheduler_PerUser_SetupWithCustomThreshold(t *testing.T) {
 
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:    "BTCUSDT",
-			BestSetup: setup.CompressionBreakout,
-			Score:     0.80,
+			Symbol:     "BTCUSDT",
+			BestSetup:  setup.CompressionBreakout,
+			Score:      0.80,
+			Confidence: 0.7,
 		},
 	}
 
@@ -429,9 +430,10 @@ func TestScheduler_PerUser_SetupDifferentTimeframes(t *testing.T) {
 
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:    "ETHUSDT",
-			BestSetup: setup.CompressionBreakout,
-			Score:     0.85,
+			Symbol:     "ETHUSDT",
+			BestSetup:  setup.CompressionBreakout,
+			Score:      0.85,
+			Confidence: 0.7,
 		},
 	}
 
