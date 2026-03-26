@@ -89,12 +89,13 @@ Widget bootstrapApp({
           : null,
       macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel),
       newsScreen: () => NewsListScreen(viewModel: newsViewModel),
-      marketScreen: () => MarketPulseScreen(
+      marketScreen: (timeframe) => MarketPulseScreen(
             marketStateApi: marketStateApi,
             compositeIndexApi: compositeIndexApi,
             regimeApi: regimeApi,
             transitionApi: transitionApi,
             regimeHistoryApi: regimeHistoryApi,
+            initialTimeframe: timeframe,
           ),
     );
     onRouterReady?.call(router);

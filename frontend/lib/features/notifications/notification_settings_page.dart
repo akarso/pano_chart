@@ -11,11 +11,13 @@ import 'notification_settings_model.dart';
 class NotificationSettingsPage extends StatefulWidget {
   final PreferencesService prefs;
   final NotificationConfigApi? configApi;
+  final bool isPro;
 
   const NotificationSettingsPage({
     super.key,
     required this.prefs,
     this.configApi,
+    this.isPro = true,
   });
 
   @override
@@ -65,82 +67,101 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isPro = widget.isPro;
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
       body: ListView(
         children: [
-          _sectionTitle('Social'),
-          _toggle(
-            'Twitter Alerts',
-            _settings.social,
-            (v) => _update(() => _settings.social = v),
-          ),
-          _sectionTitle('Market'),
-          _regimeRow(
-            label: 'Uptrend',
-            enabled: _settings.uptrend,
-            onToggle: (v) => _update(() => _settings.uptrend = v),
-            timeframe: _settings.uptrendTimeframe,
-            onTimeframe: (v) =>
-                _update(() => _settings.uptrendTimeframe = v),
-          ),
-          _slider(
-            'min. dominance',
-            _settings.uptrendMinDominance,
-            (v) => _update(() => _settings.uptrendMinDominance = v),
-          ),
-          _regimeRow(
-            label: 'Downtrend',
-            enabled: _settings.downtrend,
-            onToggle: (v) => _update(() => _settings.downtrend = v),
-            timeframe: _settings.downtrendTimeframe,
-            onTimeframe: (v) =>
-                _update(() => _settings.downtrendTimeframe = v),
-          ),
-          _slider(
-            'min. dominance',
-            _settings.downtrendMinDominance,
-            (v) => _update(() => _settings.downtrendMinDominance = v),
-          ),
-          _regimeRow(
-            label: 'Sideways',
-            enabled: _settings.sideways,
-            onToggle: (v) => _update(() => _settings.sideways = v),
-            timeframe: _settings.sidewaysTimeframe,
-            onTimeframe: (v) =>
-                _update(() => _settings.sidewaysTimeframe = v),
-          ),
-          _slider(
-            'min. dominance',
-            _settings.sidewaysMinDominance,
-            (v) => _update(() => _settings.sidewaysMinDominance = v),
-          ),
-          const SizedBox(height: 8),
-          _regimeRow(
-            label: 'Best Setup (daily)',
-            enabled: _settings.setupOfDay,
-            onToggle: (v) => _update(() => _settings.setupOfDay = v),
-            timeframe: _settings.setupTimeframe,
-            onTimeframe: (v) =>
-                _update(() => _settings.setupTimeframe = v),
-          ),
-          _slider(
-            'min. quality score',
-            _settings.setupMinScore,
-            (v) => _update(() => _settings.setupMinScore = v),
-          ),
-          _sectionTitle('Macro'),
-          _toggle(
-            'Macro Events (30 min before)',
-            _settings.macro,
-            (v) => _update(() => _settings.macro = v),
-          ),
+          // ── News (always visible) ──
           _sectionTitle('News'),
           _toggle(
             'News Alerts',
             _settings.news,
             (v) => _update(() => _settings.news = v),
           ),
+
+          // ── Pro-only sections ──
+          if (isPro) ...[
+            _sectionTitle('Social'),
+            _toggle(
+              'Twitter Alerts',
+              _settings.social,
+              (v) => _update(() => _settings.social = v),
+            ),
+            _sectionTitle('Market'),
+            _regimeRow(
+              label: 'Uptrend',
+              enabled: _settings.uptrend,
+              onToggle: (v) => _update(() => _settings.uptrend = v),
+              timeframe: _settings.uptrendTimeframe,
+              onTimeframe: (v) =>
+                  _update(() => _settings.uptrendTimeframe = v),
+            ),
+            _slider(
+              'min. dominance',
+              _settings.uptrendMinDominance,
+              (v) => _update(() => _settings.uptrendMinDominance = v),
+            ),
+            _regimeRow(
+              label: 'Downtrend',
+              enabled: _settings.downtrend,
+              onToggle: (v) => _update(() => _settings.downtrend = v),
+              timeframe: _settings.downtrendTimeframe,
+              onTimeframe: (v) =>
+                  _update(() => _settings.downtrendTimeframe = v),
+            ),
+            _slider(
+              'min. dominance',
+              _settings.downtrendMinDominance,
+              (v) => _update(() => _settings.downtrendMinDominance = v),
+            ),
+            _regimeRow(
+              label: 'Sideways',
+              enabled: _settings.sideways,
+              onToggle: (v) => _update(() => _settings.sideways = v),
+              timeframe: _settings.sidewaysTimeframe,
+              onTimeframe: (v) =>
+                  _update(() => _settings.sidewaysTimeframe = v),
+            ),
+            _slider(
+              'min. dominance',
+              _settings.sidewaysMinDominance,
+              (v) => _update(() => _settings.sidewaysMinDominance = v),
+            ),
+            const SizedBox(height: 8),
+            _regimeRow(
+              label: 'Best Setup (daily)',
+              enabled: _settings.setupOfDay,
+              onToggle: (v) => _update(() => _settings.setupOfDay = v),
+              timeframe: _settings.setupTimeframe,
+              onTimeframe: (v) =>
+                  _update(() => _settings.setupTimeframe = v),
+            ),
+            _slider(
+              'min. quality score',
+              _settings.setupMinScore,
+              (v) => _update(() => _settings.setupMinScore = v),
+            ),
+            _sectionTitle('Macro'),
+            _toggle(
+              'Macro Events (30 min before)',
+              _settings.macro,
+              (v) => _update(() => _settings.macro = v),
+            ),
+          ],
+
+          // ── Upgrade prompt for free users ──
+          if (!isPro)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
+              child: Text(
+                'Upgrade to Pro for market, setup, macro, and social notifications.',
+                style: TextStyle(
+                  color: Colors.grey[400],
+                  fontSize: 13,
+                ),
+              ),
+            ),
         ],
       ),
     );

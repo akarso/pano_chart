@@ -311,3 +311,72 @@ func TestMarketHandler_JSONFields(t *testing.T) {
 		t.Errorf("expected symbolCount 3, got %v", symbolCount)
 	}
 }
+
+func TestClassify_Bias_Up(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.8, Bias: "up"},
+			{TrendScore: 0.6, Bias: "up"},
+			{TrendScore: 0.3, Bias: "down"},
+		},
+	})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Bias != "up" {
+		t.Errorf("expected bias up, got %s", s.Bias)
+	}
+}
+
+func TestClassify_Bias_Down(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.8, Bias: "down"},
+			{TrendScore: 0.7, Bias: "down"},
+			{TrendScore: 0.2, Bias: "up"},
+		},
+	})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Bias != "down" {
+		t.Errorf("expected bias down, got %s", s.Bias)
+	}
+}
+
+func TestClassify_Bias_Neutral_NoBias(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.5},
+			{TrendScore: 0.5},
+		},
+	})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Bias != "neutral" {
+		t.Errorf("expected bias neutral, got %s", s.Bias)
+	}
+}
+
+func TestMarketHandler_BiasInResponse(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.8, Bias: "down"},
+		},
+	})
+	h := adhttp.NewMarketHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/state?timeframe=4h", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["bias"] != "down" {
+		t.Errorf("expected bias down in response, got %v", resp["bias"])
+	}
+}

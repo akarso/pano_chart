@@ -116,7 +116,7 @@ void main() {
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        marketScreen: () {
+        marketScreen: (_) {
           pushed = true;
           return const Scaffold(body: Text('Market'));
         },
@@ -132,6 +132,29 @@ void main() {
 
       expect(pushed, isTrue);
       expect(find.text('Market'), findsOneWidget);
+    });
+
+    testWidgets('market type passes timeframe from data', (tester) async {
+      String? receivedTimeframe;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        marketScreen: (timeframe) {
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Market $timeframe'));
+        },
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: navKey,
+        home: const Scaffold(body: Text('Home')),
+      ));
+
+      router.handle({'type': 'market', 'timeframe': '15m'});
+      await tester.pumpAndSettle();
+
+      expect(receivedTimeframe, '15m');
+      expect(find.text('Market 15m'), findsOneWidget);
     });
 
     testWidgets('setup type pushes screen with symbol', (tester) async {

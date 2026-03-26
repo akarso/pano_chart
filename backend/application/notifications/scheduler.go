@@ -59,13 +59,14 @@ func DefaultSchedulerConfig() SchedulerConfig {
 // Scheduler periodically checks data sources and sends notifications
 // through the Engine.
 type Scheduler struct {
-	engine  *Engine
-	market  MarketProvider          // optional
-	setups  SetupProvider           // optional
-	events  EventProvider           // optional
-	configs NotificationConfigStore // optional — enables per-user thresholds
-	cfg     SchedulerConfig
-	now     func() time.Time
+	engine        *Engine
+	market        MarketProvider          // optional
+	setups        SetupProvider           // optional
+	events        EventProvider           // optional
+	configs       NotificationConfigStore // optional — enables per-user thresholds
+	subscriptions SubscriptionChecker     // optional — gates pro-only notifications
+	cfg           SchedulerConfig
+	now           func() time.Time
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -90,6 +91,14 @@ func NewScheduler(
 // When set, market and setup notifications use per-user thresholds.
 func (s *Scheduler) SetConfigStore(store NotificationConfigStore) {
 	s.configs = store
+}
+
+// SetSubscriptionChecker attaches a subscription checker.
+// When set, pro-only notification types (market, setup, macro) are only
+// delivered to users with an active subscription. News notifications
+// remain available to all users.
+func (s *Scheduler) SetSubscriptionChecker(checker SubscriptionChecker) {
+	s.subscriptions = checker
 }
 
 // Run starts the scheduler loops. Blocks until ctx is cancelled.
@@ -238,7 +247,11 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	case mkt.StateSideways:
 		msg = "Market mostly sideways today"
 	case mkt.StateTrend:
-		msg = "Market trending today"
+		if summary.Label != "" {
+			msg = summary.Label
+		} else {
+			msg = "Market trending today"
+		}
 	case mkt.StateCompression:
 		msg = "Market in compression — expansion likely"
 	case mkt.StateBreakout:
@@ -256,14 +269,30 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	})
 }
 
+// normalizeBreadth returns the fraction of a single breadth value relative
+// to the sum of all four breadth components.  This converts the raw breadth
+// (which may not sum to exactly 1.0 depending on the upstream scoring) into
+// an intuitive percentage that matches the "prevalence" shown on screen.
+func normalizeBreadth(b mkt.Breadth, value float64) float64 {
+	total := b.Trend + b.Sideways + b.Compression + b.Breakout
+	if total == 0 {
+		return 0
+	}
+	return value / total
+}
+
 // checkMarketForUser evaluates the market breadth against a single user's
 // enabled regimes and thresholds. Each regime may reference a different
 // timeframe. The strongest qualifying regime wins.
 func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.Summary) {
+	if !s.userHasProAccess(ctx, cfg.UserID) {
+		return
+	}
+
 	type candidate struct {
-		label     string
-		dominance float64
-		timeframe string
+		label      string
+		prevalence float64
+		timeframe  string
 	}
 
 	var candidates []candidate
@@ -271,24 +300,31 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// Uptrend — maps to Breadth.Trend.
 	if cfg.Uptrend {
 		if sum, ok := summaries[cfg.UptrendTimeframe]; ok {
-			if sum.Breadth.Trend >= cfg.UptrendMinDominance {
-				candidates = append(candidates, candidate{"Uptrend", sum.Breadth.Trend, cfg.UptrendTimeframe})
+			p := normalizeBreadth(sum.Breadth, sum.Breadth.Trend)
+			if p >= cfg.UptrendMinDominance {
+				lbl := "Uptrend"
+				if sum.Label != "" {
+					lbl = sum.Label
+				}
+				candidates = append(candidates, candidate{lbl, p, cfg.UptrendTimeframe})
 			}
 		}
 	}
 	// Downtrend — maps to Breadth.Breakout.
 	if cfg.Downtrend {
 		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok {
-			if sum.Breadth.Breakout >= cfg.DowntrendMinDominance {
-				candidates = append(candidates, candidate{"Downtrend", sum.Breadth.Breakout, cfg.DowntrendTimeframe})
+			p := normalizeBreadth(sum.Breadth, sum.Breadth.Breakout)
+			if p >= cfg.DowntrendMinDominance {
+				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
 			}
 		}
 	}
 	// Sideways — maps to Breadth.Sideways.
 	if cfg.Sideways {
 		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok {
-			if sum.Breadth.Sideways >= cfg.SidewaysMinDominance {
-				candidates = append(candidates, candidate{"Sideways", sum.Breadth.Sideways, cfg.SidewaysTimeframe})
+			p := normalizeBreadth(sum.Breadth, sum.Breadth.Sideways)
+			if p >= cfg.SidewaysMinDominance {
+				candidates = append(candidates, candidate{"Sideways", p, cfg.SidewaysTimeframe})
 			}
 		}
 	}
@@ -300,12 +336,12 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// Pick the strongest.
 	best := candidates[0]
 	for _, c := range candidates[1:] {
-		if c.dominance > best.dominance {
+		if c.prevalence > best.prevalence {
 			best = c
 		}
 	}
 
-	body := fmt.Sprintf("Market is %s (%.0f%% dominance, %s)", best.label, best.dominance*100, best.timeframe)
+	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
 	dateKey := s.now().Format("2006-01-02")
 
 	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
@@ -353,6 +389,9 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 			if !cfg.SetupOfDay {
 				continue
 			}
+			if !s.userHasProAccess(ctx, cfg.UserID) {
+				continue
+			}
 			best, ok := setups[cfg.SetupTimeframe]
 			if !ok || best.Score < cfg.SetupMinScore {
 				continue
@@ -390,6 +429,21 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
 		Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
 	})
+}
+
+// userHasProAccess returns true when the user may receive pro-only
+// notifications. If no SubscriptionChecker is configured, all users are
+// treated as pro (backwards-compatible).
+func (s *Scheduler) userHasProAccess(ctx context.Context, userID string) bool {
+	if s.subscriptions == nil {
+		return true
+	}
+	active, err := s.subscriptions.IsActive(ctx, userID)
+	if err != nil {
+		log.Printf("[notify-scheduler] subscription check error user=%s: %v", userID, err)
+		return false // fail-closed: don't send pro notifications on errors
+	}
+	return active
 }
 
 // SetClock overrides the time source (for testing).

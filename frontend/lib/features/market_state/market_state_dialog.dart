@@ -46,7 +46,7 @@ class _MarketStateDialog extends StatelessWidget {
   final MarketStateData data;
   const _MarketStateDialog({required this.data});
 
-  Color _stateColor(String state) {
+  Color _stateColor(String state, [String bias = 'neutral']) {
     switch (state) {
       case 'sideways':
         return Colors.blueGrey;
@@ -55,13 +55,13 @@ class _MarketStateDialog extends StatelessWidget {
       case 'breakout':
         return Colors.redAccent;
       case 'trend':
-        return Colors.tealAccent;
+        return bias == 'down' ? Colors.redAccent : Colors.tealAccent;
       default:
         return Colors.grey;
     }
   }
 
-  IconData _stateIcon(String state) {
+  IconData _stateIcon(String state, [String bias = 'neutral']) {
     switch (state) {
       case 'sideways':
         return Icons.swap_horiz;
@@ -70,7 +70,7 @@ class _MarketStateDialog extends StatelessWidget {
       case 'breakout':
         return Icons.open_in_full;
       case 'trend':
-        return Icons.trending_up;
+        return bias == 'down' ? Icons.trending_down : Icons.trending_up;
       default:
         return Icons.help_outline;
     }
@@ -78,13 +78,13 @@ class _MarketStateDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = _stateColor(data.state);
+    final color = _stateColor(data.state, data.bias);
     final pct = (data.confidence * 100).toStringAsFixed(1);
 
     return AlertDialog(
       title: Row(
         children: [
-          Icon(_stateIcon(data.state), color: color, size: 28),
+          Icon(_stateIcon(data.state, data.bias), color: color, size: 28),
           const SizedBox(width: 8),
           const Text('Market State'),
         ],

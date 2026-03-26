@@ -9,6 +9,9 @@ typedef ScreenFactory = Widget Function();
 /// Callback for setup deep-links that receive a symbol argument.
 typedef SymbolScreenFactory = Widget Function(String symbol);
 
+/// Callback for market deep-links that receive an optional timeframe.
+typedef TimeframeScreenFactory = Widget Function(String? timeframe);
+
 /// Routes push notification taps to the correct screen.
 ///
 /// Respects per-category toggle in [PreferencesService].
@@ -20,7 +23,7 @@ class NotificationRouter {
   final ScreenFactory? socialScreen;
   final ScreenFactory? macroScreen;
   final ScreenFactory? newsScreen;
-  final ScreenFactory? marketScreen;
+  final TimeframeScreenFactory? marketScreen;
   final SymbolScreenFactory? setupScreen;
 
   NotificationRouter({
@@ -61,7 +64,8 @@ class NotificationRouter {
         break;
       case 'market':
         if (marketScreen != null) {
-          nav.push(MaterialPageRoute(builder: (_) => marketScreen!()));
+          final timeframe = data['timeframe'] as String?;
+          nav.push(MaterialPageRoute(builder: (_) => marketScreen!(timeframe)));
         }
         break;
       case 'setup':

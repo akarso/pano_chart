@@ -205,3 +205,170 @@ func TestScheduler_NilProviders_NoPanic(t *testing.T) {
 		t.Fatal("expected no notifications with nil providers")
 	}
 }
+
+// ── Subscription gating tests ───────────────────────────────────────────────
+
+type fakeSubscriptionChecker struct {
+	active map[string]bool
+	err    error
+}
+
+func (f *fakeSubscriptionChecker) IsActive(_ context.Context, userID string) (bool, error) {
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.active[userID], nil
+}
+
+func TestScheduler_SubscriptionGating_MarketSuppressedForFreeUser(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "free-user",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	subs := &fakeSubscriptionChecker{active: map[string]bool{"free-user": false}}
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetSubscriptionChecker(subs)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatal("expected no market notification for free user")
+	}
+}
+
+func TestScheduler_SubscriptionGating_MarketSentToProUser(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "pro-user",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	subs := &fakeSubscriptionChecker{active: map[string]bool{"pro-user": true}}
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetSubscriptionChecker(subs)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 market notification for pro user, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_SubscriptionGating_SetupSuppressedForFreeUser(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{Symbol: "BTCUSDT", Score: 0.85},
+	}
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:         "free-user",
+		SetupOfDay:     true,
+		SetupMinScore:  0.75,
+		SetupTimeframe: "1h",
+	})
+
+	subs := &fakeSubscriptionChecker{active: map[string]bool{"free-user": false}}
+
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetSubscriptionChecker(subs)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckSetupOfDay(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatal("expected no setup notification for free user")
+	}
+}
+
+func TestScheduler_SubscriptionGating_MixedUsers(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID: "pro", Uptrend: true, UptrendMinDominance: 0.75, UptrendTimeframe: "1h",
+	})
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID: "free", Uptrend: true, UptrendMinDominance: 0.75, UptrendTimeframe: "1h",
+	})
+
+	subs := &fakeSubscriptionChecker{active: map[string]bool{"pro": true, "free": false}}
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetSubscriptionChecker(subs)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 notification (pro only), got %d", spy.userCount())
+	}
+	if spy.lastUserSend().userID != "pro" {
+		t.Fatalf("expected pro user to be notified, got %s", spy.lastUserSend().userID)
+	}
+}
+
+func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID: "u1", Uptrend: true, UptrendMinDominance: 0.75, UptrendTimeframe: "1h",
+	})
+
+	// No subscription checker set — backwards-compatible, all users treated as pro.
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatal("expected notification when no subscription checker is set")
+	}
+}

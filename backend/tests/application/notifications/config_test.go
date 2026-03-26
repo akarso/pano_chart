@@ -261,7 +261,7 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 	eng.SetClock(func() time.Time { return now })
 
 	market := singleMarket("1h", mkt.Summary{
-		Breadth: mkt.Breadth{Trend: 0.78, Sideways: 0.82},
+		Breadth: mkt.Breadth{Trend: 0.40, Sideways: 0.45, Compression: 0.10, Breakout: 0.05},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -269,8 +269,8 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 		UserID:               "u1",
 		Uptrend:              true,
 		Sideways:             true,
-		UptrendMinDominance:  0.75,
-		SidewaysMinDominance: 0.75,
+		UptrendMinDominance:  0.35,
+		SidewaysMinDominance: 0.35,
 		UptrendTimeframe:     "1h",
 		SidewaysTimeframe:    "1h",
 	})
@@ -284,7 +284,7 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 		t.Fatalf("expected 1 notification, got %d", spy.userCount())
 	}
 	body := spy.lastUserSend().n.Body
-	if body != "Market is Sideways (82% dominance, 1h)" {
+	if body != "Market is Sideways (45%, 1h)" {
 		t.Fatalf("expected sideways to win, got: %s", body)
 	}
 }
@@ -380,11 +380,11 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	// 15m shows uptrend at 80%, 1h shows uptrend at 60%.
+	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
 		summaries: map[string]mkt.Summary{
-			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80}},
-			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.60}},
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Breakout: 0.05}},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.30, Compression: 0.10, Breakout: 0.10}},
 		},
 	}
 
@@ -416,7 +416,7 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 	if rec.userID != "u1" {
 		t.Fatalf("expected user u1, got %s", rec.userID)
 	}
-	if rec.n.Body != "Market is Uptrend (80% dominance, 15m)" {
+	if rec.n.Body != "Market is Uptrend (80%, 15m)" {
 		t.Fatalf("unexpected body: %s", rec.n.Body)
 	}
 }

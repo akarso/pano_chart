@@ -505,6 +505,7 @@ func main() {
 				appnotify.DefaultSchedulerConfig(),
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
+			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
 			go notifyScheduler.Run(socialCtx)
 			log.Println("[main] Notification engine + scheduler started")
 		}

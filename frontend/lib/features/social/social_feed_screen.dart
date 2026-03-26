@@ -479,7 +479,8 @@ class _AccountSettingsSheetState extends State<_AccountSettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+    final mq = MediaQuery.of(context);
+    final bottomPadding = mq.viewInsets.bottom + mq.viewPadding.bottom;
 
     return Padding(
       padding: EdgeInsets.only(

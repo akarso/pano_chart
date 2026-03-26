@@ -28,4 +28,12 @@ type Summary struct {
 	Confidence  float64
 	Breadth     Breadth
 	SymbolCount int
+	// Bias indicates the dominant direction when State is trend:
+	// "up", "down", or "neutral".
+	Bias string
+
+	// Trend health aggregates (additive — zero values are backward compatible).
+	EffectiveTrend float64 // average trend health across all tokens (0–1)
+	BreakdownRate  float64 // fraction of trending tokens with health < 0.4
+	Label          string  // human-readable quality label
 }

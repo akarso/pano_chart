@@ -19,6 +19,7 @@ class MarketPulseScreen extends StatefulWidget {
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
+  final String? initialTimeframe;
 
   const MarketPulseScreen({
     Key? key,
@@ -27,6 +28,7 @@ class MarketPulseScreen extends StatefulWidget {
     this.regimeApi,
     this.transitionApi,
     this.regimeHistoryApi,
+    this.initialTimeframe,
   }) : super(key: key);
 
   @override
@@ -48,6 +50,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   @override
   void initState() {
     super.initState();
+    final initial = widget.initialTimeframe;
+    if (initial != null && _supportedTimeframes.contains(initial)) {
+      _timeframe = initial;
+    }
     _loadAll();
   }
 
@@ -610,8 +616,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Market State Card (fallback when no regime API) ----------
 
   Widget _buildStateCard(MarketStateData data) {
-    final color = _stateColor(data.state);
+    final color = _stateColor(data.state, data.bias);
     final pct = (data.confidence * 100).toStringAsFixed(1);
+    final hasLabel = data.label.isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -624,7 +631,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(_stateIcon(data.state), color: color, size: 28),
+              Icon(_stateIcon(data.state, data.bias), color: color, size: 28),
               const SizedBox(width: 8),
               Text(
                 data.state.toUpperCase(),
@@ -634,6 +641,28 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   color: color,
                 ),
               ),
+              if (hasLabel) ...[
+                const SizedBox(width: 8),
+                Text(
+                  '·',
+                  style: TextStyle(fontSize: 24, color: Colors.grey),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  _healthIcon(data.label),
+                  color: _healthColor(data.label),
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _healthSuffix(data.label),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: _healthColor(data.label),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 4),
@@ -846,6 +875,31 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
+  // ---------- Trend Health Helpers ----------
+
+  /// Short suffix shown next to the regime name.
+  String _healthSuffix(String label) {
+    if (label.contains('Strong')) return 'Strong';
+    if (label.contains('weakening')) return 'Weakening \u2193';
+    if (label.contains('breaking')) return 'Breaking \u2193\u2193';
+    if (label.contains('Mixed')) return 'Mixed';
+    return label;
+  }
+
+  IconData _healthIcon(String label) {
+    if (label.contains('Strong')) return Icons.trending_up;
+    if (label.contains('weakening')) return Icons.trending_flat;
+    if (label.contains('breaking')) return Icons.trending_down;
+    return Icons.remove;
+  }
+
+  Color _healthColor(String label) {
+    if (label.contains('Strong')) return Colors.greenAccent;
+    if (label.contains('weakening')) return Colors.orangeAccent;
+    if (label.contains('breaking')) return Colors.redAccent;
+    return Colors.grey;
+  }
+
   // ---------- Helpers ----------
 
   void _showInfoDialog({required String title, required String body}) {
@@ -864,7 +918,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  Color _stateColor(String state) {
+  Color _stateColor(String state, [String bias = 'neutral']) {
     switch (state) {
       case 'sideways':
         return Colors.blueGrey;
@@ -873,13 +927,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       case 'breakout':
         return Colors.redAccent;
       case 'trend':
-        return Colors.tealAccent;
+        return bias == 'down' ? Colors.redAccent : Colors.tealAccent;
       default:
         return Colors.grey;
     }
   }
 
-  IconData _stateIcon(String state) {
+  IconData _stateIcon(String state, [String bias = 'neutral']) {
     switch (state) {
       case 'sideways':
         return Icons.swap_horiz;
@@ -888,7 +942,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       case 'breakout':
         return Icons.open_in_full;
       case 'trend':
-        return Icons.trending_up;
+        return bias == 'down' ? Icons.trending_down : Icons.trending_up;
       default:
         return Icons.help_outline;
     }

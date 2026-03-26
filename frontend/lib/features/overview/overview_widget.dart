@@ -26,6 +26,7 @@ import '../market_state/http_regime_history_api.dart';
 import '../market_state/http_transition_api.dart';
 import '../market_state/market_pulse_screen.dart';
 import '../billing/billing_manager.dart';
+import '../billing/capabilities.dart';
 import '../billing/upgrade_screen.dart';
 import '../news/news_list_screen.dart';
 import '../news/news_view_model.dart';
@@ -145,9 +146,11 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   PreferencesService? get _prefs => widget.prefs;
 
+  /// Capabilities derived from current subscription state.
+  Capabilities get _capabilities => Capabilities.fromBilling(widget.billingManager);
+
   /// Whether auto-refresh is enabled (pro tier).
-  bool get _isProUser =>
-      widget.billingManager == null || widget.billingManager!.hasFullAccess;
+  bool get _isProUser => _capabilities.isPro;
 
   @override
   void initState() {
@@ -975,10 +978,14 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 
   Widget _buildMenuOverlay() {
+    final caps = _capabilities;
+    final billing = widget.billingManager;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
+        // ── Fear & Greed ──
         if (widget.fearGreedApi != null)
           _menuRow(
             icon: Icons.speed,
@@ -989,26 +996,8 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.fearGreedApi != null) _menuDivider(),
-        if (widget.marketStateApi != null)
-          _menuRow(
-            icon: Icons.pie_chart,
-            label: 'Market Pulse',
-            onTap: () {
-              setState(() => _overlay = _OverlayKind.none);
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => MarketPulseScreen(
-                    marketStateApi: widget.marketStateApi!,
-                    compositeIndexApi: widget.compositeIndexApi!,
-                    regimeApi: widget.regimeApi,
-                    transitionApi: widget.transitionApi,
-                    regimeHistoryApi: widget.regimeHistoryApi,
-                  ),
-                ),
-              );
-            },
-          ),
-        if (widget.marketStateApi != null) _menuDivider(),
+
+        // ── Bubble Map (gated) ──
         if (widget.bubbleMapViewModel != null)
           _menuRow(
             icon: Icons.bubble_chart,
@@ -1033,6 +1022,31 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.bubbleMapViewModel != null) _menuDivider(),
+
+        // ── Market Pulse (gated) ──
+        if (widget.marketStateApi != null)
+          _menuRow(
+            icon: Icons.pie_chart,
+            label: 'Market Pulse',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              if (!_requireAccess()) return;
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => MarketPulseScreen(
+                    marketStateApi: widget.marketStateApi!,
+                    compositeIndexApi: widget.compositeIndexApi!,
+                    regimeApi: widget.regimeApi,
+                    transitionApi: widget.transitionApi,
+                    regimeHistoryApi: widget.regimeHistoryApi,
+                  ),
+                ),
+              );
+            },
+          ),
+        if (widget.marketStateApi != null) _menuDivider(),
+
+        // ── Macro Events (gated) ──
         if (widget.eventsViewModel != null)
           _menuRow(
             icon: Icons.public,
@@ -1050,6 +1064,27 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.eventsViewModel != null) _menuDivider(),
+
+        // ── Social Feed (gated) ──
+        if (widget.socialFeedViewModel != null)
+          _menuRow(
+            icon: Icons.rss_feed,
+            label: 'Social Feed',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              if (!_requireAccess()) return;
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => SocialFeedScreen(
+                    viewModel: widget.socialFeedViewModel!,
+                  ),
+                ),
+              );
+            },
+          ),
+        if (widget.socialFeedViewModel != null) _menuDivider(),
+
+        // ── News & Updates (free) ──
         if (widget.newsViewModel != null)
           _menuRow(
             icon: Icons.article_outlined,
@@ -1066,22 +1101,8 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         if (widget.newsViewModel != null) _menuDivider(),
-        if (widget.socialFeedViewModel != null)
-          _menuRow(
-            icon: Icons.rss_feed,
-            label: 'Social Feed',
-            onTap: () {
-              setState(() => _overlay = _OverlayKind.none);
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => SocialFeedScreen(
-                    viewModel: widget.socialFeedViewModel!,
-                  ),
-                ),
-              );
-            },
-          ),
-        if (widget.socialFeedViewModel != null) _menuDivider(),
+
+        // ── Notifications ──
         if (widget.prefs != null)
           _menuRow(
             icon: Icons.notifications_outlined,
@@ -1093,28 +1114,15 @@ class OverviewWidgetState extends State<OverviewWidget>
                   builder: (_) => NotificationSettingsPage(
                     prefs: widget.prefs!,
                     configApi: widget.notificationConfigApi,
+                    isPro: caps.notificationsFull,
                   ),
                 ),
               );
             },
           ),
         if (widget.prefs != null) _menuDivider(),
-        if (widget.billingManager != null)
-          _menuRow(
-            icon: Icons.workspace_premium,
-            label: 'Upgrade to Pro',
-            onTap: () {
-              setState(() => _overlay = _OverlayKind.none);
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => UpgradeScreen(
-                    billingManager: widget.billingManager!,
-                  ),
-                ),
-              );
-            },
-          ),
-        if (widget.billingManager != null) _menuDivider(),
+
+        // ── About ──
         _menuRow(
           icon: Icons.info_outline,
           label: 'About',
@@ -1139,6 +1147,8 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         ),
         _menuDivider(),
+
+        // ── Help ──
         _menuRow(
           icon: Icons.help_outline,
           label: 'Help',
@@ -1165,6 +1175,29 @@ class OverviewWidgetState extends State<OverviewWidget>
             ),
           ),
         ),
+
+        // ── Upgrade to Pro (conditional CTA) ──
+        if (billing != null && !billing.isTrialMode) ...[
+          _menuDivider(),
+          _menuRow(
+            icon: Icons.workspace_premium,
+            label: billing.hasFullAccess
+                ? 'Manage Subscription'
+                : (billing.trialDaysRemaining == 0
+                    ? 'Resume Pro'
+                    : 'Get Pro'),
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => UpgradeScreen(
+                    billingManager: billing,
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ],
     );
   }

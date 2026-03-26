@@ -32,6 +32,11 @@ type EvaluationSnapshot struct {
 	ATR    float64
 	Volume float64
 
+	// Recent price extremes (for trend health computation).
+	RecentHigh   float64 // highest high within lookback window
+	RecentLow    float64 // lowest low within lookback window
+	RecentReturn float64 // recent return in ATR units
+
 	// Meta
 	AlgoVersion string
 }

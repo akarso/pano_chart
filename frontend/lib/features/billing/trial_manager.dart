@@ -1,4 +1,5 @@
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/analytics.dart';
 
 /// Tracks the app's 14-day free trial period.
 ///
@@ -10,6 +11,7 @@ class TrialManager {
   static const int trialDays = 14;
 
   static const String _keyInstallDate = 'trial.installDate';
+  static const String _keyExpiredLogged = 'trial.expiredLogged';
 
   final SharedPreferences _prefs;
 
@@ -25,6 +27,7 @@ class TrialManager {
         _keyInstallDate,
         DateTime.now().toUtc().toIso8601String(),
       );
+      Analytics().trialStarted();
     }
   }
 
@@ -35,7 +38,12 @@ class TrialManager {
   /// Whether the free trial is still active.
   bool isTrialActive([DateTime? now]) {
     final n = now ?? DateTime.now().toUtc();
-    return n.difference(installDate).inDays < trialDays;
+    final active = n.difference(installDate).inDays < trialDays;
+    if (!active && _prefs.getBool(_keyExpiredLogged) != true) {
+      _prefs.setBool(_keyExpiredLogged, true);
+      Analytics().trialExpired();
+    }
+    return active;
   }
 
   /// How many full days remain in the trial (clamped to 0..trialDays).

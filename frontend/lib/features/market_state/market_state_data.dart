@@ -5,6 +5,10 @@ class MarketStateData {
   final double confidence;
   final MarketBreadth breadth;
   final int symbolCount;
+  final String bias;
+  final double effectiveTrend;
+  final double breakdownRate;
+  final String label;
 
   const MarketStateData({
     required this.timeframe,
@@ -12,6 +16,10 @@ class MarketStateData {
     required this.confidence,
     required this.breadth,
     required this.symbolCount,
+    this.bias = 'neutral',
+    this.effectiveTrend = 0,
+    this.breakdownRate = 0,
+    this.label = '',
   });
 
   factory MarketStateData.fromJson(Map<String, dynamic> json) {
@@ -22,6 +30,10 @@ class MarketStateData {
       breadth:
           MarketBreadth.fromJson(json['breadth'] as Map<String, dynamic>),
       symbolCount: json['symbolCount'] as int,
+      bias: json['bias'] as String? ?? 'neutral',
+      effectiveTrend: (json['effectiveTrend'] as num?)?.toDouble() ?? 0,
+      breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0,
+      label: json['label'] as String? ?? '',
     );
   }
 }

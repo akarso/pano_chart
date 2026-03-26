@@ -35,6 +35,7 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 			Confidence:  0,
 			Breadth:     mkt.Breadth{},
 			SymbolCount: 0,
+			Label:       BuildMarketLabel(0, 0),
 		}, nil
 	}
 
@@ -73,11 +74,64 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		maxWeight = breadth.Breakout
 	}
 
+	// Compute aggregate directional bias from per-symbol biases,
+	// weighted by each symbol's trend score.
+	var upWeight, downWeight float64
+	for _, e := range evaluations {
+		switch e.Bias {
+		case "up":
+			upWeight += e.TrendScore
+		case "down":
+			downWeight += e.TrendScore
+		}
+	}
+	bias := "neutral"
+	if upWeight > downWeight {
+		bias = "up"
+	} else if downWeight > upWeight {
+		bias = "down"
+	}
+
+	// Compute trend health aggregates.
+	var trendCount, effectiveSum, breakdowns float64
+	for _, e := range evaluations {
+		w := scoreWeights(e)
+		// Consider a token "trending" if trend is its dominant regime.
+		if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Breakout {
+			continue
+		}
+		trendCount++
+		state := "uptrend"
+		if e.Bias == "down" {
+			state = "downtrend"
+		}
+		h := ComputeTrendHealth(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn)
+		effectiveSum += h
+		if h < 0.4 {
+			breakdowns++
+		}
+	}
+
+	var effectiveTrend, breakdownRate float64
+	if total > 0 {
+		effectiveTrend = effectiveSum / total
+	}
+	if trendCount > 0 {
+		breakdownRate = breakdowns / trendCount
+	}
+
+	trendPrevalence := breadth.Trend
+	label := BuildMarketLabel(trendPrevalence, effectiveTrend)
+
 	return mkt.Summary{
-		Timeframe:   timeframe,
-		State:       dominant,
-		Confidence:  maxWeight,
-		Breadth:     breadth,
-		SymbolCount: len(evaluations),
+		Timeframe:      timeframe,
+		State:          dominant,
+		Confidence:     maxWeight,
+		Breadth:        breadth,
+		SymbolCount:    len(evaluations),
+		Bias:           bias,
+		EffectiveTrend: effectiveTrend,
+		BreakdownRate:  breakdownRate,
+		Label:          label,
 	}, nil
 }

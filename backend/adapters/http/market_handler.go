@@ -20,11 +20,15 @@ func NewMarketHandler(s *appmarket.MarketStateService) *MarketHandler {
 
 // marketStateResponse is the response DTO for the market state endpoint.
 type marketStateResponse struct {
-	Timeframe   string           `json:"timeframe"`
-	State       string           `json:"state"`
-	Confidence  float64          `json:"confidence"`
-	Breadth     marketBreadthDTO `json:"breadth"`
-	SymbolCount int              `json:"symbolCount"`
+	Timeframe      string           `json:"timeframe"`
+	State          string           `json:"state"`
+	Confidence     float64          `json:"confidence"`
+	Breadth        marketBreadthDTO `json:"breadth"`
+	SymbolCount    int              `json:"symbolCount"`
+	Bias           string           `json:"bias"`
+	EffectiveTrend float64          `json:"effectiveTrend"`
+	BreakdownRate  float64          `json:"breakdownRate"`
+	Label          string           `json:"label"`
 }
 
 type marketBreadthDTO struct {
@@ -48,10 +52,14 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := marketStateResponse{
-		Timeframe:   summary.Timeframe,
-		State:       string(summary.State),
-		Confidence:  roundTo(summary.Confidence, 4),
-		SymbolCount: summary.SymbolCount,
+		Timeframe:      summary.Timeframe,
+		State:          string(summary.State),
+		Confidence:     roundTo(summary.Confidence, 4),
+		SymbolCount:    summary.SymbolCount,
+		Bias:           summary.Bias,
+		EffectiveTrend: roundTo(summary.EffectiveTrend, 4),
+		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
+		Label:          summary.Label,
 		Breadth: marketBreadthDTO{
 			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 			Compression: roundTo(summary.Breadth.Compression, 4),

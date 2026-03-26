@@ -1,5 +1,7 @@
 package notifications
 
+import "context"
+
 // NotificationConfig holds per-user notification preferences and thresholds.
 type NotificationConfig struct {
 	UserID     string
@@ -52,4 +54,10 @@ type NotificationConfigStore interface {
 	Save(cfg NotificationConfig) error
 	// All returns configs for all users that have registered one.
 	All() ([]NotificationConfig, error)
+}
+
+// SubscriptionChecker reports whether a user has an active subscription.
+// The notifications package uses this to gate pro-only notification types.
+type SubscriptionChecker interface {
+	IsActive(ctx context.Context, userID string) (bool, error)
 }

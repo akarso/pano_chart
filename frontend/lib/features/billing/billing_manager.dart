@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import '../../core/analytics.dart';
 import 'api/subscription_api.dart';
 import 'trial_manager.dart';
 
@@ -186,6 +187,9 @@ class BillingManager {
         userId: _userId,
       );
       await refreshStatus();
+      if (_status.active) {
+        Analytics().subscriptionStarted(productId: purchase.productID);
+      }
     } catch (e) {
       debugPrint('[BillingManager] Verification failed: $e');
     } finally {

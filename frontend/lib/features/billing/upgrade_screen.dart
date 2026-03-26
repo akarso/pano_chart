@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../core/analytics.dart';
 import 'billing_manager.dart';
 
 /// Full-screen dialog for upgrading to Pro or managing an existing
@@ -29,6 +30,7 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
     _billing.onChanged = () {
       if (mounted) setState(() {});
     };
+    Analytics().paywallOpened();
   }
 
   @override
