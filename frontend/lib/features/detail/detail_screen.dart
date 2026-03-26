@@ -1305,7 +1305,7 @@ class _DetailScreenState extends State<DetailScreen> {
     }
 
     final title = data.regime.isNotEmpty
-        ? 'Setup Quality — $totalDisplay · ${data.healthLabel}'
+        ? 'Setup Quality — $totalDisplay · ${data.healthLabel} · ${data.marketLabel}'
         : 'Setup Quality — $totalDisplay';
 
     return _fieldset(title, [

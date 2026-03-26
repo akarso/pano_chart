@@ -21,4 +21,7 @@ type SetupScores struct {
 	// Trend health context (only meaningful when BestSetup is trend-based).
 	TrendHealth float64 // 0–1; health of the underlying trend
 	Regime      string  // dominant regime: "uptrend", "downtrend", "sideways", "compression"
+
+	// Market-level context.
+	MarketEffective float64 // 0–1; aggregate market trend strength
 }

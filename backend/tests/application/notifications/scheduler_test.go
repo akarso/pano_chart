@@ -401,10 +401,11 @@ func TestScheduler_SetupOfDay_TrendHealthGate_Passes(t *testing.T) {
 	eng.SetClock(func() time.Time { return now })
 	setups := &fakeSetupProvider{
 		scores: setup.SetupScores{
-			Symbol:      "BTCUSDT",
-			BestSetup:   setup.TrendContinuation,
-			Score:       0.85,
-			TrendHealth: 0.6, // above 0.4 gate
+			Symbol:          "BTCUSDT",
+			BestSetup:       setup.TrendContinuation,
+			Score:           0.85,
+			TrendHealth:     0.6, // above 0.4 gate
+			MarketEffective: 0.5, // above 0.3 gate
 		},
 	}
 	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())

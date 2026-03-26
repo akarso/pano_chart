@@ -7,6 +7,7 @@ class SetupData {
   final Map<String, double> scores;
   final double trendHealth;
   final String regime;
+  final double marketEffective;
 
   const SetupData({
     required this.symbol,
@@ -16,6 +17,7 @@ class SetupData {
     required this.scores,
     required this.trendHealth,
     required this.regime,
+    required this.marketEffective,
   });
 
   factory SetupData.fromJson(Map<String, dynamic> json) {
@@ -28,6 +30,7 @@ class SetupData {
       scores: rawScores.map((k, v) => MapEntry(k, (v as num).toDouble())),
       trendHealth: (json['trendHealth'] as num?)?.toDouble() ?? 0.0,
       regime: json['regime'] as String? ?? '',
+      marketEffective: (json['marketEffective'] as num?)?.toDouble() ?? 0.0,
     );
   }
 
@@ -37,6 +40,13 @@ class SetupData {
     if (trendHealth > 0.6) return 'OK';
     if (trendHealth > 0.4) return 'Weak \u2193';
     return 'Breaking \u2193\u2193';
+  }
+
+  /// Human-readable market context label.
+  String get marketLabel {
+    if (marketEffective > 0.6) return 'Favorable market';
+    if (marketEffective >= 0.4) return 'Neutral market';
+    return 'Unfavorable market';
   }
 
   /// Human-readable display name for a setup type key.

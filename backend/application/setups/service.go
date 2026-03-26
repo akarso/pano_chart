@@ -9,15 +9,22 @@ import (
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/setup"
 )
+
+// MarketProvider returns the current market summary for a timeframe.
+type MarketProvider interface {
+	Calculate(timeframe string) (mkt.Summary, error)
+}
 
 // SetupService orchestrates candle retrieval, score computation, and setup
 // evaluation for a single symbol.
 type SetupService struct {
-	candleRepo ports.CandleRepositoryPort
-	scorer     usecases.SymbolScorer
-	engine     *Engine
+	candleRepo     ports.CandleRepositoryPort
+	scorer         usecases.SymbolScorer
+	engine         *Engine
+	marketProvider MarketProvider // optional; nil means no market modifier
 }
 
 const candleLimit = 200
@@ -29,6 +36,11 @@ func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScor
 		scorer:     scorer,
 		engine:     eng,
 	}
+}
+
+// SetMarketProvider injects the market state provider (optional).
+func (s *SetupService) SetMarketProvider(mp MarketProvider) {
+	s.marketProvider = mp
 }
 
 // Evaluate fetches candles, computes underlying scores, builds a SetupContext,
@@ -64,6 +76,14 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 	ctx := buildContext(symbol, series, stats)
 	result := s.engine.Evaluate(ctx)
 	result.Timeframe = timeframe
+
+	// Apply market-level modifier when a provider is available.
+	if s.marketProvider != nil {
+		if summary, err := s.marketProvider.Calculate(timeframe); err == nil {
+			result = ApplyMarketModifier(result, summary.EffectiveTrend)
+		}
+	}
+
 	return result, nil
 }
 
