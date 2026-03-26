@@ -1230,6 +1230,15 @@ class _DetailScreenState extends State<DetailScreen> {
     return '${d.inMinutes}m';
   }
 
+  /// Confidence dot color for breakout bars, null when setup data unavailable.
+  Color? get _breakoutDotColor {
+    final data = _setupData;
+    if (data == null) return null;
+    if (data.confidence > 0.75) return Colors.green;
+    if (data.confidence > 0.55) return Colors.amber;
+    return Colors.red;
+  }
+
   Widget _buildScoreBreakdown(DetailContext ctx) {
     // Normalize directional metrics to totalScore (not 100%).
     // A weak total score (e.g. 0.30) compresses all bars, conveying that
@@ -1257,8 +1266,8 @@ class _DetailScreenState extends State<DetailScreen> {
       _metricBar('Trend:', trendPct, '${(trendPct * 100).toStringAsFixed(0)}%', trendColor),
       _metricBar('Sideways:', sidewaysPct, '${(sidewaysPct * 100).toStringAsFixed(0)}%', sidewaysColor),
       _metricBar('Compression:', compressionPct, '${(compressionPct * 100).toStringAsFixed(0)}%', compressionColor),
-      _metricBar('Breakout Up:', breakoutUpPct, '${(breakoutUpPct * 100).toStringAsFixed(0)}%', Colors.green),
-      _metricBar('Breakout Down:', breakoutDownPct, '${(breakoutDownPct * 100).toStringAsFixed(0)}%', Colors.red),
+      _metricBar('Breakout Up:', breakoutUpPct, '${(breakoutUpPct * 100).toStringAsFixed(0)}%', Colors.green, dotColor: _breakoutDotColor),
+      _metricBar('Breakout Down:', breakoutDownPct, '${(breakoutDownPct * 100).toStringAsFixed(0)}%', Colors.red, dotColor: _breakoutDotColor),
     ], hint: 'Proportional weight of each regime detector '
         'normalised to overall conviction (total score).\n\n'
         '• Trend — directional strength (slope × R²)\n'
@@ -1394,7 +1403,7 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _metricBar(String label, double fraction, String display, Color color) {
+  Widget _metricBar(String label, double fraction, String display, Color color, {Color? dotColor}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(
@@ -1427,6 +1436,13 @@ class _DetailScreenState extends State<DetailScreen> {
                   textAlign: TextAlign.right,
                 ),
               ),
+              if (dotColor != null) ...[
+                const SizedBox(width: 4),
+                Text(
+                  '\u25CF',
+                  style: TextStyle(color: dotColor, fontSize: 10),
+                ),
+              ],
             ],
           ),
         ],

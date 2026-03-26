@@ -31,4 +31,8 @@ type SetupScores struct {
 
 	// Unified confidence score.
 	Confidence float64 // 0–1; contextual validity of the setup
+
+	// Confidence-adjusted breakout probabilities.
+	BreakoutUp   float64 // 0–1; upward breakout probability
+	BreakoutDown float64 // 0–1; downward breakout probability
 }

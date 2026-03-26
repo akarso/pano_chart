@@ -69,6 +69,8 @@ func (h *SetupHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Regime:          result.Regime,
 		MarketEffective: result.MarketEffective,
 		Confidence:      result.Confidence,
+		BreakoutUp:      result.BreakoutUp,
+		BreakoutDown:    result.BreakoutDown,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -100,6 +102,8 @@ type setupResponse struct {
 	Regime          string             `json:"regime"`
 	MarketEffective float64            `json:"marketEffective"`
 	Confidence      float64            `json:"confidence"`
+	BreakoutUp      float64            `json:"breakoutUp"`
+	BreakoutDown    float64            `json:"breakoutDown"`
 }
 
 func makeSetupScoresDTO(scores map[setup.SetupType]float64) map[string]float64 {

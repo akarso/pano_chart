@@ -9,6 +9,8 @@ class SetupData {
   final String regime;
   final double marketEffective;
   final double confidence;
+  final double breakoutUp;
+  final double breakoutDown;
 
   const SetupData({
     required this.symbol,
@@ -20,6 +22,8 @@ class SetupData {
     required this.regime,
     required this.marketEffective,
     required this.confidence,
+    required this.breakoutUp,
+    required this.breakoutDown,
   });
 
   factory SetupData.fromJson(Map<String, dynamic> json) {
@@ -34,6 +38,8 @@ class SetupData {
       regime: json['regime'] as String? ?? '',
       marketEffective: (json['marketEffective'] as num?)?.toDouble() ?? 0.0,
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+      breakoutUp: (json['breakoutUp'] as num?)?.toDouble() ?? 0.0,
+      breakoutDown: (json['breakoutDown'] as num?)?.toDouble() ?? 0.0,
     );
   }
 

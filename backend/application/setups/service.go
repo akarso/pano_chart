@@ -105,6 +105,13 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 	}
 	result.Confidence = ComputeConfidence(result)
 
+	// Compute confidence-adjusted breakout probabilities.
+	result = ApplyBreakoutConfidence(
+		result,
+		stats.Scores["Breakout Up"],
+		stats.Scores["Breakout Down"],
+	)
+
 	return result, nil
 }
 
