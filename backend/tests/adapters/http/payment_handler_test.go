@@ -67,6 +67,7 @@ func TestVerifyPurchaseHandler_Success(t *testing.T) {
 		"userId":        "user1",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -83,6 +84,63 @@ func TestVerifyPurchaseHandler_Success(t *testing.T) {
 	assert.Equal(t, "stripe", uc.lastInput.Provider)
 	assert.Equal(t, "tok_123", uc.lastInput.PurchaseToken)
 	assert.Equal(t, "user1", uc.lastInput.UserID)
+}
+
+func TestVerifyPurchaseHandler_AuthenticatedContext_IgnoresBodyUserID(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	// Body claims to be "attacker", but the authenticated context says "victim" —
+	// this is exactly the cross-account-activation hole PR-071 closes.
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "google_play",
+		"purchaseToken": "tok_stolen",
+		"userId":        "attacker",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "victim"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, "victim", uc.lastInput.UserID)
+}
+
+func TestVerifyPurchaseHandler_LogOnlyMigrationFallback_UsesLegacyBodyUserID(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	// No auth context (as RequireAuth would leave it in log-only mode for a
+	// pre-PR-070 client), but the old client still sends userId in the body.
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "stripe",
+		"purchaseToken": "tok_123",
+		"userId":        "legacy-user",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, "legacy-user", uc.lastInput.UserID)
+}
+
+func TestVerifyPurchaseHandler_NoAuthContext_NoLegacyUserID_401(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "stripe",
+		"purchaseToken": "tok_123",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 }
 
 func TestVerifyPurchaseHandler_MethodNotAllowed(t *testing.T) {

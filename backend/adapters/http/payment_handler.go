@@ -14,14 +14,28 @@ import (
 type verifyPurchaseRequest struct {
 	Provider      string `json:"provider"`
 	PurchaseToken string `json:"purchaseToken"`
-	UserID        string `json:"userId"`
+	// UserID is only consulted as a migration-window fallback while
+	// RequireAuth is running in log-only mode for a pre-PR-070 client that
+	// has no secret yet — see NewVerifyPurchaseHandler's doc. Once
+	// RequireAuth enforces, this field is never read.
+	UserID string `json:"userId,omitempty"`
 }
 
 // NewVerifyPurchaseHandler returns an http.HandlerFunc that verifies a
-// purchase token via the VerifyPurchase use case.
+// purchase token and activates a subscription for the authenticated
+// caller.
 //
 //	POST /api/payments/verify
-//	Body: { "provider": "...", "purchaseToken": "...", "userId": "..." }
+//	Header: Authorization: Bearer <device secret>
+//	Body: { "provider": "...", "purchaseToken": "..." }
+//
+// Must be registered behind middleware.RequireAuth. The purchase is bound
+// to the verified secret's user ID whenever one is present — a stray valid
+// purchase token can no longer activate a subscription on an
+// attacker-chosen account by supplying a different `userId` in the body.
+// The body's `userId` is only a migration-window fallback (see
+// deviceRegisterRequest.UserID's doc in device_register_handler.go for the
+// same pattern) — dead once RequireAuth enforces.
 func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -35,10 +49,19 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 			return
 		}
 
+		userID, ok := middleware.UserIDFromContextOK(r.Context())
+		if !ok {
+			userID = req.UserID
+			if userID == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
 		input := usecases.VerifyPurchaseInput{
 			Provider:      req.Provider,
 			PurchaseToken: req.PurchaseToken,
-			UserID:        req.UserID,
+			UserID:        userID,
 		}
 		if err := uc.Execute(r.Context(), input); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

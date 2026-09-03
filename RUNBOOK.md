@@ -272,6 +272,12 @@ FCM_PROJECT_ID=your-firebase-project-id
 
 These are read by the Go backend at startup.
 
+📌 Also set `FINANCEFLOW_API_KEY` (macro events calendar). `backend/config.yaml`'s
+`api_keys.financeflow[0].key` is intentionally left blank in git — the env var always takes
+priority (`events.LoadFinanceFlowAPIKey`, which already preferred it before PR-071; PR-071
+just removed the live key value that used to sit in `config.yaml` as a fallback). If neither
+is set, the events endpoint silently disables itself (logged warning, not a startup failure).
+
 **5 — Go dependencies**
 
 Add the Firebase Admin SDK or use the FCM HTTP v1 API directly:

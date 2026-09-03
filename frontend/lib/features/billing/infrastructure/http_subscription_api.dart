@@ -23,19 +23,20 @@ class HttpSubscriptionApi implements SubscriptionApi {
     required String purchaseToken,
     required String userId,
   }) async {
-    // NOTE: /api/payments/verify does not check auth yet (backend PR-071) —
-    // deliberately not attaching an Authorization header here so this
-    // doesn't look already-secured. Add it back alongside the server-side
-    // enforcement, not before.
+    // userId is still sent as a migration-window fallback (backend PR-071)
+    // for a pre-PR-070 client with no secret yet — the backend only reads
+    // it when there's no verified Authorization header.
     final uri = Uri.parse('$baseUrl/api/payments/verify');
-    final response = await client.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'provider': provider,
-        'purchaseToken': purchaseToken,
-        'userId': userId,
-      }),
+    final body = jsonEncode({
+      'provider': provider,
+      'purchaseToken': purchaseToken,
+      'userId': userId,
+    });
+    final response = await sendAuthenticated(
+      (headers) => client.post(uri, body: body, headers: headers),
+      getAuthSecret,
+      onUnauthorized,
+      {'Content-Type': 'application/json'},
     );
     if (response.statusCode != 200) {
       throw Exception(
