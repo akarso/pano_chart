@@ -145,13 +145,23 @@ void main() async {
   // via singleFlight instead of racing — see sendAuthenticated's doc for
   // why an unguarded reclaim would leave losing callers stuck.
   final reclaimDeviceSecret = singleFlight(() async {
+    if (prefs.deviceSecret != null) {
+      // A secret already exists locally, which means this user id was
+      // already successfully claimed at some point (this session or a
+      // past one). Under first-claim-wins (backend PR-070),
+      // re-claiming the SAME existingUserId can only ever come back 409
+      // — so a 401 while a local secret is already set means that
+      // secret itself is stale/corrupted relative to the server, not
+      // "never claimed". There's no recovery from that short of a fresh
+      // identity (see PR-070.md Addendum 2) — don't waste a round trip
+      // on a claim call that cannot succeed.
+      return;
+    }
     try {
       final claim = await authApi.claim(existingUserId: prefs.userId);
       prefs.deviceSecret = claim.secret;
     } catch (_) {
-      // Backend unreachable, or this user ID was already claimed by an
-      // earlier install (see backend PR-070 first-claim-wins). Callers see
-      // the resulting 401 and handle it as they already do.
+      // Backend unreachable — retry on the next 401/launch.
     }
   });
 
