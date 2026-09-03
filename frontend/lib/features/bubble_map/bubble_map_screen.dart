@@ -90,6 +90,10 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   void initState() {
     super.initState();
     vm = widget.viewModel;
+    // Free users are locked to volume mode.
+    if (!widget.isProUser && vm.state.sizeBy != 'volume') {
+      vm.changeSizeBy('volume');
+    }
     vm.onChanged = () {
       if (mounted) {
         // When data reloads, re-init physics bodies if mode is on.
@@ -382,20 +386,22 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             },
           ),
           const SizedBox(width: 8),
-          // Size-by toggle
+          // Size-by toggle (pro only — free is locked to volume)
           IconButton(
             icon: Icon(
               state.sizeBy == 'volume'
                   ? Icons.bar_chart
                   : Icons.show_chart,
-              color: Colors.white,
+              color: widget.isProUser ? Colors.white : Colors.white38,
             ),
             tooltip:
                 state.sizeBy == 'volume' ? 'Size by volume' : 'Size by change',
-            onPressed: () {
-              vm.changeSizeBy(
-                  state.sizeBy == 'volume' ? 'change' : 'volume');
-            },
+            onPressed: widget.isProUser
+                ? () {
+                    vm.changeSizeBy(
+                        state.sizeBy == 'volume' ? 'change' : 'volume');
+                  }
+                : null,
           ),
         ],
       ),

@@ -220,33 +220,33 @@ func TestCalculate_BreakdownRate(t *testing.T) {
 // ---------- DampenTrendByHealth ----------
 
 func TestDampenTrendByHealth_HealthyTrend_MinimalDampening(t *testing.T) {
-	b := mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Breakout: 0.05}
+	b := mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Expansion: 0.05}
 	result := appmarket.DampenTrendByHealth(b, 0.8, 0.1) // healthy market
 	// High effectiveTrend → dampFactor near 1.0, minimal reduction.
 	if result.Trend < 0.70 {
 		t.Errorf("expected Trend >= 0.70 for healthy market, got %f", result.Trend)
 	}
-	sum := result.Trend + result.Sideways + result.Compression + result.Breakout
+	sum := result.Trend + result.Sideways + result.Compression + result.Expansion
 	if math.Abs(sum-1.0) > 0.01 {
 		t.Errorf("expected breadth sum ≈ 1.0, got %f", sum)
 	}
 }
 
 func TestDampenTrendByHealth_BreakingTrend_StrongDampening(t *testing.T) {
-	b := mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Breakout: 0.05}
+	b := mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Expansion: 0.05}
 	result := appmarket.DampenTrendByHealth(b, 0.1, 0.9) // breaking market
 	// Low health + high breakdowns → aggressive dampening.
 	if result.Trend >= 0.30 {
 		t.Errorf("expected Trend < 0.30 for breaking market, got %f", result.Trend)
 	}
-	sum := result.Trend + result.Sideways + result.Compression + result.Breakout
+	sum := result.Trend + result.Sideways + result.Compression + result.Expansion
 	if math.Abs(sum-1.0) > 0.01 {
 		t.Errorf("expected breadth sum ≈ 1.0, got %f", sum)
 	}
 }
 
 func TestDampenTrendByHealth_ZeroHealth_FloorApplied(t *testing.T) {
-	b := mkt.Breadth{Trend: 0.90, Sideways: 0.05, Compression: 0.03, Breakout: 0.02}
+	b := mkt.Breadth{Trend: 0.90, Sideways: 0.05, Compression: 0.03, Expansion: 0.02}
 	result := appmarket.DampenTrendByHealth(b, 0.0, 1.0) // total breakdown
 	// dampFactor floored at 0.1.
 	if result.Trend < 0.08 || result.Trend > 0.10 {
@@ -255,7 +255,7 @@ func TestDampenTrendByHealth_ZeroHealth_FloorApplied(t *testing.T) {
 }
 
 func TestDampenTrendByHealth_RedistributesToOthers(t *testing.T) {
-	b := mkt.Breadth{Trend: 0.60, Sideways: 0.20, Compression: 0.10, Breakout: 0.10}
+	b := mkt.Breadth{Trend: 0.60, Sideways: 0.20, Compression: 0.10, Expansion: 0.10}
 	result := appmarket.DampenTrendByHealth(b, 0.2, 0.8) // bad health
 	// Lost trend weight should go to other regimes proportionally.
 	if result.Sideways <= 0.20 {

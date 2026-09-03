@@ -18,7 +18,8 @@ void main() {
           jsonEncode({
             'user_id': 'u1',
             'social': true,
-            'macro': false,
+            'macro_high': false,
+            'macro_moderate': true,
             'news': true,
             'uptrend': true,
             'downtrend': false,
@@ -44,7 +45,8 @@ void main() {
 
       final s = await api.fetch('u1');
       expect(s.social, isTrue);
-      expect(s.macro, isFalse);
+      expect(s.macroHigh, isFalse);
+      expect(s.macroModerate, isTrue);
       expect(s.news, isTrue);
       expect(s.uptrend, isTrue);
       expect(s.downtrend, isFalse);
@@ -91,7 +93,8 @@ void main() {
 
       final s = NotificationSettings(
         social: false,
-        macro: true,
+        macroHigh: true,
+        macroModerate: false,
         uptrend: true,
         downtrend: false,
         sideways: true,

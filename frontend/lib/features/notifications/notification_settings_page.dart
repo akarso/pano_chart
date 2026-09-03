@@ -142,11 +142,16 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               _settings.setupMinScore,
               (v) => _update(() => _settings.setupMinScore = v),
             ),
-            _sectionTitle('Macro'),
+            _sectionTitle('Macro Events'),
             _toggle(
-              'Macro Events (30 min before)',
-              _settings.macro,
-              (v) => _update(() => _settings.macro = v),
+              'High Impact (30 min before)',
+              _settings.macroHigh,
+              (v) => _update(() => _settings.macroHigh = v),
+            ),
+            _toggle(
+              'Moderate Impact (30 min before)',
+              _settings.macroModerate,
+              (v) => _update(() => _settings.macroModerate = v),
             ),
           ],
 

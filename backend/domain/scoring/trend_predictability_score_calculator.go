@@ -87,13 +87,18 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	// a dip is acceptable.
 	shapePenalty := trendShapePenalty(closes, b, minClose, maxClose)
 
+	// Direction agreement: split the series into quarters and check
+	// whether they consistently move in the same direction.  A V-shape
+	// or W-shape (segments disagreeing) is not a trend.
+	dirAgreement := SeriesDirectionAgreement(closes, 4)
+
 	// Raw score = |slopeNorm| * R².  slopeNorm ≈ 1/(N-1) for a perfect
 	// linear trend, so the raw value is typically 0..0.01 — far below
 	// the 0..1 range of other calculators (sideways, gain).  Multiplying
 	// by (N-1) rescales so a perfect linear trend → ~1.0, giving trend
 	// a fair weight when combined with other regime scores.
 	raw := math.Abs(slopeNorm) * R2
-	normalised := raw * float64(n-1) * shapePenalty
+	normalised := raw * float64(n-1) * shapePenalty * dirAgreement
 	if normalised > 1 {
 		normalised = 1
 	}

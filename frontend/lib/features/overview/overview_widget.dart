@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
@@ -194,6 +196,15 @@ class OverviewWidgetState extends State<OverviewWidget>
       }
 
       _stalenessTracker.setTimeframe(_timeframe);
+
+      // Free tier: force hi-res off and fall back to a free sort mode.
+      if (!_isProUser) {
+        _hiResSparklines = false;
+        const freeSorts = {'gain', 'losers', 'volume'};
+        if (!freeSorts.contains(vm.state.sort)) {
+          vm.changeSortSilent('volume');
+        }
+      }
     }
 
     vm.onChanged = () {
@@ -235,6 +246,15 @@ class OverviewWidgetState extends State<OverviewWidget>
     };
     _scrollController.addListener(_onScroll);
     vm.loadInitial(_timeframe);
+
+    // Show the About dialog exactly once on first launch.
+    if (_prefs != null && !_prefs!.hasSeenAbout) {
+      _prefs!.hasSeenAbout = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showAboutDialog();
+      });
+    }
   }
 
   @override
@@ -478,7 +498,6 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 
   Future<void> _onItemTapped(OverviewItem item) async {
-    if (!_requireAccess()) return;
     final now = DateTime.now().toUtc();
     final input = buildDetailChartInput(
       symbol: item.symbol,
@@ -509,13 +528,13 @@ class OverviewWidgetState extends State<OverviewWidget>
             warmupCount: _indicatorWarmup,
             initialVisibleCount: _sparklineCandles,
             isFavourite: _favourites.contains(item.symbol),
-            eventsViewModel: widget.eventsViewModel,
-            socialFeedViewModel: widget.socialFeedViewModel,
+            eventsViewModel: _isProUser ? widget.eventsViewModel : null,
+            socialFeedViewModel: _isProUser ? widget.socialFeedViewModel : null,
             getCandleSeries: widget.getCandleSeries,
-            setupApi: widget.setupApi,
-            fragilityApi: widget.fragilityApi,
-            behaviorApi: widget.behaviorApi,
-            volatilityApi: widget.volatilityApi,
+            setupApi: _isProUser ? widget.setupApi : null,
+            fragilityApi: _isProUser ? widget.fragilityApi : null,
+            behaviorApi: _isProUser ? widget.behaviorApi : null,
+            volatilityApi: _isProUser ? widget.volatilityApi : null,
             isProUser: _isProUser,
             detailContext: DetailContext(
               rank: rank,
@@ -823,11 +842,13 @@ class OverviewWidgetState extends State<OverviewWidget>
                     vm.changeSort(v, _timeframe);
                   },
                   itemBuilder: (context) => [
-                    PopupMenuItem(value: 'sideways', child: Text('Sideways')),
-                    PopupMenuItem(value: 'compression', child: Text('Compression')),
-                    PopupMenuItem(value: 'breakout', child: Text('Breakout')),
-                    PopupMenuItem(value: 'trend', child: Text('Trend')),
-                    const PopupMenuDivider(),
+                    if (_isProUser) ...[
+                      PopupMenuItem(value: 'sideways', child: Text('Sideways')),
+                      PopupMenuItem(value: 'compression', child: Text('Compression')),
+                      PopupMenuItem(value: 'breakout', child: Text('Breakout')),
+                      PopupMenuItem(value: 'trend', child: Text('Trend')),
+                      const PopupMenuDivider(),
+                    ],
                     PopupMenuItem(value: 'gain', child: Text('Gainers')),
                     PopupMenuItem(value: 'losers', child: Text('Losers')),
                     PopupMenuItem(value: 'volume', child: Text('Volume')),
@@ -934,30 +955,32 @@ class OverviewWidgetState extends State<OverviewWidget>
                   ),
                 ],
                 const Spacer(),
-                GestureDetector(
-                  onTap: () {
-                    setState(() => _hiResSparklines = !_hiResSparklines);
-                    _prefs?.hiResSparklines = _hiResSparklines;
-                  },
-                  child: Text(
-                    'Hi res',
-                    style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: Checkbox(
-                    value: _hiResSparklines,
-                    onChanged: (v) {
-                      setState(() => _hiResSparklines = v ?? true);
+                if (_isProUser) ...[
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _hiResSparklines = !_hiResSparklines);
                       _prefs?.hiResSparklines = _hiResSparklines;
                     },
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    visualDensity: VisualDensity.compact,
+                    child: Text(
+                      'Hi res',
+                      style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: Checkbox(
+                      value: _hiResSparklines,
+                      onChanged: (v) {
+                        setState(() => _hiResSparklines = v ?? true);
+                        _prefs?.hiResSparklines = _hiResSparklines;
+                      },
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
               ],
             ),
           ],
@@ -997,14 +1020,13 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         if (widget.fearGreedApi != null) _menuDivider(),
 
-        // ── Bubble Map (gated) ──
+        // ── Bubble Map (free: volume only) ──
         if (widget.bubbleMapViewModel != null)
           _menuRow(
             icon: Icons.bubble_chart,
             label: 'Bubble Map',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
-              if (!_requireAccess()) return;
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => BubbleMapScreen(
@@ -1039,6 +1061,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     regimeApi: widget.regimeApi,
                     transitionApi: widget.transitionApi,
                     regimeHistoryApi: widget.regimeHistoryApi,
+                    isProUser: _isProUser,
                   ),
                 ),
               );
@@ -1046,18 +1069,18 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         if (widget.marketStateApi != null) _menuDivider(),
 
-        // ── Macro Events (gated) ──
+        // ── Macro Events (free: limited events) ──
         if (widget.eventsViewModel != null)
           _menuRow(
             icon: Icons.public,
             label: 'Macro Events',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
-              if (!_requireAccess()) return;
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MacroEventsScreen(
                     viewModel: widget.eventsViewModel!,
+                    isProUser: _isProUser,
                   ),
                 ),
               );
@@ -1126,25 +1149,7 @@ class OverviewWidgetState extends State<OverviewWidget>
         _menuRow(
           icon: Icons.info_outline,
           label: 'About',
-          onTap: () => _showInfoDialog(
-            title: 'About',
-            content: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('Simple market screener app showcasing a custom technical analysis algorithm. Crypto swiss army knife.'),
-                const SizedBox(height: 12),
-                const Text('Built, because I was lacking exactly such a set of tools for my own trading decisions.'),
-                const SizedBox(height: 12),
-                _linkParagraph(
-                  'Read this, if you are new to crypto:',
-                  'https://panocharts.com/blog.html#how_not_to_get_scammed',
-                ),
-                const SizedBox(height: 12),
-                const Text('Nothing here is financial advice. Use at your own risk. Always do your own research.'),
-              ],
-            ),
-          ),
+          onTap: () => _showAboutDialog(),
         ),
         _menuDivider(),
 
@@ -1198,6 +1203,19 @@ class OverviewWidgetState extends State<OverviewWidget>
             },
           ),
         ],
+
+        // ── Debug billing toggle (debug builds only) ──
+        if (kDebugMode && billing != null) ...[
+          _menuDivider(),
+          _menuRow(
+            icon: Icons.bug_report,
+            label: 'Debug: ${billing.debugOverrideLabel ?? "REAL (${_isProUser ? "pro" : "free"})"}',
+            onTap: () {
+              setState(() => _overlay = _OverlayKind.none);
+              _showDebugBillingPicker(billing);
+            },
+          ),
+        ],
       ],
     );
   }
@@ -1247,6 +1265,75 @@ class OverviewWidgetState extends State<OverviewWidget>
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAboutDialog() async {
+    String version = 'unknown';
+    try {
+      final info = await PackageInfo.fromPlatform();
+      version = info.version;
+    } catch (_) {}
+    if (!mounted) return;
+    _showInfoDialog(
+      title: 'About',
+      content: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('Version $version', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          const SizedBox(height: 8),
+          const Text('Simple market screener app showcasing a custom technical analysis algorithm. Crypto swiss army knife.'),
+          const SizedBox(height: 12),
+          const Text('Built, because I was lacking exactly such a set of tools for my own trading decisions.'),
+          const SizedBox(height: 12),
+          const Text('For a start, explore sparkline charts or one of the menu options.'),
+          const SizedBox(height: 12),
+          const Text('There is online help and onboarding available in the menu.'),
+          const SizedBox(height: 12),
+          _linkParagraph(
+            'Also read this, if you are new to crypto:',
+            'https://panocharts.com/blog.html#how_not_to_get_scammed',
+          ),
+          const SizedBox(height: 12),
+          const Text('Nothing here is financial advice. Use at your own risk. Always do your own research.'),
+        ],
+      ),
+    );
+  }
+
+  void _showDebugBillingPicker(BillingManager billing) {
+    showDialog(
+      context: context,
+      builder: (_) => SimpleDialog(
+        title: const Text('Debug: Billing State'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () {
+              billing.debugSetAccess(fullAccess: null, label: null);
+              Navigator.pop(context);
+              setState(() {});
+            },
+            child: const Text('🔄 Real (use actual billing)'),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              billing.debugSetAccess(fullAccess: true, label: 'PRO');
+              Navigator.pop(context);
+              setState(() {});
+            },
+            child: const Text('⭐ Pro (all features)'),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              billing.debugSetAccess(fullAccess: false, label: 'FREE');
+              Navigator.pop(context);
+              setState(() {});
+            },
+            child: const Text('🔒 Free (restricted)'),
           ),
         ],
       ),
@@ -1415,6 +1502,12 @@ class OverviewWidgetState extends State<OverviewWidget>
       visibleItems = visibleItems
           .where((i) => !widget.stablecoins.isStablecoin(i.symbol))
           .toList();
+    }
+
+    // Free tier: cap visible tokens to 15 (favourites view is unrestricted
+    // so users always see their picks).
+    if (!_showFavourites && !_capabilities.fullTokenList && visibleItems.length > 15) {
+      visibleItems = visibleItems.sublist(0, 15);
     }
 
     if (_showFavourites && visibleItems.isEmpty) {

@@ -86,11 +86,11 @@ func DampenTrendByHealth(b mkt.Breadth, effectiveTrend, breakdownRate float64) m
 	b.Trend *= dampFactor
 
 	// Redistribute lost weight proportionally to other regimes.
-	otherSum := b.Sideways + b.Compression + b.Breakout
+	otherSum := b.Sideways + b.Compression + b.Expansion
 	if otherSum > 0 && lost > 0 {
 		b.Sideways += lost * (b.Sideways / otherSum)
 		b.Compression += lost * (b.Compression / otherSum)
-		b.Breakout += lost * (b.Breakout / otherSum)
+		b.Expansion += lost * (b.Expansion / otherSum)
 	} else if lost > 0 {
 		// All other regimes are zero — assign to sideways as default.
 		b.Sideways += lost

@@ -1,5 +1,9 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../core/app_lifecycle_manager.dart';
+import '../../core/auto_refresh_timer.dart';
+import '../../core/polling_config.dart';
 import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
@@ -20,6 +24,7 @@ class MarketPulseScreen extends StatefulWidget {
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
   final String? initialTimeframe;
+  final bool isProUser;
 
   const MarketPulseScreen({
     Key? key,
@@ -29,6 +34,7 @@ class MarketPulseScreen extends StatefulWidget {
     this.transitionApi,
     this.regimeHistoryApi,
     this.initialTimeframe,
+    this.isProUser = false,
   }) : super(key: key);
 
   @override
@@ -47,6 +53,12 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   bool _loading = true;
   String _timeframe = '4h';
 
+  AutoRefreshTimer? _autoRefreshTimer;
+  Pausable? _pausable;
+  AppLifecycleManager? _lifecycleManager;
+
+  static const _prefKeyTimeframe = 'marketPulse.timeframe';
+
   @override
   void initState() {
     super.initState();
@@ -54,7 +66,108 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     if (initial != null && _supportedTimeframes.contains(initial)) {
       _timeframe = initial;
     }
+    _initializeData();
+  }
+
+  Future<void> _initializeData() async {
+    await _loadPersistedTimeframe();
+    if (!mounted) return;
     _loadAll();
+    _startAutoRefresh();
+  }
+
+  Future<void> _loadPersistedTimeframe() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_prefKeyTimeframe);
+    if (saved != null &&
+        _supportedTimeframes.contains(saved) &&
+        widget.initialTimeframe == null) {
+      if (mounted) {
+        setState(() => _timeframe = saved);
+      }
+    }
+  }
+
+  Future<void> _persistTimeframe(String tf) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_prefKeyTimeframe, tf);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_pausable == null) {
+      _lifecycleManager = AppLifecycleScope.of(context);
+      if (_lifecycleManager != null) {
+        _pausable = Pausable(
+          onPause: () => _autoRefreshTimer?.stop(),
+          onResume: () => _autoRefreshTimer?.start(),
+        );
+        _lifecycleManager!.addPausable(_pausable!);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
+    _autoRefreshTimer?.dispose();
+    super.dispose();
+  }
+
+  void _startAutoRefresh() {
+    _autoRefreshTimer?.dispose();
+    _autoRefreshTimer = null;
+    if (!widget.isProUser) return;
+    final interval = kChartRefreshIntervals[_timeframe];
+    if (interval == null) return;
+    _autoRefreshTimer = AutoRefreshTimer(
+      interval: interval,
+      onTick: _autoRefreshData,
+    );
+    _autoRefreshTimer!.start();
+  }
+
+  Future<void> _autoRefreshData() async {
+    if (!mounted) return;
+    try {
+      final futures = <Future>[
+        widget.marketStateApi.fetch(timeframe: _timeframe),
+        widget.compositeIndexApi.fetch(timeframe: _timeframe, limit: 200),
+        if (widget.regimeApi != null)
+          widget.regimeApi!.fetch(timeframe: _timeframe),
+        if (widget.transitionApi != null)
+          widget.transitionApi!.fetch(timeframe: _timeframe),
+        if (widget.regimeHistoryApi != null)
+          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
+      ];
+      final results = await Future.wait(futures);
+      if (!mounted) return;
+      int idx = 2;
+      RegimeData? regime;
+      TransitionData? trans;
+      RegimeHistoryData? history;
+      if (widget.regimeApi != null) {
+        regime = results[idx] as RegimeData;
+        idx++;
+      }
+      if (widget.transitionApi != null) {
+        trans = results[idx] as TransitionData;
+        idx++;
+      }
+      if (widget.regimeHistoryApi != null) {
+        history = results[idx] as RegimeHistoryData;
+      }
+      setState(() {
+        _stateData = results[0] as MarketStateData;
+        _compositeData = results[1] as CompositeIndexData;
+        _regimeData = regime;
+        _transitionData = trans;
+        _regimeHistoryData = history;
+      });
+    } catch (_) {
+      // Silently ignore — next tick will retry.
+    }
   }
 
   Future<void> _loadAll() async {
@@ -138,7 +251,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                 onChanged: (v) {
                   if (v != null && v != _timeframe) {
                     setState(() => _timeframe = v);
+                    _persistTimeframe(v);
                     _loadAll();
+                    _startAutoRefresh();
                   }
                 },
               ),
@@ -201,7 +316,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           if (_regimeHistoryData != null)
             _buildRegimeHistoryCard(_regimeHistoryData!),
           if (_regimeHistoryData != null) const SizedBox(height: 16),
-          if (_stateData != null) _buildBreadthCard(_stateData!),
+          _buildBreadthCard(),
           const SizedBox(height: 32),
         ],
       ),
@@ -211,8 +326,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Regime Card ----------
 
   Widget _buildRegimeCard(RegimeData data) {
-    final color = _regimeColor(data.regime);
+    final color = data.regime == 'trend'
+        ? _trendBiasColor(data.bias)
+        : _regimeColor(data.regime);
+    final icon = data.regime == 'trend'
+        ? _trendBiasIcon(data.bias)
+        : _regimeIcon(data.regime);
     final pct = (data.prevalence * 100).toStringAsFixed(0);
+    final hasLabel = data.label.isNotEmpty;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -225,16 +346,38 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(_regimeIcon(data.regime), color: color, size: 28),
+              Icon(icon, color: color, size: 28),
               const SizedBox(width: 8),
               Text(
-                data.regime.toUpperCase(),
+                _regimeLabel(data.regime, data.bias),
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                   color: color,
                 ),
               ),
+              if (hasLabel) ...[
+                const SizedBox(width: 8),
+                const Text(
+                  '·',
+                  style: TextStyle(fontSize: 24, color: Colors.grey),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  _healthIcon(data.label),
+                  color: _healthColor(data.label),
+                  size: 20,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _healthSuffix(data.label),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: _healthColor(data.label),
+                  ),
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 4),
@@ -349,15 +492,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Breakout Breadth',
-            '${(m.breakoutBreadth * 100).toStringAsFixed(1)}%',
-            Colors.redAccent,
-          ),
-          const SizedBox(height: 8),
-          _metricRow(
             'Compression Breadth',
             '${(m.compressionBreadth * 100).toStringAsFixed(1)}%',
             Colors.amber,
+          ),
+          const SizedBox(height: 8),
+          _metricRow(
+            'Expansion Breadth',
+            '${(m.expansionBreadth * 100).toStringAsFixed(1)}%',
+            Colors.redAccent,
           ),
         ],
       ),
@@ -433,7 +576,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                           'to each regime given the current conditions.\n\n'
                           'Based on compression breadth, volatility slope, '
                           'and regime age (older regimes build more '
-                          'breakout pressure).\n\n'
+                          'expansion pressure).\n\n'
                           'Values are 0–100% and sum to ~100%.\n\n'
                           'Regime Age shows how long the current regime '
                           'has persisted, in both candles and real time.',
@@ -452,6 +595,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           _probabilityBar('Trend', p.trend, Colors.tealAccent),
           const SizedBox(height: 8),
           _probabilityBar('Sideways', p.sideways, Colors.blueGrey),
+          const SizedBox(height: 8),
+          _probabilityBar('Compression', p.compression, Colors.amber),
           const SizedBox(height: 8),
           _probabilityBar('Expansion', p.expansion, Colors.redAccent),
         ],
@@ -598,7 +743,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${p.regime.toUpperCase()} — ${p.durationCandles} candles${open ? '  (active)' : ''}',
+                    '${p.regime.toUpperCase()} — ${p.durationCandles} candles${open ? '  (latest)' : ''}',
                     style: TextStyle(
                       color: open ? Colors.white : Colors.white54,
                       fontSize: 12,
@@ -643,7 +788,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               ),
               if (hasLabel) ...[
                 const SizedBox(width: 8),
-                Text(
+                const Text(
                   '·',
                   style: TextStyle(fontSize: 24, color: Colors.grey),
                 ),
@@ -793,7 +938,25 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return '  \u2022  ~${days.round()}d';
   }
 
-  Widget _buildBreadthCard(MarketStateData data) {
+  Widget _buildBreadthCard() {
+    // Prefer regime metrics (same pipeline as regime card) so the numbers
+    // are consistent.  Fall back to state breadth when regime is unavailable.
+    double sideways, compression, expansion, trend;
+    if (_regimeData != null) {
+      final m = _regimeData!.metrics;
+      sideways = m.sidewaysBreadth;
+      compression = m.compressionBreadth;
+      expansion = m.expansionBreadth;
+      trend = m.trendBreadth;
+    } else if (_stateData != null) {
+      sideways = _stateData!.breadth.sideways;
+      compression = _stateData!.breadth.compression;
+      expansion = _stateData!.breadth.expansion;
+      trend = _stateData!.breadth.trend;
+    } else {
+      return const SizedBox.shrink();
+    }
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -817,27 +980,28 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               GestureDetector(
                 onTap: () => _showInfoDialog(
                   title: 'Market Breadth',
-                  body: 'Proportionally-weighted distribution of regime '
-                      'character across the full token universe.\n\n'
-                      'Each bar shows the average score weight for that '
-                      'regime (0–100%). All four bars sum to ~100%.\n\n'
+                  body: 'Average score weight for each regime across the '
+                      'full token universe (0–100%).\n\n'
+                      'Direction-adjusted: tokens trending in '
+                      'opposite directions cancel out, preventing '
+                      'mixed markets from appearing as trends.\n\n'
+                      '• Trend — strong directional move\n'
                       '• Sideways — range-bound, low conviction\n'
                       '• Compression — narrowing ranges\n'
-                      '• Breakout — price escaping a range\n'
-                      '• Trend — strong directional move',
+                      '• Expansion — breakout amplified by volatility',
                 ),
                 child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          _breadthRow('Sideways', data.breadth.sideways, Colors.blueGrey),
+          _breadthRow('Trend', trend, Colors.tealAccent),
           const SizedBox(height: 6),
-          _breadthRow('Compression', data.breadth.compression, Colors.amber),
+          _breadthRow('Sideways', sideways, Colors.blueGrey),
           const SizedBox(height: 6),
-          _breadthRow('Breakout', data.breadth.breakout, Colors.redAccent),
+          _breadthRow('Compression', compression, Colors.amber),
           const SizedBox(height: 6),
-          _breadthRow('Trend', data.breadth.trend, Colors.tealAccent),
+          _breadthRow('Expansion', expansion, Colors.redAccent),
         ],
       ),
     );
@@ -924,7 +1088,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Colors.blueGrey;
       case 'compression':
         return Colors.amber;
-      case 'breakout':
+      case 'expansion':
         return Colors.redAccent;
       case 'trend':
         return bias == 'down' ? Colors.redAccent : Colors.tealAccent;
@@ -943,7 +1107,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         return Icons.swap_horiz;
       case 'compression':
         return Icons.compress;
-      case 'breakout':
+      case 'expansion':
         return Icons.open_in_full;
       case 'trend':
         return bias == 'down' ? Icons.trending_down : Icons.trending_up;
@@ -992,6 +1156,42 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       default:
         return Icons.help_outline;
     }
+  }
+
+  Color _trendBiasColor(String bias) {
+    switch (bias) {
+      case 'up':
+        return Colors.tealAccent;
+      case 'down':
+        return Colors.redAccent;
+      default:
+        return Colors.amber;
+    }
+  }
+
+  IconData _trendBiasIcon(String bias) {
+    switch (bias) {
+      case 'up':
+        return Icons.trending_up;
+      case 'down':
+        return Icons.trending_down;
+      default:
+        return Icons.show_chart;
+    }
+  }
+
+  String _regimeLabel(String regime, String bias) {
+    if (regime == 'trend') {
+      switch (bias) {
+        case 'up':
+          return 'UPTREND';
+        case 'down':
+          return 'DOWNTREND';
+        default:
+          return 'TREND';
+      }
+    }
+    return regime.toUpperCase();
   }
 }
 

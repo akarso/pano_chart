@@ -11,8 +11,12 @@ import 'package:pano_chart_frontend/features/market_state/http_market_state_api.
 import 'package:pano_chart_frontend/features/market_state/http_composite_index_api.dart';
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/composite_index_data.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
   // ---- Data Model Tests ----
 
   group('RegimeData', () {
@@ -30,7 +34,7 @@ void main() {
         'metrics': {
           'trendBreadth': 0.18,
           'sidewaysBreadth': 0.10,
-          'breakoutBreadth': 0.05,
+          'expansionBreadth': 0.05,
           'compressionBreadth': 0.34,
           'volatilityExpansion': 0.82,
           'dispersion': 0.21,
@@ -47,7 +51,7 @@ void main() {
       expect(data.scores.sideways, 0.10);
       expect(data.metrics.trendBreadth, 0.18);
       expect(data.metrics.sidewaysBreadth, 0.10);
-      expect(data.metrics.breakoutBreadth, 0.05);
+      expect(data.metrics.expansionBreadth, 0.05);
       expect(data.metrics.compressionBreadth, 0.34);
       expect(data.metrics.volatilityExpansion, 0.82);
       expect(data.metrics.dispersion, 0.21);
@@ -191,7 +195,7 @@ void main() {
         state: 'sideways',
         confidence: 0.6,
         breadth: MarketBreadth(
-          sideways: 0.6, compression: 0.2, breakout: 0.1, trend: 0.1,
+          sideways: 0.6, compression: 0.2, expansion: 0.1, trend: 0.1,
         ),
         symbolCount: 50,
       ));
@@ -210,7 +214,7 @@ void main() {
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
           sidewaysBreadth: 0.10,
-          breakoutBreadth: 0.05,
+          expansionBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,
@@ -244,7 +248,7 @@ void main() {
         state: 'trend',
         confidence: 0.8,
         breadth: MarketBreadth(
-          sideways: 0.1, compression: 0.1, breakout: 0.0, trend: 0.8,
+          sideways: 0.1, compression: 0.1, expansion: 0.0, trend: 0.8,
         ),
         symbolCount: 50,
       ));
@@ -282,7 +286,7 @@ void main() {
         state: 'sideways',
         confidence: 0.5,
         breadth: MarketBreadth(
-          sideways: 1.0, compression: 0.0, breakout: 0.0, trend: 0.0,
+          sideways: 1.0, compression: 0.0, expansion: 0.0, trend: 0.0,
         ),
         symbolCount: 10,
       ));
@@ -304,7 +308,7 @@ void main() {
         metrics: RegimeMetrics(
           trendBreadth: 0.0,
           sidewaysBreadth: 0.0,
-          breakoutBreadth: 0.0,
+          expansionBreadth: 0.0,
           compressionBreadth: 0.0,
           volatilityExpansion: 1.5,
           dispersion: 0.08,

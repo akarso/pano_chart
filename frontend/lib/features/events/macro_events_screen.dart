@@ -14,10 +14,14 @@ class MacroEventsScreen extends StatefulWidget {
   /// When non-null, the screen centers on this event and highlights it.
   final String? scrollToEventId;
 
+  /// Whether the user has pro access (free: 3 upcoming + 2 past).
+  final bool isProUser;
+
   const MacroEventsScreen({
     Key? key,
     required this.viewModel,
     this.scrollToEventId,
+    this.isProUser = false,
   }) : super(key: key);
 
   @override
@@ -138,8 +142,19 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   @override
   Widget build(BuildContext context) {
     final state = widget.viewModel.state;
-    final filtered = state.macroFilteredEvents
+    var filtered = state.macroFilteredEvents
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    // Free tier: show only 3 upcoming + 2 past events.
+    if (!widget.isProUser) {
+      final now = DateTime.now().toUtc();
+      final past = filtered.where((e) => e.timestamp.isBefore(now)).toList();
+      final upcoming = filtered.where((e) => !e.timestamp.isBefore(now)).toList();
+      filtered = [
+        ...past.length > 2 ? past.sublist(past.length - 2) : past,
+        ...upcoming.length > 3 ? upcoming.sublist(0, 3) : upcoming,
+      ];
+    }
 
     return Scaffold(
       backgroundColor: Colors.black,

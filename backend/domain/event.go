@@ -20,7 +20,7 @@ const (
 // Unknown values default to medium.
 func ParseEventImpact(raw string) EventImpact {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "high":
+	case "high", "major":
 		return EventImpactHigh
 	case "moderate", "medium":
 		return EventImpactMedium

@@ -37,7 +37,9 @@ func (s *SQLiteConfigStore) migrate() error {
 // configJSON is the serialised form stored in the config column.
 type configJSON struct {
 	Social                bool    `json:"social"`
-	Macro                 bool    `json:"macro"`
+	Macro                 *bool   `json:"macro,omitempty"`
+	MacroHigh             bool    `json:"macro_high"`
+	MacroModerate         bool    `json:"macro_moderate"`
 	News                  bool    `json:"news"`
 	Uptrend               bool    `json:"uptrend"`
 	Downtrend             bool    `json:"downtrend"`
@@ -56,7 +58,8 @@ type configJSON struct {
 func toJSON(cfg appnotify.NotificationConfig) configJSON {
 	return configJSON{
 		Social:                cfg.Social,
-		Macro:                 cfg.Macro,
+		MacroHigh:             cfg.MacroHigh,
+		MacroModerate:         cfg.MacroModerate,
 		News:                  cfg.News,
 		Uptrend:               cfg.Uptrend,
 		Downtrend:             cfg.Downtrend,
@@ -74,10 +77,19 @@ func toJSON(cfg appnotify.NotificationConfig) configJSON {
 }
 
 func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
+	// Migrate legacy "macro" bool → split fields.
+	macroHigh := j.MacroHigh
+	macroMod := j.MacroModerate
+	if j.Macro != nil {
+		// Old config had single bool — apply to both.
+		macroHigh = *j.Macro
+		macroMod = *j.Macro
+	}
 	cfg := appnotify.NotificationConfig{
 		UserID:                userID,
 		Social:                j.Social,
-		Macro:                 j.Macro,
+		MacroHigh:             macroHigh,
+		MacroModerate:         macroMod,
 		News:                  j.News,
 		Uptrend:               j.Uptrend,
 		Downtrend:             j.Downtrend,

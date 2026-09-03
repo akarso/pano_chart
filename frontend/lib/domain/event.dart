@@ -8,6 +8,7 @@ enum EventImpact {
   static EventImpact fromString(String value) {
     switch (value.toLowerCase()) {
       case 'high':
+      case 'major':
         return EventImpact.high;
       case 'medium':
         return EventImpact.medium;

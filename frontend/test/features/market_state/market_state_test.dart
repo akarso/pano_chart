@@ -16,7 +16,7 @@ void main() {
           'sideways': 0.54,
           'compression': 0.22,
           'trend': 0.16,
-          'breakout': 0.08,
+          'expansion': 0.08,
         },
         'symbolCount': 150,
       };
@@ -30,7 +30,7 @@ void main() {
       expect(data.breadth.sideways, 0.54);
       expect(data.breadth.compression, 0.22);
       expect(data.breadth.trend, 0.16);
-      expect(data.breadth.breakout, 0.08);
+      expect(data.breadth.expansion, 0.08);
     });
 
     test('fromJson handles integer confidence', () {
@@ -42,7 +42,7 @@ void main() {
           'sideways': 0.0,
           'compression': 0.0,
           'trend': 1.0,
-          'breakout': 0.0,
+          'expansion': 0.0,
         },
         'symbolCount': 10,
       };
@@ -57,13 +57,13 @@ void main() {
       final json = {
         'sideways': 0.5,
         'compression': 0.2,
-        'breakout': 0.1,
+        'expansion': 0.1,
         'trend': 0.2,
       };
       final breadth = MarketBreadth.fromJson(json);
       expect(breadth.sideways, 0.5);
       expect(breadth.compression, 0.2);
-      expect(breadth.breakout, 0.1);
+      expect(breadth.expansion, 0.1);
       expect(breadth.trend, 0.2);
     });
   });
@@ -82,7 +82,7 @@ void main() {
               'sideways': 0.6,
               'compression': 0.2,
               'trend': 0.1,
-              'breakout': 0.1,
+              'expansion': 0.1,
             },
             'symbolCount': 100,
           }),
@@ -115,7 +115,7 @@ void main() {
               'sideways': 0.1,
               'compression': 0.1,
               'trend': 0.7,
-              'breakout': 0.1,
+              'expansion': 0.1,
             },
             'symbolCount': 50,
           }),

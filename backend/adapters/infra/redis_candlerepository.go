@@ -115,14 +115,76 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 }
 
 // GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
-// Delegates to wrapped repository.
+// Results are cached in Redis with a key quantized to the current timeframe boundary,
+// so all callers within the same candle period share one cache entry.
 func (r *RedisCandleRepository) GetLastNCandles(symbol domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if n <= 0 {
 		return domain.NewCandleSeries(symbol, tf, []domain.Candle{})
 	}
 
-	fmt.Printf("[RedisCandleRepository] GetLastNCandles: symbol=%s, tf=%s, n=%d\n", symbol.String(), tf.String(), n)
+	// Quantize to current candle boundary so all calls within the same
+	// candle period produce the same cache key.
+	dur := tf.Duration()
+	boundary := time.Now().UTC().Truncate(dur)
+	key := fmt.Sprintf("lastN|%s|%s|%d|%s", symbol.String(), tf.String(), n, boundary.Format(time.RFC3339))
 
-	// Delegate to wrapped repository (no caching for now, as candles are time-sensitive)
-	return r.wrapped.GetLastNCandles(symbol, tf, n)
+	// Try cache
+	if r.client != nil {
+		b, err := r.client.Get(key)
+		if err == nil && len(b) > 0 {
+			var items []payloadItem
+			if err := json.Unmarshal(b, &items); err == nil && len(items) > 0 {
+				candles := make([]domain.Candle, 0, len(items))
+				for _, it := range items {
+					ts, perr := time.Parse(time.RFC3339, it.Timestamp)
+					if perr != nil {
+						break
+					}
+					c, cerr := domain.NewCandle(symbol, tf, ts.UTC(), it.Open, it.High, it.Low, it.Close, it.Volume)
+					if cerr != nil {
+						break
+					}
+					candles = append(candles, c)
+				}
+				if len(candles) == len(items) {
+					return domain.NewCandleSeries(symbol, tf, candles)
+				}
+			}
+		}
+	}
+
+	// Cache miss — delegate
+	series, err := r.wrapped.GetLastNCandles(symbol, tf, n)
+	if err != nil {
+		return domain.CandleSeries{}, err
+	}
+
+	// Store in cache (best-effort). TTL = whichever is shorter: the configured
+	// TTL or the remaining time until the next candle boundary.
+	if r.client != nil {
+		all := series.All()
+		items := make([]payloadItem, 0, len(all))
+		for _, c := range all {
+			items = append(items, payloadItem{
+				Timestamp: c.Timestamp().Format(time.RFC3339),
+				Open:      c.Open(),
+				High:      c.High(),
+				Low:       c.Low(),
+				Close:     c.Close(),
+				Volume:    c.Volume(),
+			})
+		}
+		if len(items) > 0 {
+			if b, merr := json.Marshal(items); merr == nil {
+				ttl := r.ttl
+				untilNext := boundary.Add(dur).Sub(time.Now().UTC())
+				if untilNext > 0 && untilNext < ttl {
+					ttl = untilNext
+				}
+				_ = r.client.Set(key, b, ttl)
+			}
+		}
+	}
+
+	return series, nil
 }

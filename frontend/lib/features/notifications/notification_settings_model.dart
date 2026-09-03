@@ -11,7 +11,8 @@ const kTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
 /// **any** of the three sub-toggles is on.
 class NotificationSettings {
   bool social;
-  bool macro;
+  bool macroHigh;
+  bool macroModerate;
   bool uptrend;
   bool downtrend;
   bool sideways;
@@ -30,7 +31,8 @@ class NotificationSettings {
 
   NotificationSettings({
     required this.social,
-    required this.macro,
+    required this.macroHigh,
+    required this.macroModerate,
     required this.uptrend,
     required this.downtrend,
     required this.sideways,
@@ -48,7 +50,8 @@ class NotificationSettings {
 
   factory NotificationSettings.defaults() => NotificationSettings(
         social: true,
-        macro: true,
+        macroHigh: true,
+        macroModerate: true,
         uptrend: true,
         downtrend: true,
         sideways: true,
@@ -60,7 +63,8 @@ class NotificationSettings {
   factory NotificationSettings.fromPrefs(PreferencesService prefs) =>
       NotificationSettings(
         social: prefs.notificationsEnabled,
-        macro: prefs.notifyMacro,
+        macroHigh: prefs.notifyMacroHigh,
+        macroModerate: prefs.notifyMacroModerate,
         uptrend: prefs.notifyUptrend,
         downtrend: prefs.notifyDowntrend,
         sideways: prefs.notifySideways,
@@ -79,7 +83,8 @@ class NotificationSettings {
   /// Persists all values back to [PreferencesService].
   void save(PreferencesService prefs) {
     prefs.notificationsEnabled = social;
-    prefs.notifyMacro = macro;
+    prefs.notifyMacroHigh = macroHigh;
+    prefs.notifyMacroModerate = macroModerate;
     prefs.notifyUptrend = uptrend;
     prefs.notifyDowntrend = downtrend;
     prefs.notifySideways = sideways;
@@ -101,7 +106,7 @@ class NotificationSettings {
       case 'twitter':
         return social;
       case 'macro':
-        return macro;
+        return macroHigh || macroModerate;
       case 'market':
         return uptrend || downtrend || sideways;
       case 'setup':
@@ -117,7 +122,8 @@ class NotificationSettings {
   Map<String, dynamic> toJson(String userId) => {
         'user_id': userId,
         'social': social,
-        'macro': macro,
+        'macro_high': macroHigh,
+        'macro_moderate': macroModerate,
         'news': news,
         'uptrend': uptrend,
         'downtrend': downtrend,
@@ -136,7 +142,8 @@ class NotificationSettings {
   /// Applies server-side config values onto this instance.
   void applyFromJson(Map<String, dynamic> json) {
     social = json['social'] as bool? ?? social;
-    macro = json['macro'] as bool? ?? macro;
+    macroHigh = json['macro_high'] as bool? ?? macroHigh;
+    macroModerate = json['macro_moderate'] as bool? ?? macroModerate;
     news = json['news'] as bool? ?? news;
     uptrend = json['uptrend'] as bool? ?? uptrend;
     downtrend = json['downtrend'] as bool? ?? downtrend;

@@ -37,43 +37,42 @@ class _ChartEventOverlayState extends State<ChartEventOverlay> {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Paint the vertical lines
+        // Paint the vertical lines — pointer-transparent.
         Positioned.fill(
-          child: CustomPaint(
-            painter: EventOverlayPainter(
-              markers: widget.markers,
-              priceAreaHeight: widget.priceAreaHeight,
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: EventOverlayPainter(
+                markers: widget.markers,
+                priceAreaHeight: widget.priceAreaHeight,
+              ),
             ),
           ),
         ),
-        // Hit test layer
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTapDown: _onTap,
+        // Individual tap targets at each marker position.
+        for (final m in widget.markers)
+          Positioned(
+            left: m.x - 20,
+            top: 0,
+            width: 40,
+            height: 20,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() =>
+                  _selected = _selected == m ? null : m),
+            ),
           ),
-        ),
+        // Dismiss layer — tapping anywhere else closes the popup.
+        if (_selected != null)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () => setState(() => _selected = null),
+            ),
+          ),
         // Detail popup
         if (_selected != null) _buildPopup(context, _selected!),
       ],
     );
-  }
-
-  void _onTap(TapDownDetails details) {
-    final tapX = details.localPosition.dx;
-    const hitRadius = 20.0;
-
-    EventMarker? closest;
-    double closestDist = double.infinity;
-    for (final m in widget.markers) {
-      final d = (m.x - tapX).abs();
-      if (d < hitRadius && d < closestDist) {
-        closest = m;
-        closestDist = d;
-      }
-    }
-
-    setState(() => _selected = closest);
   }
 
   Widget _buildPopup(BuildContext context, EventMarker marker) {

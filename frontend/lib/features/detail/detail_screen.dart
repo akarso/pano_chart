@@ -12,6 +12,7 @@ import '../../infrastructure/preferences_service.dart';
 import '../events/event_filter.dart';
 import '../events/events_view_model.dart';
 import '../events/macro_events_screen.dart';
+import '../social/social_feed_screen.dart';
 import '../social/social_feed_view_model.dart';
 import 'chart/chart_config.dart';
 import 'chart/indicator_panel.dart';
@@ -90,6 +91,17 @@ class DetailScreen extends StatefulWidget {
 
 class _DetailScreenState extends State<DetailScreen> {
   ChartIndicatorConfig _chartConfig = const ChartIndicatorConfig();
+
+  /// Config with pro-only features disabled when not pro.
+  /// Preserves the saved config so settings are restored on upgrade.
+  ChartIndicatorConfig get _effectiveConfig {
+    if (widget.isProUser) return _chartConfig;
+    return _chartConfig.copyWith(
+      showBehaviorPanel: false,
+      showVolatility: false,
+    );
+  }
+
   late bool isFavourite;
   String _preferredExchangeId = 'binance';
   List<ExchangeConfig> _exchanges = kDefaultExchanges;
@@ -245,7 +257,7 @@ class _DetailScreenState extends State<DetailScreen> {
         _series = result;
         _warmupCount = kIndicatorWarmup;
       });
-      _loadEvents();
+      // Events are refreshed by their own 15-minute timer — not here.
       _setupFetched = false;
       _loadSetupData();
       _fragilityFetched = false;
@@ -581,6 +593,7 @@ class _DetailScreenState extends State<DetailScreen> {
           viewModel: evm,
           scrollToEventId:
               scrollToEventId.isNotEmpty ? scrollToEventId : null,
+          isProUser: widget.isProUser,
         ),
       ),
     ).then((_) {
@@ -588,6 +601,18 @@ class _DetailScreenState extends State<DetailScreen> {
       // and reload events for the chart's date range so the chart overlay
       // reflects any updates (e.g. newly visible future events).
       _loadEvents();
+    });
+  }
+
+  void _navigateToSocialFeed() {
+    final svm = widget.socialFeedViewModel;
+    if (svm == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SocialFeedScreen(viewModel: svm),
+      ),
+    ).then((_) {
+      _wireSocialFeedCallback();
     });
   }
 
@@ -681,7 +706,7 @@ class _DetailScreenState extends State<DetailScreen> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 40, minHeight: 32),
                 onPressed: () async {
-                  final result = await showIndicatorPanel(context, _chartConfig);
+                  final result = await showIndicatorPanel(context, _chartConfig, isProUser: widget.isProUser);
                   if (result != null) _saveChartConfig(result);
                 },
                 tooltip: 'Indicators',
@@ -729,11 +754,12 @@ class _DetailScreenState extends State<DetailScreen> {
               else
                 InteractiveChart(
                   series: series,
-                  config: _chartConfig,
+                  config: _effectiveConfig,
                   onConfigChanged: _saveChartConfig,
                   eventsViewModel: widget.eventsViewModel,
                   onNavigateToEvent: _navigateToEventsList,
                   socialFeedViewModel: widget.socialFeedViewModel,
+                  onNavigateToFeed: _navigateToSocialFeed,
                   volatilityAligned: _volatilityData != null
                       ? alignBucketsToCandles(
                           candles: _series.candles,
@@ -875,105 +901,73 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   Widget _buildOverlayControls() {
+    final svm = widget.socialFeedViewModel;
+    final evm = widget.eventsViewModel;
+    final socialOn = svm?.showOnChart ?? false;
+    final eventsOn = evm?.state.showEvents ?? false;
+
     return Row(
       children: [
         // Social feed toggle
-        if (widget.socialFeedViewModel != null) ...[
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              widget.socialFeedViewModel!.showOnChart =
-                  !widget.socialFeedViewModel!.showOnChart;
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.rss_feed,
-                    size: 16,
-                    color: widget.socialFeedViewModel!.showOnChart
-                        ? Colors.white70
-                        : Colors.white30,
-                  ),
-                  const SizedBox(width: 4),
-                ],
-              ),
-            ),
+        if (svm != null) ...[          _overlayToggle(
+            icon: Icons.rss_feed,
+            label: '',
+            active: socialOn,
+            onTap: () => setState(() {
+              svm.showOnChart = !svm.showOnChart;
+            }),
           ),
           const SizedBox(width: 12),
         ],
-        // Macro events toggle + filter chips
-        if (widget.eventsViewModel != null) ...[
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => widget.eventsViewModel!.toggleShowEvents(),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.public,
-                    size: 16,
-                    color: widget.eventsViewModel!.state.showEvents
-                        ? Colors.white70
-                        : Colors.white30,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Events',
-                    style: TextStyle(
-                      color: widget.eventsViewModel!.state.showEvents
-                          ? Colors.white70
-                          : Colors.white30,
-                      fontSize: 11,
+        // Macro events toggle
+        if (evm != null) ...[          _overlayToggle(
+            icon: Icons.public,
+            label: 'Events',
+            active: eventsOn,
+            onTap: () => setState(() {
+              evm.toggleShowEvents();
+            }),
+          ),
+          // Filter level chips — only when events are shown
+          if (eventsOn) ...[            const SizedBox(width: 16),
+            for (final level in EventFilterLevel.values) ...[              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() {
+                  evm.setFilterLevel(level);
+                }),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: evm.state.filterLevel == level
+                        ? Colors.white.withAlpha(25)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: evm.state.filterLevel == level
+                          ? Colors.white38
+                          : Colors.white12,
+                      width: 0.5,
                     ),
                   ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
-          // Filter level chips
-          for (final level in EventFilterLevel.values) ...[
-            GestureDetector(
-              onTap: () => widget.eventsViewModel!.setFilterLevel(level),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: widget.eventsViewModel!.state.filterLevel == level
-                      ? Colors.white.withAlpha(25)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color:
-                        widget.eventsViewModel!.state.filterLevel == level
-                            ? Colors.white38
-                            : Colors.white12,
-                    width: 0.5,
-                  ),
-                ),
-                child: Text(
-                  level.label,
-                  style: TextStyle(
-                    color:
-                        widget.eventsViewModel!.state.filterLevel == level
-                            ? Colors.white70
-                            : Colors.white30,
-                    fontSize: 10,
+                  child: Text(
+                    level.label,
+                    style: TextStyle(
+                      color: evm.state.filterLevel == level
+                          ? Colors.white70
+                          : Colors.white30,
+                      fontSize: 10,
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 6),
+              const SizedBox(width: 6),
+            ],
           ],
         ],
         const Spacer(),
         // "View all" link to events list
-        if (widget.eventsViewModel != null)
+        if (evm != null)
           GestureDetector(
             onTap: () => _navigateToEventsList(''),
             child: const Text(
@@ -982,6 +976,35 @@ class _DetailScreenState extends State<DetailScreen> {
             ),
           ),
       ],
+    );
+  }
+
+  Widget _overlayToggle({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: active ? Colors.white70 : Colors.white30),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: active ? Colors.white70 : Colors.white30,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

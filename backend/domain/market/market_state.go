@@ -6,7 +6,7 @@ type State string
 const (
 	StateSideways    State = "sideways"
 	StateCompression State = "compression"
-	StateBreakout    State = "breakout"
+	StateExpansion   State = "expansion"
 	StateTrend       State = "trend"
 	StateSilent      State = "silent"
 	StateIndecisive  State = "indecisive"
@@ -19,7 +19,7 @@ const (
 type Breadth struct {
 	Sideways    float64
 	Compression float64
-	Breakout    float64
+	Expansion   float64
 	Trend       float64
 }
 

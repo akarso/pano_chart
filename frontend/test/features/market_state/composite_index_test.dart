@@ -9,8 +9,12 @@ import 'package:pano_chart_frontend/features/market_state/http_composite_index_a
 import 'package:pano_chart_frontend/features/market_state/http_market_state_api.dart';
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/market_pulse_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
   // ---- Data Model Tests ----
 
   group('CompositeIndexData', () {
@@ -183,7 +187,7 @@ void main() {
         breadth: const MarketBreadth(
           sideways: 0.2,
           compression: 0.5,
-          breakout: 0.1,
+          expansion: 0.1,
           trend: 0.2,
         ),
         symbolCount: 100,
@@ -226,7 +230,7 @@ void main() {
         breadth: const MarketBreadth(
           sideways: 0.1,
           compression: 0.05,
-          breakout: 0.05,
+          expansion: 0.05,
           trend: 0.8,
         ),
         symbolCount: 50,
@@ -273,7 +277,7 @@ void main() {
         breadth: const MarketBreadth(
           sideways: 0.1,
           compression: 0.05,
-          breakout: 0.05,
+          expansion: 0.05,
           trend: 0.8,
         ),
         symbolCount: 50,

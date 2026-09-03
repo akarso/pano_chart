@@ -32,9 +32,10 @@ type transitionResponse struct {
 }
 
 type probabilitiesDTO struct {
-	Trend     float64 `json:"trend"`
-	Sideways  float64 `json:"sideways"`
-	Expansion float64 `json:"expansion"`
+	Trend       float64 `json:"trend"`
+	Sideways    float64 `json:"sideways"`
+	Compression float64 `json:"compression"`
+	Expansion   float64 `json:"expansion"`
 }
 
 // ServeHTTP implements http.Handler.
@@ -54,9 +55,10 @@ func (h *MarketTransitionHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		Timeframe:     result.Timeframe,
 		CurrentRegime: string(result.CurrentRegime),
 		Probabilities: probabilitiesDTO{
-			Trend:     roundTo(result.Probabilities.Trend, 4),
-			Sideways:  roundTo(result.Probabilities.Sideways, 4),
-			Expansion: roundTo(result.Probabilities.Expansion, 4),
+			Trend:       roundTo(result.Probabilities.Trend, 4),
+			Sideways:    roundTo(result.Probabilities.Sideways, 4),
+			Compression: roundTo(result.Probabilities.Compression, 4),
+			Expansion:   roundTo(result.Probabilities.Expansion, 4),
 		},
 		Horizon: result.Horizon,
 	}

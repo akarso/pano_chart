@@ -8,6 +8,8 @@ const (
 	RegimeSideways    Regime = "sideways"
 	RegimeTrend       Regime = "trend"
 	RegimeExpansion   Regime = "expansion"
+	RegimeIndecisive  Regime = "indecisive"
+	RegimeSilent      Regime = "silent"
 )
 
 // RegimeScores holds the soft prevalence score for each regime.
@@ -24,7 +26,7 @@ type RegimeMetrics struct {
 	TrendBreadth        float64
 	SidewaysBreadth     float64
 	CompressionBreadth  float64
-	BreakoutBreadth     float64
+	ExpansionBreadth    float64
 	VolatilityExpansion float64
 	Dispersion          float64
 }
@@ -36,4 +38,10 @@ type RegimeSummary struct {
 	Prevalence float64      // dominant regime's score (0–1)
 	Scores     RegimeScores // all regime scores (sum to ~1.0)
 	Metrics    RegimeMetrics
+	Bias       string // "up", "down", or "neutral" — aggregate directional bias
+
+	// Trend health aggregates (backported from MarketStateService).
+	EffectiveTrend float64 // average trend health across all tokens (0–1)
+	BreakdownRate  float64 // fraction of trending tokens with health < 0.4
+	Label          string  // human-readable quality label
 }

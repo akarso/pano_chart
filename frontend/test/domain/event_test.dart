@@ -6,6 +6,8 @@ void main() {
     test('fromString maps known values', () {
       expect(EventImpact.fromString('high'), EventImpact.high);
       expect(EventImpact.fromString('HIGH'), EventImpact.high);
+      expect(EventImpact.fromString('major'), EventImpact.high);
+      expect(EventImpact.fromString('Major'), EventImpact.high);
       expect(EventImpact.fromString('medium'), EventImpact.medium);
       expect(EventImpact.fromString('Medium'), EventImpact.medium);
       expect(EventImpact.fromString('low'), EventImpact.low);

@@ -22,6 +22,11 @@ type Watcher struct {
 	pollInterval    time.Duration
 	refreshInterval time.Duration
 	cleanupAge      time.Duration
+	accountCooldown time.Duration
+
+	// lastPolled tracks when each account was last polled to enforce a
+	// per-account cooldown regardless of how few accounts exist.
+	lastPolled map[string]time.Time
 }
 
 // WatcherConfig holds tuning knobs for the background loop.
@@ -29,6 +34,7 @@ type WatcherConfig struct {
 	PollInterval    time.Duration // how often to poll the next account (default: 1s)
 	RefreshInterval time.Duration // how often to reload the account list (default: 30s)
 	CleanupAge      time.Duration // remove accounts unused for this long (default: 24h)
+	AccountCooldown time.Duration // min interval between polls of the same account (default: 60s)
 }
 
 // DefaultWatcherConfig returns the MVP defaults from PR-057.
@@ -37,6 +43,7 @@ func DefaultWatcherConfig() WatcherConfig {
 		PollInterval:    1 * time.Second,
 		RefreshInterval: 30 * time.Second,
 		CleanupAge:      24 * time.Hour,
+		AccountCooldown: 60 * time.Second,
 	}
 }
 
@@ -59,6 +66,8 @@ func NewWatcher(
 		pollInterval:    cfg.PollInterval,
 		refreshInterval: cfg.RefreshInterval,
 		cleanupAge:      cfg.CleanupAge,
+		accountCooldown: cfg.AccountCooldown,
+		lastPolled:      make(map[string]time.Time),
 	}
 }
 
@@ -87,12 +96,34 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// pollNext fetches the next account in the rotation.
+// pollNext fetches the next account in the rotation, skipping any account
+// that was polled less than accountCooldown ago.
 func (w *Watcher) pollNext() {
-	acc, ok := w.scheduler.Next()
-	if !ok {
+	n := w.scheduler.Len()
+	if n == 0 {
 		return
 	}
+
+	// Try up to n accounts to find one off cooldown.
+	now := time.Now()
+	var acc domain.Account
+	found := false
+	for i := 0; i < n; i++ {
+		candidate, ok := w.scheduler.Next()
+		if !ok {
+			return
+		}
+		if now.Sub(w.lastPolled[candidate.ID]) >= w.accountCooldown {
+			acc = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		return // all accounts still on cooldown
+	}
+
+	w.lastPolled[acc.ID] = now
 
 	posts, err := w.provider.Fetch(acc)
 	if err != nil {
@@ -101,6 +132,9 @@ func (w *Watcher) pollNext() {
 	}
 
 	log.Printf("[social] poll %s: %d posts fetched, lastSeen=%s", acc.Handle, len(posts), acc.LastSeenPostID)
+
+	// Keep the account alive so cleanup doesn't delete it.
+	acc.LastUsedAt = time.Now().Unix()
 
 	// Cache all fetched posts.
 	w.cache.Set(acc.ID, posts)
@@ -117,11 +151,13 @@ func (w *Watcher) pollNext() {
 		acc.LastSeenPostID = newPosts[0].ID
 		acc.LastSeenTimestamp = newPosts[0].Timestamp
 		acc.LastPolledAt = time.Now().Unix()
-		if err := w.accounts.Upsert(acc); err != nil {
-			log.Printf("[social] upsert %s: %v", acc.ID, err)
-		}
-		w.scheduler.UpdateAccount(acc)
 	}
+
+	// Persist updated fields (LastUsedAt always, plus LastSeen on new posts).
+	if err := w.accounts.Upsert(acc); err != nil {
+		log.Printf("[social] upsert %s: %v", acc.ID, err)
+	}
+	w.scheduler.UpdateAccount(acc)
 }
 
 // refreshAccounts reloads the active account list from the store.

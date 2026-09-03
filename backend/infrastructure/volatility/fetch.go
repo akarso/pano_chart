@@ -37,6 +37,7 @@ func (f *Fetcher) FetchCandlesFromURL(ctx context.Context, url string) ([]Candle
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	req.Header.Set("User-Agent", "PanoChart/1.0")
 
 	resp, err := f.client.Do(req)
 	if err != nil {

@@ -26,11 +26,15 @@ func NewMarketRegimeHandler(c RegimeCalculator) *MarketRegimeHandler {
 
 // regimeResponse is the JSON response DTO.
 type regimeResponse struct {
-	Timeframe  string           `json:"timeframe"`
-	Regime     string           `json:"regime"`
-	Prevalence float64          `json:"prevalence"`
-	Scores     regimeScoresDTO  `json:"scores"`
-	Metrics    regimeMetricsDTO `json:"metrics"`
+	Timeframe      string           `json:"timeframe"`
+	Regime         string           `json:"regime"`
+	Prevalence     float64          `json:"prevalence"`
+	Bias           string           `json:"bias"`
+	Scores         regimeScoresDTO  `json:"scores"`
+	Metrics        regimeMetricsDTO `json:"metrics"`
+	EffectiveTrend float64          `json:"effectiveTrend"`
+	BreakdownRate  float64          `json:"breakdownRate"`
+	Label          string           `json:"label"`
 }
 
 type regimeScoresDTO struct {
@@ -44,7 +48,7 @@ type regimeMetricsDTO struct {
 	TrendBreadth        float64 `json:"trendBreadth"`
 	SidewaysBreadth     float64 `json:"sidewaysBreadth"`
 	CompressionBreadth  float64 `json:"compressionBreadth"`
-	BreakoutBreadth     float64 `json:"breakoutBreadth"`
+	ExpansionBreadth    float64 `json:"expansionBreadth"`
 	VolatilityExpansion float64 `json:"volatilityExpansion"`
 	Dispersion          float64 `json:"dispersion"`
 }
@@ -66,6 +70,7 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		Timeframe:  summary.Timeframe,
 		Regime:     string(summary.Regime),
 		Prevalence: roundTo(summary.Prevalence, 4),
+		Bias:       summary.Bias,
 		Scores: regimeScoresDTO{
 			Expansion:   roundTo(summary.Scores.Expansion, 4),
 			Compression: roundTo(summary.Scores.Compression, 4),
@@ -76,10 +81,13 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 			TrendBreadth:        roundTo(summary.Metrics.TrendBreadth, 4),
 			SidewaysBreadth:     roundTo(summary.Metrics.SidewaysBreadth, 4),
 			CompressionBreadth:  roundTo(summary.Metrics.CompressionBreadth, 4),
-			BreakoutBreadth:     roundTo(summary.Metrics.BreakoutBreadth, 4),
+			ExpansionBreadth:    roundTo(summary.Metrics.ExpansionBreadth, 4),
 			VolatilityExpansion: roundTo(summary.Metrics.VolatilityExpansion, 4),
 			Dispersion:          roundTo(summary.Metrics.Dispersion, 4),
 		},
+		EffectiveTrend: roundTo(summary.EffectiveTrend, 4),
+		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
+		Label:          summary.Label,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

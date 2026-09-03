@@ -23,7 +23,7 @@ func TestFinanceFlowClient_FetchEvents_Success(t *testing.T) {
 				"actual":         "52.7",
 				"previous":       "51.2",
 				"consensus":      "52.5",
-				"economicImpact": "High",
+				"economicImpact": "Major",
 				"report_date":    "2025-03-03",
 				"datetime":       "2025-03-03 14:45:00",
 			},
@@ -78,7 +78,7 @@ func TestFinanceFlowClient_FetchEvents_Success(t *testing.T) {
 		t.Errorf("event[0].Title = %q", result[0].Title())
 	}
 	if result[0].Impact() != "high" {
-		t.Errorf("event[0].Impact = %q, want high", result[0].Impact())
+		t.Errorf("event[0].Impact = %q, want high (Major maps to high)", result[0].Impact())
 	}
 
 	if result[1].Impact() != "medium" {
@@ -161,7 +161,7 @@ func TestFinanceFlowClient_FetchEvents_BadDatetimeSkipped(t *testing.T) {
 			{
 				"country":        "US",
 				"report_name":    "Good Event",
-				"economicImpact": "High",
+				"economicImpact": "Major",
 				"datetime":       "2025-03-03 14:45:00",
 			},
 			{

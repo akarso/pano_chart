@@ -2,12 +2,12 @@ package transition
 
 import "math"
 
-// BreakoutPressure computes the latent pressure for a regime breakout.
+// ExpansionPressure computes the latent pressure for a regime expansion.
 //
 //	pressure = compressionBreadth * (1 + volatilitySlope) * RegimeAgeFactor(age)
 //
 // The result is clamped to [0, 1].
-func BreakoutPressure(compressionBreadth, volatilitySlope float64, regimeAge int) float64 {
+func ExpansionPressure(compressionBreadth, volatilitySlope float64, regimeAge int) float64 {
 	p := compressionBreadth * (1 + volatilitySlope) * RegimeAgeFactor(regimeAge)
 	return math.Min(math.Max(p, 0), 1)
 }

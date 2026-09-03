@@ -20,7 +20,9 @@ func NewNotificationConfigHandler(store appnotify.NotificationConfigStore) *Noti
 type notificationConfigDTO struct {
 	UserID                string  `json:"user_id"`
 	Social                bool    `json:"social"`
-	Macro                 bool    `json:"macro"`
+	Macro                 *bool   `json:"macro,omitempty"`
+	MacroHigh             bool    `json:"macro_high"`
+	MacroModerate         bool    `json:"macro_moderate"`
 	News                  bool    `json:"news"`
 	Uptrend               bool    `json:"uptrend"`
 	Downtrend             bool    `json:"downtrend"`
@@ -40,7 +42,8 @@ func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
 	return notificationConfigDTO{
 		UserID:                cfg.UserID,
 		Social:                cfg.Social,
-		Macro:                 cfg.Macro,
+		MacroHigh:             cfg.MacroHigh,
+		MacroModerate:         cfg.MacroModerate,
 		News:                  cfg.News,
 		Uptrend:               cfg.Uptrend,
 		Downtrend:             cfg.Downtrend,
@@ -58,10 +61,18 @@ func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
 }
 
 func fromDTO(dto notificationConfigDTO) appnotify.NotificationConfig {
+	// Migrate legacy "macro" bool from old clients.
+	macroHigh := dto.MacroHigh
+	macroMod := dto.MacroModerate
+	if dto.Macro != nil {
+		macroHigh = *dto.Macro
+		macroMod = *dto.Macro
+	}
 	return appnotify.NotificationConfig{
 		UserID:                dto.UserID,
 		Social:                dto.Social,
-		Macro:                 dto.Macro,
+		MacroHigh:             macroHigh,
+		MacroModerate:         macroMod,
 		News:                  dto.News,
 		Uptrend:               dto.Uptrend,
 		Downtrend:             dto.Downtrend,

@@ -7,8 +7,9 @@ import 'chart_config.dart';
 /// chart indicators. Returns the updated config on dismiss.
 Future<ChartIndicatorConfig?> showIndicatorPanel(
   BuildContext context,
-  ChartIndicatorConfig current,
-) {
+  ChartIndicatorConfig current, {
+  bool isProUser = true,
+}) {
   return showModalBottomSheet<ChartIndicatorConfig>(
     context: context,
     backgroundColor: const Color(0xFF1A1A2E),
@@ -16,13 +17,14 @@ Future<ChartIndicatorConfig?> showIndicatorPanel(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (_) => _IndicatorPanelBody(initial: current),
+    builder: (_) => _IndicatorPanelBody(initial: current, isProUser: isProUser),
   );
 }
 
 class _IndicatorPanelBody extends StatefulWidget {
   final ChartIndicatorConfig initial;
-  const _IndicatorPanelBody({required this.initial});
+  final bool isProUser;
+  const _IndicatorPanelBody({required this.initial, required this.isProUser});
 
   @override
   State<_IndicatorPanelBody> createState() => _IndicatorPanelBodyState();
@@ -128,6 +130,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
             const Divider(color: Colors.white12, height: 1),
             const SizedBox(height: 8),
 
+            if (widget.isProUser) ...[
             // ── Behavioral Indicators section ──
             Row(
               children: [
@@ -218,6 +221,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
               onToggle: (v) => _update(_cfg.copyWith(showVolatility: v)),
               onPeriod: (_) {},
             ),
+            ], // end isProUser
 
             const SizedBox(height: 10),
 

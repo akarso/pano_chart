@@ -28,8 +28,8 @@ func TestMarketState_Constants(t *testing.T) {
 	if mkt.StateCompression != "compression" {
 		t.Errorf("expected compression, got %s", mkt.StateCompression)
 	}
-	if mkt.StateBreakout != "breakout" {
-		t.Errorf("expected breakout, got %s", mkt.StateBreakout)
+	if mkt.StateExpansion != "expansion" {
+		t.Errorf("expected expansion, got %s", mkt.StateExpansion)
 	}
 	if mkt.StateTrend != "trend" {
 		t.Errorf("expected trend, got %s", mkt.StateTrend)
@@ -46,8 +46,8 @@ func TestClassify_BreakoutUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.State != mkt.StateBreakout {
-		t.Errorf("expected breakout, got %s", s.State)
+	if s.State != mkt.StateExpansion {
+		t.Errorf("expected expansion, got %s", s.State)
 	}
 }
 
@@ -61,8 +61,8 @@ func TestClassify_BreakoutDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.State != mkt.StateBreakout {
-		t.Errorf("expected breakout, got %s", s.State)
+	if s.State != mkt.StateExpansion {
+		t.Errorf("expected expansion, got %s", s.State)
 	}
 }
 
@@ -168,18 +168,18 @@ func TestService_BreadthRatios(t *testing.T) {
 	if summary.Breadth.Trend <= 0 {
 		t.Errorf("expected positive Trend breadth, got %f", summary.Breadth.Trend)
 	}
-	if summary.Breadth.Breakout <= 0 {
-		t.Errorf("expected positive Breakout breadth, got %f", summary.Breadth.Breakout)
+	if summary.Breadth.Expansion <= 0 {
+		t.Errorf("expected positive Expansion breadth, got %f", summary.Breadth.Expansion)
 	}
 	// All four fields should approximately sum to 1.0.
-	sum := summary.Breadth.Sideways + summary.Breadth.Compression + summary.Breadth.Breakout + summary.Breadth.Trend
+	sum := summary.Breadth.Sideways + summary.Breadth.Compression + summary.Breadth.Expansion + summary.Breadth.Trend
 	if sum < 0.99 || sum > 1.01 {
 		t.Errorf("expected breadth sum ≈ 1.0, got %f", sum)
 	}
 	// Sideways-heavy tokens should push sideways breadth highest.
-	if summary.Breadth.Sideways <= summary.Breadth.Breakout {
-		t.Errorf("expected sideways > breakout, got sideways=%f breakout=%f",
-			summary.Breadth.Sideways, summary.Breadth.Breakout)
+	if summary.Breadth.Sideways <= summary.Breadth.Expansion {
+		t.Errorf("expected sideways > expansion, got sideways=%f expansion=%f",
+			summary.Breadth.Sideways, summary.Breadth.Expansion)
 	}
 }
 
@@ -301,7 +301,7 @@ func TestMarketHandler_JSONFields(t *testing.T) {
 	if !ok {
 		t.Fatal("breadth not an object")
 	}
-	breadthFields := []string{"sideways", "compression", "breakout", "trend"}
+	breadthFields := []string{"sideways", "compression", "expansion", "trend"}
 	for _, f := range breadthFields {
 		if _, ok := breadth[f]; !ok {
 			t.Errorf("missing breadth field %q", f)

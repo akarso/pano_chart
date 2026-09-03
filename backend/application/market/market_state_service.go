@@ -23,7 +23,7 @@ func NewMarketStateService(p EvaluationProvider) *MarketStateService {
 //
 // Breadth is computed using proportional weighting: every symbol distributes
 // its scores continuously across all four regimes (sideways, compression,
-// breakout, trend).  This eliminates the zero-breadth problem that occurred
+// expansion, trend).  This eliminates the zero-breadth problem that occurred
 // with binary classification thresholds.
 //
 // Trend prevalence is health-dampened: if most "trending" tokens are actually
@@ -56,19 +56,19 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		w := scoreWeights(e)
 		breadth.Sideways += w.Sideways
 		breadth.Compression += w.Compression
-		breadth.Breakout += w.Breakout
+		breadth.Expansion += w.Expansion
 		breadth.Trend += w.Trend
 	}
 	breadth.Sideways /= total
 	breadth.Compression /= total
-	breadth.Breakout /= total
+	breadth.Expansion /= total
 	breadth.Trend /= total
 
 	// ---- 2. Trend health (compute BEFORE state determination) ----
 	var trendCount, healthyTrendCount, effectiveSum, breakdowns float64
 	for _, e := range evaluations {
 		w := scoreWeights(e)
-		if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Breakout {
+		if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
 			continue
 		}
 		trendCount++
@@ -116,14 +116,14 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		dominant = mkt.StateCompression
 		maxWeight = breadth.Compression
 	}
-	if breadth.Breakout >= maxWeight {
-		dominant = mkt.StateBreakout
-		maxWeight = breadth.Breakout
+	if breadth.Expansion >= maxWeight {
+		dominant = mkt.StateExpansion
+		maxWeight = breadth.Expansion
 	}
 
 	// Second-highest breadth for indecisive check.
 	weights := []float64{breadth.Sideways, breadth.Compression,
-		breadth.Breakout, breadth.Trend}
+		breadth.Expansion, breadth.Trend}
 	first, second := topTwo(weights)
 
 	// ---- 4a. Indecisive override ----
@@ -141,7 +141,7 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	// We only apply the silent override when volume data is present —
 	// without it we can't distinguish silence from missing data.
 	if dominant == mkt.StateSideways || dominant == mkt.StateIndecisive {
-		avgAbsReturn, avgVolume, medianVolume := aggregateActivityMetrics(evaluations)
+		avgAbsReturn, avgVolume, medianVolume := AggregateActivityMetrics(evaluations)
 		hasVolumeData := medianVolume > 0
 		volumeNormal := hasVolumeData && avgVolume <= medianVolume*1.5
 		if hasVolumeData && avgAbsReturn < 0.5 && volumeNormal {
@@ -208,10 +208,10 @@ func topTwo(vals []float64) (first, second float64) {
 	return
 }
 
-// aggregateActivityMetrics computes the average absolute return (in ATR
+// AggregateActivityMetrics computes the average absolute return (in ATR
 // units) and the average + median volume across all evaluations.
 // Tokens with ATR == 0 are skipped for the return calculation.
-func aggregateActivityMetrics(evals []domain.EvaluationSnapshot) (avgAbsReturn, avgVolume, medianVolume float64) {
+func AggregateActivityMetrics(evals []domain.EvaluationSnapshot) (avgAbsReturn, avgVolume, medianVolume float64) {
 	if len(evals) == 0 {
 		return
 	}

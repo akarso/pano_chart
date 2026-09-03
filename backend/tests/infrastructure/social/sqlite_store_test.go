@@ -70,16 +70,21 @@ func TestSQLiteAccountStore_GetAllActive(t *testing.T) {
 	db := openDB(t)
 	defer func() { _ = db.Close() }()
 	store, _ := infrasocial.NewSQLiteAccountStoreFromDB(db)
+	subStore, _ := infrasocial.NewSQLiteSubscriptionStoreFromDB(db)
 
 	_ = store.Upsert(domain.NewAccount("twitter", "alice"))
 	_ = store.Upsert(domain.NewAccount("twitter", "bob"))
+	_ = store.Upsert(domain.NewAccount("twitter", "orphan")) // no subscriber
+
+	_ = subStore.Subscribe("user1", "twitter:alice")
+	_ = subStore.Subscribe("user1", "twitter:bob")
 
 	all, err := store.GetAllActive()
 	if err != nil {
 		t.Fatalf("get all: %v", err)
 	}
 	if len(all) != 2 {
-		t.Fatalf("expected 2, got %d", len(all))
+		t.Fatalf("expected 2 (not orphan), got %d", len(all))
 	}
 }
 
@@ -106,6 +111,7 @@ func TestSQLiteAccountStore_CleanupUnused(t *testing.T) {
 	db := openDB(t)
 	defer func() { _ = db.Close() }()
 	store, _ := infrasocial.NewSQLiteAccountStoreFromDB(db)
+	subStore, _ := infrasocial.NewSQLiteSubscriptionStoreFromDB(db)
 
 	old := domain.NewAccount("twitter", "stale")
 	old.LastUsedAt = 100
@@ -114,6 +120,10 @@ func TestSQLiteAccountStore_CleanupUnused(t *testing.T) {
 	fresh := domain.NewAccount("twitter", "active")
 	fresh.LastUsedAt = time.Now().Unix()
 	_ = store.Upsert(fresh)
+
+	// Both need subscriptions so GetAllActive can see the survivor.
+	_ = subStore.Subscribe("user1", "twitter:stale")
+	_ = subStore.Subscribe("user1", "twitter:active")
 
 	threshold := time.Now().Add(-1 * time.Hour).Unix()
 	n, err := store.CleanupUnused(threshold)

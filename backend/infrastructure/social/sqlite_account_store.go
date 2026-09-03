@@ -99,8 +99,9 @@ func (s *SQLiteAccountStore) Get(accountID string) (*domain.Account, error) {
 }
 
 func (s *SQLiteAccountStore) GetAllActive() ([]domain.Account, error) {
-	rows, err := s.db.Query(`SELECT id, platform, handle, last_seen_post, last_seen_ts, last_polled_at, last_used_at
-		FROM social_accounts`)
+	rows, err := s.db.Query(`SELECT DISTINCT a.id, a.platform, a.handle, a.last_seen_post, a.last_seen_ts, a.last_polled_at, a.last_used_at
+		FROM social_accounts a
+		INNER JOIN social_subscriptions sub ON sub.account_id = a.id`)
 	if err != nil {
 		return nil, err
 	}

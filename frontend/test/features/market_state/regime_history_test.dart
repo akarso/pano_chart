@@ -15,8 +15,12 @@ import 'package:pano_chart_frontend/features/market_state/market_state_data.dart
 import 'package:pano_chart_frontend/features/market_state/composite_index_data.dart';
 import 'package:pano_chart_frontend/features/market_state/regime_data.dart';
 import 'package:pano_chart_frontend/features/market_state/transition_data.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
   // ---- Data Model Tests ----
 
   group('RegimeHistoryData', () {
@@ -166,7 +170,7 @@ void main() {
         state: 'compression',
         confidence: 0.7,
         breadth: MarketBreadth(
-          sideways: 0.3, compression: 0.4, breakout: 0.1, trend: 0.2,
+          sideways: 0.3, compression: 0.4, expansion: 0.1, trend: 0.2,
         ),
         symbolCount: 50,
       ));
@@ -185,7 +189,7 @@ void main() {
         metrics: RegimeMetrics(
           trendBreadth: 0.18,
           sidewaysBreadth: 0.10,
-          breakoutBreadth: 0.05,
+          expansionBreadth: 0.05,
           compressionBreadth: 0.34,
           volatilityExpansion: 0.82,
           dispersion: 0.21,
@@ -197,6 +201,7 @@ void main() {
         probabilities: TransitionProbabilities(
           trend: 0.42,
           sideways: 0.28,
+          compression: 0.0,
           expansion: 0.30,
         ),
         horizon: '12 candles',
@@ -231,7 +236,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Scroll down to reveal the history card below the fold.
-      await tester.drag(find.byType(ListView), const Offset(0, -500));
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
       await tester.pumpAndSettle();
 
       // Regime history card is shown
@@ -249,7 +254,7 @@ void main() {
         state: 'trend',
         confidence: 0.8,
         breadth: MarketBreadth(
-          sideways: 0.1, compression: 0.1, breakout: 0.0, trend: 0.8,
+          sideways: 0.1, compression: 0.1, expansion: 0.0, trend: 0.8,
         ),
         symbolCount: 50,
       ));
@@ -276,7 +281,7 @@ void main() {
         state: 'sideways',
         confidence: 0.5,
         breadth: MarketBreadth(
-          sideways: 1.0, compression: 0.0, breakout: 0.0, trend: 0.0,
+          sideways: 1.0, compression: 0.0, expansion: 0.0, trend: 0.0,
         ),
         symbolCount: 10,
       ));

@@ -34,7 +34,7 @@ type marketStateResponse struct {
 type marketBreadthDTO struct {
 	Sideways    float64 `json:"sideways"`
 	Compression float64 `json:"compression"`
-	Breakout    float64 `json:"breakout"`
+	Expansion   float64 `json:"expansion"`
 	Trend       float64 `json:"trend"`
 }
 
@@ -63,7 +63,7 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Breadth: marketBreadthDTO{
 			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 			Compression: roundTo(summary.Breadth.Compression, 4),
-			Breakout:    roundTo(summary.Breadth.Breakout, 4),
+			Expansion:   roundTo(summary.Breadth.Expansion, 4),
 			Trend:       roundTo(summary.Breadth.Trend, 4),
 		},
 	}

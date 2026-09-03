@@ -27,7 +27,7 @@ func scoreWeights(e domain.EvaluationSnapshot) mkt.Breadth {
 	return mkt.Breadth{
 		Sideways:    sideways / total,
 		Compression: compression / total,
-		Breakout:    breakout / total,
+		Expansion:   breakout / total,
 		Trend:       trend / total,
 	}
 }

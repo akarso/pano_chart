@@ -9,8 +9,8 @@ import (
 )
 
 type Binance24hTickerVolumeProvider struct {
-	client  *http.Client
-	url     string
+	client *http.Client
+	url    string
 }
 
 func NewBinance24hTickerVolumeProvider(client *http.Client, url string) *Binance24hTickerVolumeProvider {
@@ -23,6 +23,7 @@ func (b *Binance24hTickerVolumeProvider) Volumes(ctx context.Context) (map[strin
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "PanoChart/1.0")
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -38,8 +39,8 @@ func (b *Binance24hTickerVolumeProvider) Volumes(ctx context.Context) (map[strin
 		return nil, fmt.Errorf("binance: ticker http %d", resp.StatusCode)
 	}
 	var tickers []struct {
-		Symbol      string  `json:"symbol"`
-		QuoteVolume string  `json:"quoteVolume"`
+		Symbol      string `json:"symbol"`
+		QuoteVolume string `json:"quoteVolume"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tickers); err != nil {
 		return nil, err

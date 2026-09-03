@@ -9,6 +9,7 @@ import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
 import '../features/billing/billing_manager.dart';
 import '../features/billing/trial_manager.dart';
+import '../features/detail/setup_detail_loader.dart';
 import '../features/events/macro_events_screen.dart';
 import '../features/market_state/market_pulse_screen.dart';
 import '../features/news/news_list_screen.dart';
@@ -87,8 +88,17 @@ Widget bootstrapApp({
       socialScreen: socialVm != null
           ? () => SocialFeedScreen(viewModel: socialVm)
           : null,
-      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel),
+      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel, isProUser: billingManager?.hasFullAccess ?? true),
       newsScreen: () => NewsListScreen(viewModel: newsViewModel),
+      setupScreen: (symbol) => SetupDetailLoader(
+            symbol: symbol,
+            getCandleSeries: getCandleSeries,
+            setupApi: setupApi,
+            fragilityApi: fragilityApi,
+            behaviorApi: behaviorApi,
+            volatilityApi: volatilityApi,
+            isProUser: billingManager?.hasFullAccess ?? true,
+          ),
       marketScreen: (timeframe) => MarketPulseScreen(
             marketStateApi: marketStateApi,
             compositeIndexApi: compositeIndexApi,
@@ -96,6 +106,7 @@ Widget bootstrapApp({
             transitionApi: transitionApi,
             regimeHistoryApi: regimeHistoryApi,
             initialTimeframe: timeframe,
+            isProUser: billingManager?.hasFullAccess ?? true,
           ),
     );
     onRouterReady?.call(router);
@@ -111,11 +122,6 @@ Widget bootstrapApp({
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Color(0x00000000),
-    systemNavigationBarColor: Color(0x00000000),
-    systemNavigationBarDividerColor: Color(0x00000000),
-  ));
 
   final prefs = await PreferencesService.create();
   final stablecoins = await loadStablecoinConfig();
@@ -124,7 +130,7 @@ void main() async {
   BillingManager? billingManager;
   if (defaultTargetPlatform == TargetPlatform.android) {
     const config = AppConfig(
-        apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
+        apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
     final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
     final trialManager = TrialManager(prefs.sharedPreferences);
     billingManager = root.createBillingManager(
@@ -132,10 +138,17 @@ void main() async {
       trialManager: trialManager,
     );
     await billingManager.init();
+  } else if (kDebugMode) {
+    // Non-Android debug builds: create a BillingManager without init()
+    // so the debug billing toggle works for testing free/pro gates.
+    const config = AppConfig(
+      apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
+    final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+    billingManager = root.createBillingManager(userId: prefs.userId);
   }
 
   const config = AppConfig(
-      apiBaseUrl: 'http://srv1024540.hstgr.cloud:8080', flavor: 'dev');
+    apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
   final socialRoot = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
   final socialFeedViewModel =
       socialRoot.createSocialFeedViewModel(userId: prefs.userId);
@@ -187,10 +200,17 @@ void main() async {
   // Wire local notification display for new social posts.
   socialFeedViewModel.onNewPost = notificationService.showNewPostNotification;
 
+  // Eagerly load social feed so tweets are available on detail charts
+  // without needing to visit the feed screen first.
+  socialFeedViewModel.loadSubscriptions();
+
   final lifecycleManager = AppLifecycleManager()..init();
 
   final navigatorKey = GlobalKey<NavigatorState>();
   NotificationRouter? notificationRouter;
+
+  // Route to the right screen when the user taps a local notification.
+  notificationService.onTap = (data) => notificationRouter?.handle(data);
 
   runApp(bootstrapApp(
     config: config,
@@ -218,8 +238,16 @@ void main() async {
       notificationRouter?.handle(message.data);
     });
 
-    // Foreground: refresh social feed when a social push arrives while visible.
+    // Foreground: show local notification + refresh social feed if applicable.
     FirebaseMessaging.onMessage.listen((message) {
+      final notification = message.notification;
+      if (notification != null) {
+        notificationService.show(
+          title: notification.title ?? '',
+          body: notification.body,
+          payload: message.data.cast<String, dynamic>(),
+        );
+      }
       final type = message.data['type'];
       if (type == 'twitter') {
         socialFeedViewModel.refreshFeeds();

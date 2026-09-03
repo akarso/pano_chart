@@ -4,14 +4,15 @@ import "context"
 
 // NotificationConfig holds per-user notification preferences and thresholds.
 type NotificationConfig struct {
-	UserID     string
-	Social     bool
-	Macro      bool
-	News       bool
-	Uptrend    bool
-	Downtrend  bool
-	Sideways   bool
-	SetupOfDay bool
+	UserID        string
+	Social        bool
+	MacroHigh     bool
+	MacroModerate bool
+	News          bool
+	Uptrend       bool
+	Downtrend     bool
+	Sideways      bool
+	SetupOfDay    bool
 
 	UptrendMinDominance   float64
 	DowntrendMinDominance float64
@@ -29,7 +30,8 @@ func DefaultNotificationConfig(userID string) NotificationConfig {
 	return NotificationConfig{
 		UserID:                userID,
 		Social:                true,
-		Macro:                 true,
+		MacroHigh:             true,
+		MacroModerate:         true,
 		News:                  true,
 		Uptrend:               true,
 		Downtrend:             true,

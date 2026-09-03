@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -92,52 +93,71 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 		symbol.String(), interval, startMs, endMs,
 	)
 	fmt.Printf("[freetier] Binance URL: %s\n", binanceURL)
-	if r.rateLimiter != nil {
-		r.rateLimiter.Acquire()
-		defer r.rateLimiter.Release()
-	}
-	resp, err := r.client.Get(binanceURL)
-	if err != nil {
-		return domain.CandleSeries{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == 409 || resp.StatusCode == 429 {
-		atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
-		return domain.CandleSeries{}, fmt.Errorf("rate limited: %d", resp.StatusCode)
-	}
-	if resp.StatusCode != 200 {
-		atomic.AddInt64(&metrics.GlobalMetrics.FetchErrors, 1)
-		return domain.CandleSeries{}, fmt.Errorf("unexpected status: %d", resp.StatusCode)
-	}
-	var raw [][]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return domain.CandleSeries{}, err
-	}
-	candles := make([]domain.Candle, 0, len(raw))
-	for _, arr := range raw {
-		if len(arr) < 6 {
-			return domain.CandleSeries{}, fmt.Errorf("binance: expected at least 6 fields, got %d", len(arr))
+
+	const maxRetries = 3
+	backoff := 500 * time.Millisecond
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if r.rateLimiter != nil {
+			r.rateLimiter.Acquire()
+			defer r.rateLimiter.Release()
 		}
-		ts, _ := arr[0].(float64)
-		open, _ := arr[1].(string)
-		high, _ := arr[2].(string)
-		low, _ := arr[3].(string)
-		closep, _ := arr[4].(string)
-		volume, _ := arr[5].(string)
-		openF, _ := strconv.ParseFloat(open, 64)
-		highF, _ := strconv.ParseFloat(high, 64)
-		lowF, _ := strconv.ParseFloat(low, 64)
-		closeF, _ := strconv.ParseFloat(closep, 64)
-		volF, _ := strconv.ParseFloat(volume, 64)
-		tm := time.UnixMilli(int64(ts)).UTC()
-		c, err := domain.NewCandle(symbol, timeframe, tm, openF, highF, lowF, closeF, volF)
+		req, err := http.NewRequestWithContext(context.Background(), "GET", binanceURL, nil)
 		if err != nil {
 			return domain.CandleSeries{}, err
 		}
-		candles = append(candles, c)
+		req.Header.Set("User-Agent", "PanoChart/1.0")
+		resp, err := r.client.Do(req)
+		if err != nil {
+			return domain.CandleSeries{}, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode == 409 || resp.StatusCode == 429 {
+			_ = resp.Body.Close()
+			atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
+			if attempt < maxRetries {
+				fmt.Printf("[freetier] 429 on %s, backing off %v (attempt %d/%d)\n", symbol.String(), backoff, attempt+1, maxRetries)
+				time.Sleep(backoff)
+				backoff *= 2
+				continue
+			}
+			return domain.CandleSeries{}, fmt.Errorf("rate limited: %d", resp.StatusCode)
+		}
+		if resp.StatusCode != 200 {
+			atomic.AddInt64(&metrics.GlobalMetrics.FetchErrors, 1)
+			return domain.CandleSeries{}, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		}
+		var raw [][]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			return domain.CandleSeries{}, err
+		}
+		candles := make([]domain.Candle, 0, len(raw))
+		for _, arr := range raw {
+			if len(arr) < 6 {
+				return domain.CandleSeries{}, fmt.Errorf("binance: expected at least 6 fields, got %d", len(arr))
+			}
+			ts, _ := arr[0].(float64)
+			open, _ := arr[1].(string)
+			high, _ := arr[2].(string)
+			low, _ := arr[3].(string)
+			closep, _ := arr[4].(string)
+			volume, _ := arr[5].(string)
+			openF, _ := strconv.ParseFloat(open, 64)
+			highF, _ := strconv.ParseFloat(high, 64)
+			lowF, _ := strconv.ParseFloat(low, 64)
+			closeF, _ := strconv.ParseFloat(closep, 64)
+			volF, _ := strconv.ParseFloat(volume, 64)
+			tm := time.UnixMilli(int64(ts)).UTC()
+			c, err := domain.NewCandle(symbol, timeframe, tm, openF, highF, lowF, closeF, volF)
+			if err != nil {
+				return domain.CandleSeries{}, err
+			}
+			candles = append(candles, c)
+		}
+		atomic.AddInt64(&metrics.GlobalMetrics.FetchSuccesses, 1)
+		return domain.NewCandleSeries(symbol, timeframe, candles)
 	}
-	atomic.AddInt64(&metrics.GlobalMetrics.FetchSuccesses, 1)
-	return domain.NewCandleSeries(symbol, timeframe, candles)
+	return domain.CandleSeries{}, fmt.Errorf("rate limited after %d retries", maxRetries)
 }
 
 // GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
