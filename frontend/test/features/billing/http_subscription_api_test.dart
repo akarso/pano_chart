@@ -38,7 +38,9 @@ void main() {
         final body = jsonDecode(capturedBody!) as Map<String, dynamic>;
         expect(body['provider'], 'google_play');
         expect(body['purchaseToken'], 'tok_abc');
-        expect(body['userId'], 'user_1');
+        // userId is deliberately NOT sent — this endpoint has no
+        // migration-window fallback, only the Authorization header counts.
+        expect(body.containsKey('userId'), isFalse);
       });
 
       test('throws on non-200 response', () async {

@@ -23,14 +23,14 @@ class HttpSubscriptionApi implements SubscriptionApi {
     required String purchaseToken,
     required String userId,
   }) async {
-    // userId is still sent as a migration-window fallback (backend PR-071)
-    // for a pre-PR-070 client with no secret yet — the backend only reads
-    // it when there's no verified Authorization header.
+    // userId is intentionally NOT sent — /api/payments/verify has no
+    // migration-window fallback at all (backend PR-071), it derives
+    // purchase ownership exclusively from the Authorization header. The
+    // parameter stays for interface stability across call sites.
     final uri = Uri.parse('$baseUrl/api/payments/verify');
     final body = jsonEncode({
       'provider': provider,
       'purchaseToken': purchaseToken,
-      'userId': userId,
     });
     final response = await sendAuthenticated(
       (headers) => client.post(uri, body: body, headers: headers),
