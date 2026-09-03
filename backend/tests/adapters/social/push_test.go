@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	adhttp "pano_chart/backend/adapters/http"
+	"pano_chart/backend/adapters/http/middleware"
 	appsocial "pano_chart/backend/application/social"
 	domain "pano_chart/backend/domain/social"
 	infrasocial "pano_chart/backend/infrastructure/social"
@@ -68,14 +70,19 @@ func newMemDeviceStore() *memDeviceStore {
 func (s *memDeviceStore) Register(userID, deviceID, fcmToken, platform string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.devices[deviceID]; ok && existing.userID != userID {
+		return appsocial.ErrDeviceOwnedByAnotherUser
+	}
 	s.devices[deviceID] = deviceEntry{userID: userID, fcmToken: fcmToken, platform: platform}
 	return nil
 }
 
-func (s *memDeviceStore) Unregister(deviceID string) error {
+func (s *memDeviceStore) Unregister(userID, deviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.devices, deviceID)
+	if e, ok := s.devices[deviceID]; ok && e.userID == userID {
+		delete(s.devices, deviceID)
+	}
 	return nil
 }
 
@@ -168,7 +175,7 @@ func TestSQLiteDeviceStore_Unregister(t *testing.T) {
 	}
 
 	_ = store.Register("u1", "d1", "tok-aaa", "android")
-	_ = store.Unregister("d1")
+	_ = store.Unregister("u1", "d1")
 
 	tokens, err := store.TokensForUsers([]string{"u1"})
 	if err != nil {
@@ -176,6 +183,89 @@ func TestSQLiteDeviceStore_Unregister(t *testing.T) {
 	}
 	if len(tokens) != 0 {
 		t.Fatalf("expected 0 tokens after unregister, got %d", len(tokens))
+	}
+}
+
+func TestSQLiteDeviceStore_Register_CrossUserDeviceIDReuse_Rejected(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	store, err := infrasocial.NewSQLiteDeviceStoreFromDB(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	if err := store.Register("u1", "d1", "tok-aaa", "android"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// u2 tries to claim u1's device_id — must be rejected, not reassigned.
+	err = store.Register("u2", "d1", "tok-evil", "android")
+	if !errors.Is(err, appsocial.ErrDeviceOwnedByAnotherUser) {
+		t.Fatalf("expected ErrDeviceOwnedByAnotherUser, got %v", err)
+	}
+
+	tokens, err := store.TokensForUsers([]string{"u1"})
+	if err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0] != "tok-aaa" {
+		t.Fatalf("expected d1 to still belong to u1 with original token, got %v", tokens)
+	}
+
+	tokens, err = store.TokensForUsers([]string{"u2"})
+	if err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+	if len(tokens) != 0 {
+		t.Fatalf("expected u2 to have no tokens, got %v", tokens)
+	}
+}
+
+func TestSQLiteDeviceStore_Register_SameUser_UpdatesToken(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	store, err := infrasocial.NewSQLiteDeviceStoreFromDB(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	if err := store.Register("u1", "d1", "tok-old", "android"); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	// Legitimate token refresh — same user, same device.
+	if err := store.Register("u1", "d1", "tok-new", "android"); err != nil {
+		t.Fatalf("re-register: %v", err)
+	}
+
+	tokens, err := store.TokensForUsers([]string{"u1"})
+	if err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+	if len(tokens) != 1 || tokens[0] != "tok-new" {
+		t.Fatalf("expected refreshed token tok-new, got %v", tokens)
+	}
+}
+
+func TestSQLiteDeviceStore_Unregister_WrongUser_DoesNotDelete(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+
+	store, err := infrasocial.NewSQLiteDeviceStoreFromDB(db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+
+	_ = store.Register("u1", "d1", "tok-aaa", "android")
+	_ = store.Unregister("u2", "d1") // not the owner
+
+	tokens, err := store.TokensForUsers([]string{"u1"})
+	if err != nil {
+		t.Fatalf("tokens: %v", err)
+	}
+	if len(tokens) != 1 {
+		t.Fatalf("expected device to survive unregister by a different user, got %d tokens", len(tokens))
 	}
 }
 
@@ -448,8 +538,9 @@ func TestDeviceRegisterHandler_Success(t *testing.T) {
 	store := newMemDeviceStore()
 	handler := adhttp.NewDeviceRegisterHandler(store)
 
-	body := `{"user_id":"u1","device_id":"d1","fcm_token":"tok-123","platform":"android"}`
+	body := `{"device_id":"d1","fcm_token":"tok-123","platform":"android"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/device/register", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -510,6 +601,25 @@ func TestDeviceRegisterHandler_WrongMethod(t *testing.T) {
 	}
 }
 
+func TestDeviceRegisterHandler_CrossUserDeviceIDReuse_409(t *testing.T) {
+	store := newMemDeviceStore()
+	_ = store.Register("u1", "d1", "tok-aaa", "android")
+
+	handler := adhttp.NewDeviceRegisterHandler(store)
+
+	body := `{"device_id":"d1","fcm_token":"tok-evil","platform":"android"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/device/register", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u2")) // not the owner
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDeviceUnregisterHandler_Success(t *testing.T) {
 	store := newMemDeviceStore()
 	_ = store.Register("u1", "d1", "tok-123", "android")
@@ -518,6 +628,7 @@ func TestDeviceUnregisterHandler_Success(t *testing.T) {
 
 	body := `{"device_id":"d1"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/device/unregister", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -525,6 +636,35 @@ func TestDeviceUnregisterHandler_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	tokens, _ := store.TokensForUsers([]string{"u1"})
+	if len(tokens) != 0 {
+		t.Fatalf("expected device to be unregistered, got %d tokens", len(tokens))
+	}
+}
+
+func TestDeviceUnregisterHandler_WrongUser_DoesNotDelete(t *testing.T) {
+	store := newMemDeviceStore()
+	_ = store.Register("u1", "d1", "tok-123", "android")
+
+	handler := adhttp.NewDeviceUnregisterHandler(store)
+
+	body := `{"device_id":"d1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/device/unregister", bytes.NewBufferString(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u2")) // not the owner
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	tokens, _ := store.TokensForUsers([]string{"u1"})
+	if len(tokens) != 1 {
+		t.Fatalf("expected device to survive unregister by a different user, got %d tokens", len(tokens))
 	}
 }
 

@@ -1,6 +1,15 @@
 package social
 
-import domain "pano_chart/backend/domain/social"
+import (
+	"errors"
+
+	domain "pano_chart/backend/domain/social"
+)
+
+// ErrDeviceOwnedByAnotherUser is returned by DeviceTokenStore.Register when
+// deviceID is already registered to a different user — Register no longer
+// silently reassigns ownership.
+var ErrDeviceOwnedByAnotherUser = errors.New("device already registered to a different user")
 
 // AccountStore persists tracked social accounts.
 type AccountStore interface {
@@ -48,11 +57,14 @@ type SubscriptionStore interface {
 
 // DeviceTokenStore persists FCM device tokens keyed by user.
 type DeviceTokenStore interface {
-	// Register stores or updates a device's FCM token for a user.
+	// Register stores or updates a device's FCM token for a user. If
+	// deviceID already belongs to a different user, returns
+	// ErrDeviceOwnedByAnotherUser instead of silently reassigning it.
 	Register(userID, deviceID, fcmToken, platform string) error
 
-	// Unregister removes a device token.
-	Unregister(deviceID string) error
+	// Unregister removes a device token, scoped to the owning user so one
+	// user cannot remove another user's registration.
+	Unregister(userID, deviceID string) error
 
 	// TokensForUsers returns all distinct FCM tokens for the given user IDs.
 	TokensForUsers(userIDs []string) ([]string, error)

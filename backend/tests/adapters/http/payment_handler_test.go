@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adhttp "pano_chart/backend/adapters/http"
+	"pano_chart/backend/adapters/http/middleware"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -134,7 +135,8 @@ func TestSubscriptionStatusHandler_Active(t *testing.T) {
 	svc := &fakeSubscriptionService{sub: sub, found: true}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status?userId=user1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status", nil)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -153,7 +155,8 @@ func TestSubscriptionStatusHandler_NoSubscription(t *testing.T) {
 	svc := &fakeSubscriptionService{found: false}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status?userId=nobody", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status", nil)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "nobody"))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -167,22 +170,23 @@ func TestSubscriptionStatusHandler_NoSubscription(t *testing.T) {
 	assert.Equal(t, false, result["active"])
 }
 
-func TestSubscriptionStatusHandler_MissingUserID(t *testing.T) {
+func TestSubscriptionStatusHandler_NoAuthContext_Panics(t *testing.T) {
 	svc := &fakeSubscriptionService{}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status", nil)
 	w := httptest.NewRecorder()
 
-	handler.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	// Simulates a wiring bug (handler registered without RequireAuth) —
+	// must fail loudly, not silently trust a missing/forged identity.
+	assert.Panics(t, func() { handler.ServeHTTP(w, req) })
 }
 
 func TestSubscriptionStatusHandler_MethodNotAllowed(t *testing.T) {
 	svc := &fakeSubscriptionService{}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/subscription/status?userId=u1", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/subscription/status", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -193,7 +197,8 @@ func TestSubscriptionStatusHandler_ServiceError(t *testing.T) {
 	svc := &fakeSubscriptionService{err: fmt.Errorf("db down")}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status?userId=u1", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status", nil)
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)

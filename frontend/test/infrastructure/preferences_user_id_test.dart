@@ -41,4 +41,36 @@ void main() {
       expect(svc2.userId, id1);
     });
   });
+
+  group('PreferencesService.deviceSecret', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+    });
+
+    test('is null until claimed', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final svc = PreferencesService(prefs);
+
+      expect(svc.deviceSecret, isNull);
+    });
+
+    test('persists across PreferencesService instances once set', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final svc1 = PreferencesService(prefs);
+      svc1.deviceSecret = 'abc-secret';
+
+      final svc2 = PreferencesService(prefs);
+      expect(svc2.deviceSecret, 'abc-secret');
+    });
+
+    test('can be cleared by setting null', () async {
+      final prefs = await SharedPreferences.getInstance();
+      final svc = PreferencesService(prefs);
+      svc.deviceSecret = 'abc-secret';
+
+      svc.deviceSecret = null;
+
+      expect(svc.deviceSecret, isNull);
+    });
+  });
 }

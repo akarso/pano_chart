@@ -31,10 +31,13 @@ Widget bootstrapApp({
   AppLifecycleManager? lifecycleManager,
   GlobalKey<NavigatorState>? navigatorKey,
   void Function(NotificationRouter router)? onRouterReady,
+  Future<void> Function()? onUnauthorized,
 }) {
   final root = CompositionRoot(
     apiBaseUrl: config.apiBaseUrl,
     stablecoinPadding: stablecoins.count,
+    authSecretProvider: prefs != null ? () => prefs.deviceSecret : null,
+    onUnauthorized: onUnauthorized,
   );
   final overviewViewModel = root.createOverviewViewModel();
   final getCandleSeries = root.createGetCandleSeries();
@@ -126,12 +129,42 @@ void main() async {
   final prefs = await PreferencesService.create();
   final stablecoins = await loadStablecoinConfig();
 
+  const config =
+      AppConfig(apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
+
+  // One long-lived client/root for device-identity calls — reused for both
+  // the initial claim below and any later re-claim on 401, rather than
+  // spinning up (and leaking) a fresh http.Client per call.
+  final authApi = CompositionRoot(apiBaseUrl: config.apiBaseUrl)
+      .createDeviceAuthApi();
+  Future<void> reclaimDeviceSecret() async {
+    try {
+      final claim = await authApi.claim(existingUserId: prefs.userId);
+      prefs.deviceSecret = claim.secret;
+    } catch (_) {
+      // Backend unreachable, or this user ID was already claimed by an
+      // earlier install (see backend PR-070 first-claim-wins). Callers see
+      // the resulting 401 and handle it as they already do.
+    }
+  }
+
+  // Claim (or refresh) a server-issued device identity before any
+  // authenticated API call is made. existingUserId binds the secret to the
+  // locally-generated ID this install already has, so pre-existing
+  // subscription/notification history isn't lost on update.
+  if (prefs.deviceSecret == null) {
+    await reclaimDeviceSecret();
+  }
+  String? authSecretProvider() => prefs.deviceSecret;
+
   // Billing is only available on Android.
   BillingManager? billingManager;
   if (defaultTargetPlatform == TargetPlatform.android) {
-    const config = AppConfig(
-        apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
-    final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+    final root = CompositionRoot(
+      apiBaseUrl: config.apiBaseUrl,
+      authSecretProvider: authSecretProvider,
+      onUnauthorized: reclaimDeviceSecret,
+    );
     final trialManager = TrialManager(prefs.sharedPreferences);
     billingManager = root.createBillingManager(
       userId: prefs.userId,
@@ -141,15 +174,19 @@ void main() async {
   } else if (kDebugMode) {
     // Non-Android debug builds: create a BillingManager without init()
     // so the debug billing toggle works for testing free/pro gates.
-    const config = AppConfig(
-      apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
-    final root = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+    final root = CompositionRoot(
+      apiBaseUrl: config.apiBaseUrl,
+      authSecretProvider: authSecretProvider,
+      onUnauthorized: reclaimDeviceSecret,
+    );
     billingManager = root.createBillingManager(userId: prefs.userId);
   }
 
-  const config = AppConfig(
-    apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
-  final socialRoot = CompositionRoot(apiBaseUrl: config.apiBaseUrl);
+  final socialRoot = CompositionRoot(
+    apiBaseUrl: config.apiBaseUrl,
+    authSecretProvider: authSecretProvider,
+    onUnauthorized: reclaimDeviceSecret,
+  );
   final socialFeedViewModel =
       socialRoot.createSocialFeedViewModel(userId: prefs.userId);
   socialFeedViewModel.attachPrefs(prefs);
@@ -221,6 +258,7 @@ void main() async {
     lifecycleManager: lifecycleManager,
     navigatorKey: navigatorKey,
     onRouterReady: (router) => notificationRouter = router,
+    onUnauthorized: reclaimDeviceSecret,
   ));
 
   // ── Deep link handling for push notifications ──

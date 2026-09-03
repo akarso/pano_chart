@@ -77,26 +77,45 @@ func (s *SQLiteDeviceStore) migrate() error {
 	return nil
 }
 
-// Register stores or updates a device's FCM token for a user.
+// Register stores or updates a device's FCM token for a user. The upsert's
+// WHERE guard makes the ownership check atomic with the write: if deviceID
+// already belongs to a different user, the ON CONFLICT branch is skipped
+// entirely (SQLite UPSERT semantics) rather than reassigning it.
 func (s *SQLiteDeviceStore) Register(userID, deviceID, fcmToken, platform string) error {
-	_, err := s.db.Exec(`INSERT INTO device_tokens (user_id, device_id, fcm_token, platform, updated_at)
+	res, err := s.db.Exec(`INSERT INTO device_tokens (user_id, device_id, fcm_token, platform, updated_at)
 		VALUES (?, ?, ?, ?, datetime('now'))
 		ON CONFLICT(device_id) DO UPDATE SET
-			user_id    = excluded.user_id,
 			fcm_token  = excluded.fcm_token,
 			platform   = excluded.platform,
-			updated_at = datetime('now')`,
+			updated_at = datetime('now')
+		WHERE device_tokens.user_id = excluded.user_id`,
 		userID, deviceID, fcmToken, platform,
 	)
 	if err != nil {
 		return fmt.Errorf("register device: %w", err)
 	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("register device: %w", err)
+	}
+	if affected == 0 {
+		// The conflict branch's WHERE guard rejected the write — the row
+		// exists and belongs to someone else. Confirm before reporting
+		// (defensive; this read isn't what makes the check race-free, the
+		// WHERE guard above already is).
+		var existingUser string
+		lookupErr := s.db.QueryRow(`SELECT user_id FROM device_tokens WHERE device_id = ?`, deviceID).Scan(&existingUser)
+		if lookupErr == nil && existingUser != userID {
+			return appsocial.ErrDeviceOwnedByAnotherUser
+		}
+	}
 	return nil
 }
 
-// Unregister removes a device token.
-func (s *SQLiteDeviceStore) Unregister(deviceID string) error {
-	_, err := s.db.Exec(`DELETE FROM device_tokens WHERE device_id = ?`, deviceID)
+// Unregister removes a device token, scoped to the owning user.
+func (s *SQLiteDeviceStore) Unregister(userID, deviceID string) error {
+	_, err := s.db.Exec(`DELETE FROM device_tokens WHERE device_id = ? AND user_id = ?`, deviceID, userID)
 	if err != nil {
 		return fmt.Errorf("unregister device: %w", err)
 	}

@@ -60,13 +60,37 @@ void main() {
           throwsException,
         );
       });
+
+      test(
+          'does not attach Authorization header — server does not check it yet (PR-071)',
+          () async {
+        String? authHeader;
+        final client = MockClient((req) async {
+          authHeader = req.headers['Authorization'];
+          return http.Response('', 200);
+        });
+
+        final api = HttpSubscriptionApi(
+          client: client,
+          baseUrl: 'http://localhost:8080',
+          getAuthSecret: () => 'my-secret',
+        );
+
+        await api.verifyPurchase(
+          provider: 'google_play',
+          purchaseToken: 'tok',
+          userId: 'u1',
+        );
+
+        expect(authHeader, isNull);
+      });
     });
 
     group('getStatus', () {
       test('parses active subscription with expiry', () async {
         final client = MockClient((req) async {
           expect(req.url.toString(),
-              'http://localhost:8080/api/subscription/status?userId=user_1');
+              'http://localhost:8080/api/subscription/status');
           return http.Response(
             jsonEncode({
               'active': true,
@@ -116,6 +140,53 @@ void main() {
         );
 
         expect(() => api.getStatus('user_1'), throwsException);
+      });
+
+      test('retries once after 401 with a re-claimed secret', () async {
+        var callCount = 0;
+        var reclaimCalled = false;
+        var secret = 'stale-secret';
+
+        final client = MockClient((req) async {
+          callCount++;
+          if (req.headers['Authorization'] == 'Bearer stale-secret') {
+            return http.Response('unauthorized', 401);
+          }
+          return http.Response(jsonEncode({'active': true}), 200);
+        });
+
+        final api = HttpSubscriptionApi(
+          client: client,
+          baseUrl: 'http://localhost:8080',
+          getAuthSecret: () => secret,
+          onUnauthorized: () async {
+            reclaimCalled = true;
+            secret = 'fresh-secret';
+          },
+        );
+
+        final status = await api.getStatus('user_1');
+
+        expect(callCount, 2);
+        expect(reclaimCalled, isTrue);
+        expect(status.active, isTrue);
+      });
+
+      test('does not retry when onUnauthorized is not provided', () async {
+        var callCount = 0;
+        final client = MockClient((req) async {
+          callCount++;
+          return http.Response('unauthorized', 401);
+        });
+
+        final api = HttpSubscriptionApi(
+          client: client,
+          baseUrl: 'http://localhost:8080',
+          getAuthSecret: () => 'secret',
+        );
+
+        await expectLater(api.getStatus('user_1'), throwsException);
+        expect(callCount, 1);
       });
     });
   });

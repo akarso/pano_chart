@@ -12,7 +12,7 @@ void main() {
       final client = MockClient((request) async {
         expect(request.method, 'GET');
         expect(request.url.path, '/api/notification/config');
-        expect(request.url.queryParameters['user_id'], 'u1');
+        expect(request.url.queryParameters.containsKey('user_id'), isFalse);
 
         return http.Response(
           jsonEncode({
@@ -60,6 +60,24 @@ void main() {
       expect(s.downtrendTimeframe, '4h');
       expect(s.sidewaysTimeframe, '1d');
       expect(s.setupTimeframe, '5m');
+    });
+
+    test('fetch attaches Authorization header when a secret is available',
+        () async {
+      String? authHeader;
+      final client = MockClient((request) async {
+        authHeader = request.headers['Authorization'];
+        return http.Response(jsonEncode({'user_id': 'u1'}), 200);
+      });
+
+      final api = HttpNotificationConfigApi(
+        client: client,
+        baseUrl: 'http://localhost:8080',
+        getAuthSecret: () => 'my-secret',
+      );
+
+      await api.fetch('u1');
+      expect(authHeader, 'Bearer my-secret');
     });
 
     test('fetch throws on non-200', () async {
