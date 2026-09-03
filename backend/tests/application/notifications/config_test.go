@@ -162,6 +162,7 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -191,6 +192,102 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	}
 	if rec.n.Type != notifications.TypeMarket {
 		t.Fatalf("expected TypeMarket, got %s", rec.n.Type)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
+		Bias:   "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 per-user downtrend notification, got %d", spy.userCount())
+	}
+	if spy.lastUserSend().userID != "u1" {
+		t.Fatalf("expected user u1, got %s", spy.lastUserSend().userID)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_DoesNotFireOnExpansion(t *testing.T) {
+	// Regression test for the PR-072 bug: Downtrend used to read
+	// Scores.Expansion (breakout activity) with no direction check at
+	// all — a high-Expansion, bullish (or even neutral) regime must NOT
+	// trigger a "Downtrend" alert.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Expansion: 0.90, Trend: 0.10},
+		Bias:   "up", // strong breakout, but to the upside
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no downtrend notification for a bullish expansion regime, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_PerUser_MarketUptrend_DoesNotFireOnBearishRegime(t *testing.T) {
+	// Symmetric regression test: a strong trend score with a bearish bias
+	// must not satisfy an Uptrend subscription.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
+		Bias:   "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "u1",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no uptrend notification during a confirmed decline, got %d", spy.userCount())
 	}
 }
 
@@ -383,8 +480,8 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
 		summaries: map[string]mkt.RegimeSummary{
-			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}},
-			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}},
+			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}, Bias: "up"},
 		},
 	}
 

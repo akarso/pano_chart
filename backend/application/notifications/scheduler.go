@@ -310,9 +310,14 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	case mkt.RegimeSideways:
 		msg = "Market mostly sideways today"
 	case mkt.RegimeTrend:
-		if summary.Label != "" {
+		switch {
+		case summary.Label != "":
 			msg = summary.Label
-		} else {
+		case summary.Bias == "up":
+			msg = "Market trending up today"
+		case summary.Bias == "down":
+			msg = "Market trending down today"
+		default:
 			msg = "Market trending today"
 		}
 	case mkt.RegimeCompression:
@@ -354,10 +359,13 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 
 	var candidates []candidate
 
-	// Uptrend — maps to Scores.Trend.
+	// Uptrend — maps to Scores.Trend, gated on the regime's actual
+	// direction (sum.Bias, an aggregate-return-based signal already
+	// computed correctly in MetricsService.CalculateRegime — see PR-072).
 	// Skip if the regime is indecisive — nothing actionable.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok &&
+			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "up" {
 			p := sum.Scores.Trend
 			if p >= cfg.UptrendMinDominance {
 				lbl := "Uptrend"
@@ -368,12 +376,21 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 			}
 		}
 	}
-	// Downtrend — maps to Scores.Expansion (breakout/expansion activity).
+	// Downtrend — maps to Scores.Trend gated on sum.Bias == "down". This
+	// used to read Scores.Expansion (breakout/expansion activity, nothing
+	// to do with direction) — a "Downtrend" subscriber was getting
+	// breakout alerts and never anything about actual declines. Fixed in
+	// PR-072.
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
-			p := sum.Scores.Expansion
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok &&
+			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "down" {
+			p := sum.Scores.Trend
 			if p >= cfg.DowntrendMinDominance {
-				candidates = append(candidates, candidate{"Expansion", p, cfg.DowntrendTimeframe})
+				lbl := "Downtrend"
+				if sum.Label != "" {
+					lbl = sum.Label
+				}
+				candidates = append(candidates, candidate{lbl, p, cfg.DowntrendTimeframe})
 			}
 		}
 	}

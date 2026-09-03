@@ -15,9 +15,27 @@ func (c *TrendPredictabilityScoreCalculator) Name() string {
 }
 
 func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (float64, error) {
+	score, _, err := c.ScoreWithDirection(series)
+	return score, err
+}
+
+// ScoreWithDirection is Score plus the trend's direction, derived from the
+// same linear-regression slope that already determines the score's
+// magnitude — it's the sign Score() computed and then discarded via
+// math.Abs. bias is "up", "down", or "neutral" (flat/no-trend cases: too
+// few candles, zero-variance series, or a clustered/bimodal series that
+// isn't a real trend at all).
+//
+// This is the canonical direction source for anything that needs to know
+// which way *this specific* trend score points (setup classification,
+// trend-health computation) — see PR-072 for why this is kept separate
+// from the market-wide aggregate-return bias used elsewhere
+// (mkt.RegimeSummary.Bias / domain.EvaluationSnapshot.Bias): different
+// signal, different purpose, not a substitute for each other.
+func (c *TrendPredictabilityScoreCalculator) ScoreWithDirection(series domain.CandleSeries) (score float64, bias string, err error) {
 	n := series.Len()
 	if n < 2 {
-		return 0, fmt.Errorf("at least 2 candles required")
+		return 0, "neutral", fmt.Errorf("at least 2 candles required")
 	}
 	closes := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -40,7 +58,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 		den += (float64(i) - meanX) * (float64(i) - meanX)
 	}
 	if den == 0 {
-		return 0, fmt.Errorf("zero denominator in regression")
+		return 0, "neutral", fmt.Errorf("zero denominator in regression")
 	}
 	b := num / den // slope
 	// R^2 goodness of fit
@@ -51,7 +69,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 		ssRes += (closes[i] - fit) * (closes[i] - fit)
 	}
 	if ssTot == 0 {
-		return 0, nil // flat line
+		return 0, "neutral", nil // flat line
 	}
 	R2 := 1 - ssRes/ssTot
 	// Normalize slope by price range
@@ -66,9 +84,17 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	}
 	rangeClose := maxClose - minClose
 	if rangeClose == 0 {
-		return 0, nil // flat line
+		return 0, "neutral", nil // flat line
 	}
 	slopeNorm := b / rangeClose
+
+	bias = "neutral"
+	switch {
+	case slopeNorm > 0:
+		bias = "up"
+	case slopeNorm < 0:
+		bias = "down"
+	}
 
 	// Cluster gate: if close prices form two distinct price levels —
 	// like a step function (-|_) — the movement is a regime shift, not
@@ -77,7 +103,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	// candles, ensuring we catch real bimodal distributions (plateaus)
 	// rather than false-positiving on evenly-spaced linear data.
 	if closePricesClustered(closes) {
-		return 0, nil
+		return 0, "neutral", nil
 	}
 
 	// Shape validation: penalize trends whose visual shape contradicts
@@ -102,7 +128,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	if normalised > 1 {
 		normalised = 1
 	}
-	return normalised, nil
+	return normalised, bias, nil
 }
 
 // trendShapePenalty inspects the visual shape of the chart to penalize

@@ -228,6 +228,7 @@ func TestScheduler_SubscriptionGating_MarketSuppressedForFreeUser(t *testing.T) 
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.85},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -259,6 +260,7 @@ func TestScheduler_SubscriptionGating_MarketSentToProUser(t *testing.T) {
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.85},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -321,6 +323,7 @@ func TestScheduler_SubscriptionGating_MixedUsers(t *testing.T) {
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.85},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -355,6 +358,7 @@ func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.85},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()

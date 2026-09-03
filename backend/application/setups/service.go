@@ -11,6 +11,7 @@ import (
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/risk"
+	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
 )
 
@@ -137,7 +138,7 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 		return "sideways", 0
 	}
 
-	regime := dominantRegime(stats.Scores)
+	regime := dominantRegime(stats.Scores, series)
 
 	if regime != "uptrend" && regime != "downtrend" {
 		return regime, 0
@@ -155,7 +156,11 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 }
 
 // dominantRegime maps the highest-scoring dimension to a regime label.
-func dominantRegime(scores map[string]float64) string {
+// series is only consulted when trend is the dominant dimension, to
+// recover the actual direction — see
+// scoring.TrendPredictabilityScoreCalculator.ScoreWithDirection's doc for
+// why this is the canonical direction source, not a magnitude threshold.
+func dominantRegime(scores map[string]float64, series domain.CandleSeries) string {
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -174,10 +179,18 @@ func dominantRegime(scores map[string]float64) string {
 		return "compression"
 	}
 	if trend > sideways {
-		if trend > 0.5 {
-			return "uptrend" // simplified; direction not in scores
+		_, bias, err := (&scoring.TrendPredictabilityScoreCalculator{}).ScoreWithDirection(series)
+		switch {
+		case err != nil || bias == "neutral":
+			// No reliable direction (flat, clustered, or too little data)
+			// despite a nonzero trend score from other calculators —
+			// don't guess a direction that isn't there.
+			return "sideways"
+		case bias == "up":
+			return "uptrend"
+		default:
+			return "downtrend"
 		}
-		return "downtrend"
 	}
 	return "sideways"
 }
