@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/usecases"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/domain"
 )
 
 // NewGetCandleSeriesHandler constructs an http.HandlerFunc that adapts HTTP requests
@@ -32,6 +32,8 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 		}
 		tf, err := domain.NewTimeframe(tfStr)
 		if err != nil {
+			http.Error(w, "invalid timeframe", http.StatusBadRequest)
+
 			http.Error(w, "invalid timeframe", http.StatusBadRequest)
 			return
 		}

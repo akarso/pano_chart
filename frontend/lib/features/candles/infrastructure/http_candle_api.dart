@@ -35,7 +35,7 @@ class HttpCandleApi implements CandleApi {
       'to': request.to.toUtc().toIso8601String(),
     });
 
-    final res = await _client.get(uri);
+    final res = await _client.get(uri).timeout(const Duration(seconds: 15));
 
     if (res.statusCode == 200) {
       final body = jsonDecode(res.body) as Map<String, dynamic>;

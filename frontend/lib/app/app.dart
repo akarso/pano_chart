@@ -1,20 +1,47 @@
 import 'package:flutter/material.dart';
 import '../core/config/config.dart';
-import 'router.dart';
 
 /// Root App widget. Receives `AppConfig` via constructor injection.
+/// Optionally accepts a [home] widget to render as the root screen.
 class App extends StatelessWidget {
   final AppConfig config;
+  final Widget? home;
+  final GlobalKey<NavigatorState>? navigatorKey;
 
-  const App({Key? key, required this.config}) : super(key: key);
+  const App({Key? key, required this.config, this.home, this.navigatorKey})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Pano Chart',
-      onGenerateRoute: AppRouter.generate,
-      // Provide a simple theme so tests can pump without errors.
-      theme: ThemeData.light(),
+      navigatorKey: navigatorKey,
+      home: home != null
+          ? Scaffold(
+              body: home,
+              backgroundColor: Colors.black,
+              extendBody: true,
+              extendBodyBehindAppBar: true,
+            )
+          : null,
+      onGenerateRoute: home == null ? _placeholderRoute : null,
+      themeMode: ThemeMode.dark,
+      darkTheme: ThemeData.dark(useMaterial3: true).copyWith(
+        colorScheme: ThemeData.dark(useMaterial3: true).colorScheme.copyWith(
+          primary: const Color(0xFF00e6c0),
+          onPrimary: Colors.black,
+          secondary: const Color(0xFF00e6c0),
+          onSecondary: Colors.black,
+        ),
+      ),
+    );
+  }
+
+  static Route<dynamic> _placeholderRoute(RouteSettings settings) {
+    return MaterialPageRoute(
+      builder: (_) => const Scaffold(
+        body: Center(child: Text('Root Placeholder')),
+      ),
     );
   }
 }

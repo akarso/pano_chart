@@ -1,0 +1,30 @@
+# Exchange configurations for trade deep linking.
+#
+# Each entry specifies:
+#   name     – human-readable label
+#   urlTemplate – URL with {SYMBOL} placeholder (base currency only, e.g. BTC)
+#
+# The app will replace {SYMBOL} with the actual base symbol at runtime.
+# USDT is the assumed quote currency; exchanges that need it append it
+# themselves via the template.
+
+exchanges:
+  - id: binance
+    name: Binance
+    urlTemplate: "https://www.binance.com/trade/{SYMBOL}_USDT"
+
+  - id: mexc
+    name: MEXC
+    urlTemplate: "https://www.mexc.com/futures/{SYMBOL}_USDT?type=linear_swap"
+
+  - id: phemex
+    name: Phemex
+    urlTemplate: "https://phemex.com/futures/{SYMBOL}-USDT"
+
+  - id: hyperliquid
+    name: Hyperliquid
+    urlTemplate: "https://app.hyperliquid.xyz/trade/{SYMBOL}"
+
+  - id: bybit
+    name: Bybit
+    urlTemplate: "https://www.bybit.com/trade/spot/{SYMBOL}USDT"

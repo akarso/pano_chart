@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/domain"
 )
 
 // FakeCandleRepository is a stub implementation for testing the port contract.
@@ -21,6 +21,18 @@ func (f *FakeCandleRepository) GetSeries(
 	timeframe domain.Timeframe,
 	from time.Time,
 	to time.Time,
+) (domain.CandleSeries, error) {
+	if f.shouldErr {
+		return domain.CandleSeries{}, errors.New("fake error")
+	}
+	return f.series, nil
+}
+
+// GetLastNCandles implements CandleRepositoryPort.
+func (f *FakeCandleRepository) GetLastNCandles(
+	symbol domain.Symbol,
+	timeframe domain.Timeframe,
+	n int,
 ) (domain.CandleSeries, error) {
 	if f.shouldErr {
 		return domain.CandleSeries{}, errors.New("fake error")

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/usecases"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/usecases"
+	"pano_chart/backend/domain"
 )
 
 // fakeRepo records calls and can be configured to return a series or an error.
@@ -26,6 +26,13 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	f.lastTf = tf
 	f.lastFrom = from
 	f.lastTo = to
+	if f.err != nil {
+		return domain.CandleSeries{}, f.err
+	}
+	return f.series, nil
+}
+
+func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}

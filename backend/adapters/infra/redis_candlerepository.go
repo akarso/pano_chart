@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/domain"
 )
 
 // MinimalRedisClient is the minimal interface required by the decorator.
@@ -17,9 +17,9 @@ type MinimalRedisClient interface {
 
 // RedisCandleRepository is a caching decorator that implements ports.CandleRepositoryPort.
 type RedisCandleRepository struct {
-	client MinimalRedisClient
+	client  MinimalRedisClient
 	wrapped ports.CandleRepositoryPort
-	ttl    time.Duration
+	ttl     time.Duration
 }
 
 // NewRedisCandleRepository constructs the decorator. TTL must be > 0.
@@ -48,6 +48,7 @@ type payloadItem struct {
 // GetSeries implements the ports.CandleRepositoryPort interface.
 func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	key := cacheKey(symbol, tf, from.UTC(), to.UTC())
+	fmt.Printf("[RedisCandleRepository] GetSeries: symbol=%s, tf=%s, from=%s, to=%s\n", symbol.String(), tf.String(), from.Format(time.RFC3339), to.Format(time.RFC3339))
 
 	// Try cache
 	if r.client != nil {
@@ -72,6 +73,7 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 				}
 				// If successfully reconstructed all candles, return series
 				if len(candles) == len(items) {
+					fmt.Printf("[RedisCandleRepository] cache hit: symbol=%s, tf=%s, count=%d\n", symbol.String(), tf.String(), len(candles))
 					return domain.NewCandleSeries(symbol, tf, candles)
 				}
 			}
@@ -79,12 +81,86 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 	}
 
 	// Cache miss or client absent -> delegate to wrapped repository
+	fmt.Printf("[RedisCandleRepository] cache miss or client absent: symbol=%s, tf=%s\n", symbol.String(), tf.String())
 	series, err := r.wrapped.GetSeries(symbol, tf, from, to)
+	if err != nil {
+		fmt.Printf("[RedisCandleRepository] wrapped repo error: symbol=%s, tf=%s, err=%v\n", symbol.String(), tf.String(), err)
+		return domain.CandleSeries{}, err
+	}
+	all := series.All()
+	fmt.Printf("[RedisCandleRepository] wrapped repo returned: symbol=%s, tf=%s, count=%d\n", symbol.String(), tf.String(), len(all))
+
+	// Attempt to cache the result; ignore cache errors
+	if r.client != nil {
+		// ...existing code...
+		items := make([]payloadItem, 0, len(all))
+		for _, c := range all {
+			items = append(items, payloadItem{
+				Timestamp: c.Timestamp().Format(time.RFC3339),
+				Open:      c.Open(),
+				High:      c.High(),
+				Low:       c.Low(),
+				Close:     c.Close(),
+				Volume:    c.Volume(),
+			})
+		}
+		if len(items) > 0 {
+			if b, merr := json.Marshal(items); merr == nil {
+				_ = r.client.Set(key, b, r.ttl)
+			}
+		}
+	}
+
+	return series, nil
+}
+
+// GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
+// Results are cached in Redis with a key quantized to the current timeframe boundary,
+// so all callers within the same candle period share one cache entry.
+func (r *RedisCandleRepository) GetLastNCandles(symbol domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+	if n <= 0 {
+		return domain.NewCandleSeries(symbol, tf, []domain.Candle{})
+	}
+
+	// Quantize to current candle boundary so all calls within the same
+	// candle period produce the same cache key.
+	dur := tf.Duration()
+	boundary := time.Now().UTC().Truncate(dur)
+	key := fmt.Sprintf("lastN|%s|%s|%d|%s", symbol.String(), tf.String(), n, boundary.Format(time.RFC3339))
+
+	// Try cache
+	if r.client != nil {
+		b, err := r.client.Get(key)
+		if err == nil && len(b) > 0 {
+			var items []payloadItem
+			if err := json.Unmarshal(b, &items); err == nil && len(items) > 0 {
+				candles := make([]domain.Candle, 0, len(items))
+				for _, it := range items {
+					ts, perr := time.Parse(time.RFC3339, it.Timestamp)
+					if perr != nil {
+						break
+					}
+					c, cerr := domain.NewCandle(symbol, tf, ts.UTC(), it.Open, it.High, it.Low, it.Close, it.Volume)
+					if cerr != nil {
+						break
+					}
+					candles = append(candles, c)
+				}
+				if len(candles) == len(items) {
+					return domain.NewCandleSeries(symbol, tf, candles)
+				}
+			}
+		}
+	}
+
+	// Cache miss — delegate
+	series, err := r.wrapped.GetLastNCandles(symbol, tf, n)
 	if err != nil {
 		return domain.CandleSeries{}, err
 	}
 
-	// Attempt to cache the result; ignore cache errors
+	// Store in cache (best-effort). TTL = whichever is shorter: the configured
+	// TTL or the remaining time until the next candle boundary.
 	if r.client != nil {
 		all := series.All()
 		items := make([]payloadItem, 0, len(all))
@@ -100,7 +176,12 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 		}
 		if len(items) > 0 {
 			if b, merr := json.Marshal(items); merr == nil {
-				_ = r.client.Set(key, b, r.ttl)
+				ttl := r.ttl
+				untilNext := boundary.Add(dur).Sub(time.Now().UTC())
+				if untilNext > 0 && untilNext < ttl {
+					ttl = untilNext
+				}
+				_ = r.client.Set(key, b, ttl)
 			}
 		}
 	}

@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	adhttp "github.com/akarso/pano_chart/backend/adapters/http"
-	"github.com/akarso/pano_chart/backend/adapters/infra"
-	"github.com/akarso/pano_chart/backend/application/ports"
-	"github.com/akarso/pano_chart/backend/application/usecases"
+	adhttp "pano_chart/backend/adapters/http"
+	"pano_chart/backend/adapters/infra"
+	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/usecases"
 )
 
 // Config holds composition inputs. Fields are minimal and injectable for tests.
@@ -19,7 +19,7 @@ type Config struct {
 	Repo ports.CandleRepositoryPort
 	// Optional Redis client; if nil, no caching decorator is used.
 	RedisClient infra.MinimalRedisClient
-	CacheTTL   time.Duration
+	CacheTTL    time.Duration
 }
 
 // NewApp wires the application components and returns an http.Handler that can be used by a server.
@@ -41,7 +41,7 @@ func NewApp(cfg Config) (http.Handler, error) {
 			return nil, fmt.Errorf("API base URL required when no Repo provided")
 		}
 		// create free-tier repository using default http client
-		repo = infra.NewFreeTierCandleRepository(cfg.APIBaseURL, http.DefaultClient)
+		repo = infra.NewFreeTierCandleRepository(cfg.APIBaseURL, http.DefaultClient, nil)
 	}
 
 	// Optionally wrap with Redis decorator

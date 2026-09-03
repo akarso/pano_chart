@@ -1,5 +1,5 @@
 name: pano_chart_frontend
-description: Minimal frontend scaffold for Pano Chart (PR-001)
+description: Chart screener and structure ranking tool
 publish_to: 'none'
 version: 0.0.0
 environment:
@@ -10,10 +10,32 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^0.13.0
+  flutter_svg: ^2.0.9
+  shared_preferences: ^2.5.3
+  sensors_plus: ^6.1.1
+  url_launcher: ^6.2.1
+  yaml: ^3.1.2
+  in_app_purchase: ^3.2.0
+  firebase_core: ^4.5.0
+  firebase_messaging: ^16.1.2
+  flutter_local_notifications: ^18.0.1
+  flutter_markdown: ^0.7.7+1
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.14.1 
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon2.png"
+  adaptive_icon_foreground: "assets/icon2.png"
+  adaptive_icon_background: "#00e6c0"

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 func TestTimeframe_AcceptsSupportedValues(t *testing.T) {

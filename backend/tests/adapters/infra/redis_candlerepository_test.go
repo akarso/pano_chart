@@ -6,15 +6,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/adapters/infra"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/adapters/infra"
+	"pano_chart/backend/domain"
 )
 
 // fakeRedisClient is a test double for Redis operations.
 type fakeRedisClient struct {
-	store    map[string][]byte
-	getErr   error
-	setErr   error
+	store      map[string][]byte
+	getErr     error
+	setErr     error
 	lastSetKey string
 	lastSetTTL time.Duration
 }
@@ -53,6 +53,13 @@ type fakeRepo struct {
 
 func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	f.called = true
+	if f.err != nil {
+		return domain.CandleSeries{}, f.err
+	}
+	return f.series, nil
+}
+
+func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}

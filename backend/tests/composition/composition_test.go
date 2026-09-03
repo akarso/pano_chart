@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/akarso/pano_chart/backend/cmd/server"
-	"github.com/akarso/pano_chart/backend/domain"
+	"pano_chart/backend/cmd/server"
+	"pano_chart/backend/domain"
 )
 
 // fakeRepo implements ports.CandleRepositoryPort for tests.
@@ -25,24 +25,39 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	return f.series, nil
 }
 
+func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+	if f.err != nil {
+		return domain.CandleSeries{}, f.err
+	}
+	return f.series, nil
+}
+
 // fakeRedis for composition tests
 type fakeRedis struct {
-	store map[string][]byte
-	getErr error
-	setErr error
+	store   map[string][]byte
+	getErr  error
+	setErr  error
 	lastKey string
 	lastTTL time.Duration
 }
 
 func (f *fakeRedis) Get(key string) ([]byte, error) {
-	if f.getErr != nil { return nil, f.getErr }
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	b, ok := f.store[key]
-	if !ok { return nil, http.ErrNoLocation }
+	if !ok {
+		return nil, http.ErrNoLocation
+	}
 	return b, nil
 }
 func (f *fakeRedis) Set(key string, value []byte, ttl time.Duration) error {
-	if f.setErr != nil { return f.setErr }
-	if f.store == nil { f.store = make(map[string][]byte) }
+	if f.setErr != nil {
+		return f.setErr
+	}
+	if f.store == nil {
+		f.store = make(map[string][]byte)
+	}
 	f.store[key] = value
 	f.lastKey = key
 	f.lastTTL = ttl
@@ -60,7 +75,7 @@ func TestComposition_WiresWithoutRedis(t *testing.T) {
 	}
 
 	// Handler should be reachable via httptest
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -86,7 +101,7 @@ func TestComposition_WiresWithRedis(t *testing.T) {
 	}
 
 	// Call handler to trigger caching
-	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
+	req := httptest.NewRequest("GET", "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
@@ -111,7 +126,7 @@ func TestComposition_HTTPHandlerIsReachable(t *testing.T) {
 	ts := httptest.NewServer(h)
 	defer ts.Close()
 
-	res, err := http.Get(ts.URL + "/api/v1/candles?symbol=BTC&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z")
+	res, err := http.Get(ts.URL + "/api/v1/candles?symbol=BTCUSDT&timeframe=1m&from=2026-01-01T12:00:00Z&to=2026-01-01T12:01:00Z")
 	if err != nil {
 		t.Fatalf("failed to reach handler: %v", err)
 	}
