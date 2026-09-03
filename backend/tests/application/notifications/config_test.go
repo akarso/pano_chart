@@ -291,6 +291,41 @@ func TestScheduler_PerUser_MarketUptrend_DoesNotFireOnBearishRegime(t *testing.T
 	}
 }
 
+func TestScheduler_PerUser_NeutralBias_NeitherUptrendNorDowntrendFires(t *testing.T) {
+	// Regression test: a regime with no real direction (Bias == "neutral")
+	// must satisfy neither an Uptrend nor a Downtrend subscription, even
+	// with both configured and their dominance thresholds at 0.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
+		Bias:   "neutral",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		UptrendMinDominance:   0,
+		UptrendTimeframe:      "1h",
+		Downtrend:             true,
+		DowntrendMinDominance: 0,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no notification for a neutral-bias regime, got %d", spy.userCount())
+	}
+}
+
 func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())

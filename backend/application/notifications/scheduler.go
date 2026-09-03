@@ -281,8 +281,8 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
 				continue
 			}
-			log.Printf("[notify-scheduler] market %s: regime=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
-				tf, summary.Regime, summary.Prevalence,
+			log.Printf("[notify-scheduler] market %s: regime=%s bias=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
+				tf, summary.Regime, summary.Bias, summary.Prevalence,
 				summary.Scores.Trend, summary.Scores.Sideways,
 				summary.Scores.Compression, summary.Scores.Expansion)
 			summaries[tf] = summary
@@ -381,6 +381,13 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// to do with direction) — a "Downtrend" subscriber was getting
 	// breakout alerts and never anything about actual declines. Fixed in
 	// PR-072.
+	//
+	// Side effect: existing users' DowntrendMinDominance values were tuned
+	// against Expansion score magnitudes, which have a different
+	// distribution than Trend scores — a threshold that felt "about right"
+	// for expansion activity may now fire more or less often than the user
+	// expects against trend strength. Not auto-migrated; existing configs
+	// keep their stored number as-is under the new meaning.
 	if cfg.Downtrend {
 		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok &&
 			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "down" {

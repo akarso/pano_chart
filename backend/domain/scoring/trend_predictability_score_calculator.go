@@ -128,6 +128,20 @@ func (c *TrendPredictabilityScoreCalculator) ScoreWithDirection(series domain.Ca
 	if normalised > 1 {
 		normalised = 1
 	}
+
+	// Couple "no trend" and "no direction" by construction, not by
+	// coincidence: bias was set from the raw slope sign before
+	// shapePenalty/dirAgreement could crush the score toward zero. Every
+	// penalty path today happens to zero the score outright when it
+	// disqualifies a trend, so this is currently a no-op — but a future
+	// tweak to those penalties that leaves normalised tiny-but-nonzero
+	// would otherwise let a score this calculator itself considers
+	// "not a real trend" still report a confident up/down bias.
+	const negligible = 1e-9
+	if normalised < negligible {
+		bias = "neutral"
+	}
+
 	return normalised, bias, nil
 }
 
