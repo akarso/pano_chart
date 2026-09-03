@@ -25,7 +25,7 @@ type deviceRegisterRequest struct {
 	// fallback for a pre-PR-070 client that has no secret yet (see
 	// NewDeviceRegisterHandler's doc) — once RequireAuth enforces, this
 	// field is never consulted and can be removed.
-	UserID   string `json:"user_id,omitempty"`
+	UserID   string `json:"user_id"`
 	DeviceID string `json:"device_id"`
 	FCMToken string `json:"fcm_token"`
 	Platform string `json:"platform"`
@@ -55,13 +55,10 @@ func (h *DeviceRegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	userID, ok := middleware.UserIDFromContextOK(r.Context())
+	userID, ok := middleware.UserIDOrLegacyFallback(r.Context(), req.UserID)
 	if !ok {
-		userID = req.UserID
-		if userID == "" {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
 	}
 	if err := h.devices.Register(userID, req.DeviceID, req.FCMToken, req.Platform); err != nil {
 		if errors.Is(err, appsocial.ErrDeviceOwnedByAnotherUser) {

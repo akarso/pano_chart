@@ -86,5 +86,5 @@ breakout:
 
 api_keys:
   financeflow:
-    - name: "Finance flow APII"
-      key: "156db863c065ce2e67c57d91af2f6936585d16bb7dcf0bcee71227b63c85afeb"
+    - name: "Finance flow API"
+      key: ""   # set FINANCEFLOW_API_KEY in the environment instead — never commit a real key here

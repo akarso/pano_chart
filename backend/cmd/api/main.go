@@ -556,11 +556,10 @@ func main() {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
 	}
-	// NOTE: /api/payments/verify still trusts the client-supplied userId in
-	// its body — that's fixed in the next PR (binding purchase verification
-	// to the authenticated caller). Left unauthenticated here deliberately
-	// rather than half-migrating it.
-	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseHandler(verifyPurchaseUC))
+	// Hard-enforced auth independent of AUTH_ENFORCE — see
+	// NewVerifyPurchaseRoute's doc for why this route doesn't get the same
+	// log-only migration grace period as the others.
+	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseRoute(verifyPurchaseUC, credentialStore))
 	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)

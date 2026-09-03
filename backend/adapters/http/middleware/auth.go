@@ -98,3 +98,28 @@ func UserIDFromContextOK(ctx context.Context) (string, bool) {
 	userID, ok := ctx.Value(userIDContextKey).(string)
 	return userID, ok
 }
+
+// UserIDOrLegacyFallback returns the authenticated user ID from context if
+// RequireAuth verified one, otherwise falls back to legacyValue (a
+// client-supplied field from the request body/query — the pre-PR-070
+// trust model). Returns ok=false if neither is available, meaning the
+// caller should reject the request.
+//
+// This centralizes the migration-window fallback pattern used by every
+// route still behind log-only RequireAuth, so there's exactly one place to
+// delete it from once AUTH_ENFORCE=true makes it permanently unreachable —
+// see UserIDFromContextOK's doc for why the fallback exists at all. Do NOT
+// use this for a route that must never trust an unverified identity
+// regardless of enforce mode (e.g. /api/payments/verify, which is
+// hard-enforced independent of AUTH_ENFORCE — see
+// adapters/http.NewVerifyPurchaseRoute) — for those, use the plain
+// panicking UserIDFromContext instead, so a wiring mistake fails loudly.
+func UserIDOrLegacyFallback(ctx context.Context, legacyValue string) (string, bool) {
+	if userID, ok := UserIDFromContextOK(ctx); ok {
+		return userID, true
+	}
+	if legacyValue != "" {
+		return legacyValue, true
+	}
+	return "", false
+}
