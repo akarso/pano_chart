@@ -276,7 +276,10 @@ These are read by the Go backend at startup.
 `api_keys.financeflow[0].key` is intentionally left blank in git — the env var always takes
 priority (`events.LoadFinanceFlowAPIKey`, which already preferred it before PR-071; PR-071
 just removed the live key value that used to sit in `config.yaml` as a fallback). If neither
-is set, the events endpoint silently disables itself (logged warning, not a startup failure).
+is set, `LoadFinanceFlowAPIKey` returns an error, `cmd/api/main.go` logs a
+`WARNING: FinanceFlow API key not found` line and leaves `eventsUC` `nil` — `/api/v1/events`
+is never registered on the mux and the macro-event notification provider is skipped too.
+Startup itself does not fail; the rest of the API comes up normally with events disabled.
 
 **5 — Go dependencies**
 
