@@ -104,7 +104,16 @@ func (h *NotificationConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 }
 
 func (h *NotificationConfigHandler) handleGet(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.UserIDFromContext(r.Context())
+	// Migration-window fallback to ?user_id= while RequireAuth runs in
+	// log-only mode for pre-PR-070 clients — dead branch once it enforces.
+	userID, ok := middleware.UserIDFromContextOK(r.Context())
+	if !ok {
+		userID = r.URL.Query().Get("user_id")
+		if userID == "" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+	}
 
 	cfg, err := h.store.Get(userID)
 	if err != nil {
@@ -123,9 +132,17 @@ func (h *NotificationConfigHandler) handlePut(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Ignore whatever the client sent — the authenticated user ID is the
-	// only source of truth for whose config this is.
-	dto.UserID = middleware.UserIDFromContext(r.Context())
+	if userID, ok := middleware.UserIDFromContextOK(r.Context()); ok {
+		// Authenticated: ignore whatever the client sent, the verified
+		// identity is the only source of truth for whose config this is.
+		dto.UserID = userID
+	} else if dto.UserID == "" {
+		// Migration-window fallback: no secret yet (pre-PR-070 client),
+		// so fall back to the body's user_id like the old handler did —
+		// dead branch once RequireAuth enforces.
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 
 	if err := h.store.Save(fromDTO(dto)); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

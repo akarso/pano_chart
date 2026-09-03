@@ -170,16 +170,37 @@ func TestSubscriptionStatusHandler_NoSubscription(t *testing.T) {
 	assert.Equal(t, false, result["active"])
 }
 
-func TestSubscriptionStatusHandler_NoAuthContext_Panics(t *testing.T) {
+func TestSubscriptionStatusHandler_NoAuthContext_NoLegacyParam_401(t *testing.T) {
 	svc := &fakeSubscriptionService{}
 	handler := adhttp.NewSubscriptionStatusHandler(svc)
 
+	// Simulates either a wiring bug, or RequireAuth running in log-only
+	// mode against a request with no verified secret AND no legacy
+	// ?userId= fallback — must reject, not silently proceed with "".
 	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status", nil)
 	w := httptest.NewRecorder()
 
-	// Simulates a wiring bug (handler registered without RequireAuth) —
-	// must fail loudly, not silently trust a missing/forged identity.
-	assert.Panics(t, func() { handler.ServeHTTP(w, req) })
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+}
+
+func TestSubscriptionStatusHandler_LogOnlyMigrationFallback_UsesLegacyQueryParam(t *testing.T) {
+	now := time.Now().UTC()
+	sub := domain.NewSubscriptionUnsafe("legacy-user", "stripe", "premium", now, now.Add(time.Hour), now)
+	svc := &fakeSubscriptionService{sub: sub, found: true}
+	handler := adhttp.NewSubscriptionStatusHandler(svc)
+
+	// No auth context (as RequireAuth would leave it in log-only mode for
+	// a pre-PR-070 client), but the client still sends the old ?userId=.
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription/status?userId=legacy-user", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	var result map[string]interface{}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	assert.Equal(t, true, result["active"])
 }
 
 func TestSubscriptionStatusHandler_MethodNotAllowed(t *testing.T) {
