@@ -12,6 +12,7 @@ import (
 	"github.com/rs/cors"
 
 	adhttp "pano_chart/backend/adapters/http"
+	"pano_chart/backend/adapters/http/middleware"
 	"pano_chart/backend/adapters/infra"
 	appbehavior "pano_chart/backend/application/behavior"
 	appmarket "pano_chart/backend/application/market"
@@ -23,6 +24,7 @@ import (
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
+	infraauth "pano_chart/backend/infrastructure/auth"
 	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/feargreed"
 	"pano_chart/backend/infrastructure/googleplay"
@@ -460,6 +462,16 @@ func main() {
 	}
 	defer func() { _ = deviceStore.Close() }()
 
+	// --- Device credential store (server-issued auth secrets) ---
+	// Shares deviceStore's DB connection — same convention as
+	// notifConfigStore below.
+	credentialStore, err := infraauth.NewSQLiteCredentialStore(deviceStore.DB())
+	if err != nil {
+		log.Fatalf("[main] device credential store: %v", err)
+	}
+	claimDeviceUC := usecases.NewClaimDevice(credentialStore)
+	authMW := middleware.RequireAuth(credentialStore)
+
 	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	fcmProjectID := os.Getenv("FCM_PROJECT_ID")
 	if fcmCredsPath != "" {
@@ -534,8 +546,12 @@ func main() {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
 	}
+	// NOTE: /api/payments/verify still trusts the client-supplied userId in
+	// its body — that's fixed in the next PR (binding purchase verification
+	// to the authenticated caller). Left unauthenticated here deliberately
+	// rather than half-migrating it.
 	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseHandler(verifyPurchaseUC))
-	mux.Handle("/api/subscription/status", adhttp.NewSubscriptionStatusHandler(subscriptionSvc))
+	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
 	mux.Handle("/api/market/regime", regimeHandler)
@@ -557,13 +573,19 @@ func main() {
 	mux.Handle("/api/social/accounts", adhttp.NewSocialAccountsHandler(socialService))
 	log.Println("[main] /api/social/* endpoints registered")
 
+	// Device identity claim (public — this is how a client gets a secret).
+	// Rate-limited per IP since it's the one unauthenticated write surface.
+	claimRateLimit := middleware.PerIPRateLimit(10, 5) // 10/min, burst 5
+	mux.Handle("/api/device/claim", claimRateLimit(adhttp.NewDeviceClaimHandler(claimDeviceUC)))
+	log.Println("[main] /api/device/claim endpoint registered")
+
 	// Device registration endpoints (push notifications)
-	mux.Handle("/api/device/register", adhttp.NewDeviceRegisterHandler(deviceStore))
-	mux.Handle("/api/device/unregister", adhttp.NewDeviceUnregisterHandler(deviceStore))
+	mux.Handle("/api/device/register", authMW(adhttp.NewDeviceRegisterHandler(deviceStore)))
+	mux.Handle("/api/device/unregister", authMW(adhttp.NewDeviceUnregisterHandler(deviceStore)))
 	log.Println("[main] /api/device/* endpoints registered")
 
 	// Notification config endpoint
-	mux.Handle("/api/notification/config", adhttp.NewNotificationConfigHandler(notifConfigStore))
+	mux.Handle("/api/notification/config", authMW(adhttp.NewNotificationConfigHandler(notifConfigStore)))
 	log.Println("[main] /api/notification/config endpoint registered")
 
 	// Volatility profile endpoint

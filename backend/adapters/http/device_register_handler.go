@@ -2,8 +2,10 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"pano_chart/backend/adapters/http/middleware"
 	appsocial "pano_chart/backend/application/social"
 )
 
@@ -18,13 +20,18 @@ func NewDeviceRegisterHandler(devices appsocial.DeviceTokenStore) *DeviceRegiste
 }
 
 type deviceRegisterRequest struct {
-	UserID   string `json:"user_id"`
+	// UserID is accepted for backward-compatible JSON decoding but is no
+	// longer trusted — the authenticated user ID from the request context
+	// is used instead. Kept only so older client payloads don't fail to
+	// decode; safe to remove once no client sends it anymore.
+	UserID   string `json:"user_id,omitempty"`
 	DeviceID string `json:"device_id"`
 	FCMToken string `json:"fcm_token"`
 	Platform string `json:"platform"`
 }
 
-// ServeHTTP implements http.Handler.
+// ServeHTTP implements http.Handler. Must be registered behind
+// middleware.RequireAuth.
 func (h *DeviceRegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -37,8 +44,8 @@ func (h *DeviceRegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.UserID == "" || req.DeviceID == "" || req.FCMToken == "" || req.Platform == "" {
-		http.Error(w, `{"error":"user_id, device_id, fcm_token, and platform are required"}`, http.StatusBadRequest)
+	if req.DeviceID == "" || req.FCMToken == "" || req.Platform == "" {
+		http.Error(w, `{"error":"device_id, fcm_token, and platform are required"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -47,7 +54,12 @@ func (h *DeviceRegisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := h.devices.Register(req.UserID, req.DeviceID, req.FCMToken, req.Platform); err != nil {
+	userID := middleware.UserIDFromContext(r.Context())
+	if err := h.devices.Register(userID, req.DeviceID, req.FCMToken, req.Platform); err != nil {
+		if errors.Is(err, appsocial.ErrDeviceOwnedByAnotherUser) {
+			http.Error(w, `{"error":"device_id already registered to a different account"}`, http.StatusConflict)
+			return
+		}
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -71,7 +83,10 @@ type deviceUnregisterRequest struct {
 	DeviceID string `json:"device_id"`
 }
 
-// ServeHTTP implements http.Handler.
+// ServeHTTP implements http.Handler. Must be registered behind
+// middleware.RequireAuth. Unregister is scoped to the authenticated user so
+// one user cannot silence another's push notifications by guessing/reusing
+// a device ID.
 func (h *DeviceUnregisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -89,7 +104,8 @@ func (h *DeviceUnregisterHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := h.devices.Unregister(req.DeviceID); err != nil {
+	userID := middleware.UserIDFromContext(r.Context())
+	if err := h.devices.Unregister(userID, req.DeviceID); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}

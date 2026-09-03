@@ -9,6 +9,7 @@ import '../features/social/api/social_account_settings.dart';
 /// Uses [SharedPreferences] as the backing store.
 class PreferencesService {
     static const _keyUserId = 'device.userId';
+    static const _keyDeviceSecret = 'device.secret';
 
     /// Returns the underlying [SharedPreferences] instance so other
     /// services (e.g. [TrialManager]) can share the same storage.
@@ -22,6 +23,19 @@ class PreferencesService {
         _prefs.setString(_keyUserId, id);
       }
       return id;
+    }
+
+    /// Server-issued auth secret bound to [userId] (see `POST
+    /// /api/device/claim`). Null until the app has successfully claimed
+    /// one from the backend — every authenticated request needs this in
+    /// its `Authorization: Bearer` header.
+    String? get deviceSecret => _prefs.getString(_keyDeviceSecret);
+    set deviceSecret(String? v) {
+      if (v == null) {
+        _prefs.remove(_keyDeviceSecret);
+      } else {
+        _prefs.setString(_keyDeviceSecret, v);
+      }
     }
 
     /// Generates a v4 UUID using a cryptographically secure RNG.

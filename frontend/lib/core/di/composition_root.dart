@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 
+import '../../features/auth/api/device_auth_api.dart';
+import '../../features/auth/infrastructure/http_device_auth_api.dart';
 import '../../features/billing/api/subscription_api.dart';
 import '../../features/billing/billing_manager.dart';
 import '../../features/billing/infrastructure/http_subscription_api.dart';
@@ -43,10 +45,22 @@ class CompositionRoot {
   final http.Client httpClient;
   final int stablecoinPadding;
 
+  /// Returns the current device auth secret (see `POST /api/device/claim`),
+  /// or null if none has been claimed yet. Read at request time by every
+  /// authenticated API client this root creates.
+  final String? Function()? authSecretProvider;
+
+  /// Called by authenticated API clients when a request comes back 401 —
+  /// should re-claim a device credential and persist it so the client's
+  /// retry (via [authSecretProvider]) picks up the fresh secret.
+  final Future<void> Function()? onUnauthorized;
+
   CompositionRoot({
     required this.apiBaseUrl,
     http.Client? httpClient,
     this.stablecoinPadding = 0,
+    this.authSecretProvider,
+    this.onUnauthorized,
   }) : httpClient = httpClient ?? http.Client();
 
   /// Creates a wired GetCandleSeries use case instance.
@@ -116,9 +130,19 @@ class CompositionRoot {
     return NewsViewModel(getNews);
   }
 
+  /// Creates a [DeviceAuthApi] for claiming a server-issued device identity.
+  DeviceAuthApi createDeviceAuthApi() {
+    return HttpDeviceAuthApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
   /// Creates a [SubscriptionApi] for backend payment verification.
   SubscriptionApi createSubscriptionApi() {
-    return HttpSubscriptionApi(client: httpClient, baseUrl: apiBaseUrl);
+    return HttpSubscriptionApi(
+      client: httpClient,
+      baseUrl: apiBaseUrl,
+      getAuthSecret: authSecretProvider,
+      onUnauthorized: onUnauthorized,
+    );
   }
 
   /// Creates a [BillingManager] wired to the backend API.
@@ -160,7 +184,12 @@ class CompositionRoot {
 
   /// Creates a wired [DeviceRegistrationApi].
   DeviceRegistrationApi createDeviceRegistrationApi() {
-    return HttpDeviceRegistrationApi(client: httpClient, baseUrl: apiBaseUrl);
+    return HttpDeviceRegistrationApi(
+      client: httpClient,
+      baseUrl: apiBaseUrl,
+      getAuthSecret: authSecretProvider,
+      onUnauthorized: onUnauthorized,
+    );
   }
 
   /// Creates a wired [SocialFeedViewModel].
@@ -171,6 +200,11 @@ class CompositionRoot {
 
   /// Creates a wired [NotificationConfigApi].
   NotificationConfigApi createNotificationConfigApi() {
-    return HttpNotificationConfigApi(client: httpClient, baseUrl: apiBaseUrl);
+    return HttpNotificationConfigApi(
+      client: httpClient,
+      baseUrl: apiBaseUrl,
+      getAuthSecret: authSecretProvider,
+      onUnauthorized: onUnauthorized,
+    );
   }
 }

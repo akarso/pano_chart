@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"pano_chart/backend/adapters/http/middleware"
 	"pano_chart/backend/application/usecases"
 )
 
@@ -58,9 +59,13 @@ type subscriptionStatusResponse struct {
 }
 
 // NewSubscriptionStatusHandler returns an http.HandlerFunc that checks
-// the subscription status for a user.
+// the subscription status for the authenticated caller.
 //
-//	GET /api/subscription/status?userId=...
+//	GET /api/subscription/status
+//	Header: Authorization: Bearer <device secret>
+//
+// Must be registered behind middleware.RequireAuth — the user ID comes
+// from the verified secret, never from client input.
 func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -68,11 +73,7 @@ func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.Handler
 			return
 		}
 
-		userID := r.URL.Query().Get("userId")
-		if userID == "" {
-			http.Error(w, "missing userId parameter", http.StatusBadRequest)
-			return
-		}
+		userID := middleware.UserIDFromContext(r.Context())
 
 		sub, found, err := svc.GetSubscription(r.Context(), userID)
 		if err != nil {

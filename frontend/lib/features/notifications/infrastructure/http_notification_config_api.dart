@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../auth/auth_headers.dart';
 import '../api/notification_config_api.dart';
 import '../notification_settings_model.dart';
 
@@ -24,18 +25,29 @@ class HttpNotificationConfigException implements Exception {
 class HttpNotificationConfigApi implements NotificationConfigApi {
   final http.Client client;
   final String baseUrl;
+  final String? Function()? getAuthSecret;
+  final Future<void> Function()? onUnauthorized;
 
-  HttpNotificationConfigApi({required this.client, required this.baseUrl});
+  HttpNotificationConfigApi({
+    required this.client,
+    required this.baseUrl,
+    this.getAuthSecret,
+    this.onUnauthorized,
+  });
 
   @override
   Future<NotificationSettings> fetch(String userId) async {
-    final uri = Uri.parse(baseUrl).replace(
-      path: '/api/notification/config',
-      queryParameters: {'user_id': userId},
-    );
+    // user_id is intentionally NOT sent — the backend derives the caller's
+    // identity from the Authorization header (device secret), never from a
+    // client-supplied value. The parameter stays for interface stability
+    // across the call sites that still pass it.
+    final uri = Uri.parse(baseUrl).replace(path: '/api/notification/config');
 
-    final response =
-        await client.get(uri).timeout(const Duration(seconds: 15));
+    final response = await sendAuthenticated(
+      (headers) => client.get(uri, headers: headers).timeout(const Duration(seconds: 15)),
+      getAuthSecret,
+      onUnauthorized,
+    );
 
     if (response.statusCode != 200) {
       throw HttpNotificationConfigException(
@@ -56,9 +68,14 @@ class HttpNotificationConfigApi implements NotificationConfigApi {
         Uri.parse(baseUrl).replace(path: '/api/notification/config');
     final body = jsonEncode(settings.toJson(userId));
 
-    final response = await client
-        .put(uri, body: body, headers: {'Content-Type': 'application/json'})
-        .timeout(const Duration(seconds: 15));
+    final response = await sendAuthenticated(
+      (headers) => client
+          .put(uri, body: body, headers: headers)
+          .timeout(const Duration(seconds: 15)),
+      getAuthSecret,
+      onUnauthorized,
+      {'Content-Type': 'application/json'},
+    );
 
     if (response.statusCode != 200) {
       throw HttpNotificationConfigException(

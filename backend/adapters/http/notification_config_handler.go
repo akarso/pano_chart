@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"pano_chart/backend/adapters/http/middleware"
 	appnotify "pano_chart/backend/application/notifications"
 )
 
 // NotificationConfigHandler handles GET/PUT /api/notification/config.
+// Must be registered behind middleware.RequireAuth.
 type NotificationConfigHandler struct {
 	store appnotify.NotificationConfigStore
 }
@@ -102,11 +104,7 @@ func (h *NotificationConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 }
 
 func (h *NotificationConfigHandler) handleGet(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	if userID == "" {
-		http.Error(w, `{"error":"user_id is required"}`, http.StatusBadRequest)
-		return
-	}
+	userID := middleware.UserIDFromContext(r.Context())
 
 	cfg, err := h.store.Get(userID)
 	if err != nil {
@@ -125,10 +123,9 @@ func (h *NotificationConfigHandler) handlePut(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if dto.UserID == "" {
-		http.Error(w, `{"error":"user_id is required"}`, http.StatusBadRequest)
-		return
-	}
+	// Ignore whatever the client sent — the authenticated user ID is the
+	// only source of truth for whose config this is.
+	dto.UserID = middleware.UserIDFromContext(r.Context())
 
 	if err := h.store.Save(fromDTO(dto)); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

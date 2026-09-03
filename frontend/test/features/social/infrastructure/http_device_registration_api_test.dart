@@ -32,11 +32,58 @@ void main() {
 
       expect(capturedUri!.path, '/api/device/register');
 
+      // user_id is deliberately NOT sent — the backend derives it from the
+      // authenticated caller (Authorization header), never from the body.
       final decoded = jsonDecode(capturedBody!) as Map<String, dynamic>;
-      expect(decoded['user_id'], 'u1');
+      expect(decoded.containsKey('user_id'), isFalse);
       expect(decoded['device_id'], 'd1');
       expect(decoded['fcm_token'], 'tok-abc');
       expect(decoded['platform'], 'android');
+    });
+
+    test('register attaches Authorization header when a secret is available',
+        () async {
+      Map<String, String>? capturedHeaders;
+      final client = MockClient((req) async {
+        capturedHeaders = req.headers;
+        return http.Response('{"status":"registered"}', 201);
+      });
+
+      final api = HttpDeviceRegistrationApi(
+        client: client,
+        baseUrl: baseUrl,
+        getAuthSecret: () => 'my-secret',
+      );
+
+      await api.register(
+        userId: 'u1',
+        deviceId: 'd1',
+        fcmToken: 'tok-abc',
+        platform: 'android',
+      );
+
+      expect(capturedHeaders!['Authorization'], 'Bearer my-secret');
+    });
+
+    test('register omits Authorization header when no secret is available',
+        () async {
+      Map<String, String>? capturedHeaders;
+      final client = MockClient((req) async {
+        capturedHeaders = req.headers;
+        return http.Response('{"status":"registered"}', 201);
+      });
+
+      final api =
+          HttpDeviceRegistrationApi(client: client, baseUrl: baseUrl);
+
+      await api.register(
+        userId: 'u1',
+        deviceId: 'd1',
+        fcmToken: 'tok-abc',
+        platform: 'android',
+      );
+
+      expect(capturedHeaders!.containsKey('Authorization'), isFalse);
     });
 
     test('register throws on non-201', () async {
