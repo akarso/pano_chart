@@ -216,6 +216,15 @@ func trendShapePenalty(closes []float64, slope, minClose, maxClose float64) floa
 // functions / regime shifts).  It sorts the closes and looks for a gap
 // > 10% of the total range that splits the series into two groups, each
 // containing at least 25% of the candles.
+//
+// A flat 10%-of-range threshold isn't enough on its own: for a short,
+// evenly-spaced monotonic trend (e.g. n=8-10), every sorted-adjacent gap
+// is ~range/(n-1), which routinely exceeds 10% purely from having few
+// candles — not from any plateau structure. To tell a real regime-shift
+// jump apart from normal spacing, the candidate gap must also dwarf the
+// series' typical (median) adjacent gap — a genuine plateau split leaves
+// tiny within-cluster gaps and one outsized between-cluster gap, while a
+// smooth trend has every gap roughly equal to the median.
 func closePricesClustered(vals []float64) bool {
 	n := len(vals)
 	if n < 8 {
@@ -237,12 +246,51 @@ func closePricesClustered(vals []float64) bool {
 	if valRange == 0 {
 		return false
 	}
+
+	gaps := make([]float64, n-1)
+	for i := 1; i < n; i++ {
+		gaps[i-1] = sorted[i] - sorted[i-1]
+	}
+	medianGap := medianOfFloats(gaps)
+
+	const jumpMultiplier = 3.0 // candidate gap must be this many times the typical gap
+
 	minGroupSize := n / 4 // each plateau must hold ≥ 25% of candles
 	for i := 1; i < n; i++ {
 		gap := sorted[i] - sorted[i-1]
-		if i >= minGroupSize && (n-i) >= minGroupSize && gap > 0.10*valRange {
-			return true
+		if i < minGroupSize || (n-i) < minGroupSize {
+			continue
 		}
+		if gap <= 0.10*valRange {
+			continue
+		}
+		if medianGap > 0 && gap < jumpMultiplier*medianGap {
+			continue // gap is in line with normal spacing, not an outlier jump
+		}
+		return true
 	}
 	return false
+}
+
+// medianOfFloats returns the median of vals without mutating the input.
+func medianOfFloats(vals []float64) float64 {
+	n := len(vals)
+	if n == 0 {
+		return 0
+	}
+	sorted := make([]float64, n)
+	copy(sorted, vals)
+	for i := 1; i < n; i++ {
+		key := sorted[i]
+		j := i - 1
+		for j >= 0 && sorted[j] > key {
+			sorted[j+1] = sorted[j]
+			j--
+		}
+		sorted[j+1] = key
+	}
+	if n%2 == 1 {
+		return sorted[n/2]
+	}
+	return (sorted[n/2-1] + sorted[n/2]) / 2
 }

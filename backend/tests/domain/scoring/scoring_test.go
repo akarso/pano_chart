@@ -42,6 +42,53 @@ func TestTrendPredictabilityScoreCalculator(t *testing.T) {
 	}
 }
 
+// TestTrendPredictability_ShortMonotonicTrendNotClustered guards against a
+// regression where closePricesClustered() false-positived on short (~8-10
+// candle), evenly-spaced, monotonic trends: every sorted-adjacent gap in
+// such a series is ~range/(n-1), which for small n exceeds the 10%-of-range
+// threshold on its own, incorrectly zeroing out a textbook clean trend.
+func TestTrendPredictability_ShortMonotonicTrendNotClustered(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+
+	cases := map[string][]float64{
+		"8-candle uptrend":    {100, 101, 102, 103, 104, 105, 106, 107},
+		"9-candle uptrend":    {100, 101, 102, 103, 104, 105, 106, 107, 108},
+		"10-candle uptrend":   {100, 101, 102, 103, 104, 105, 106, 107, 108, 109},
+		"10-candle downtrend": {109, 108, 107, 106, 105, 104, 103, 102, 101, 100},
+	}
+	for name, prices := range cases {
+		series := makeSeries(prices)
+		score, err := calc.Score(series)
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", name, err)
+		}
+		if score <= 0 {
+			t.Errorf("%s: expected positive trend score, got %v (clustering false-positive?)", name, score)
+		}
+	}
+}
+
+// TestTrendPredictability_StepFunctionStillClustered ensures a genuine
+// two-plateau step function (regime shift, not a trend) is still zeroed
+// out after tightening the cluster-gate heuristic.
+func TestTrendPredictability_StepFunctionStillClustered(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	// Two flat plateaus with a large jump between them and tiny in-plateau
+	// jitter, so within-cluster gaps are near zero and the single
+	// between-cluster gap dwarfs the median gap.
+	stepFn := makeSeries([]float64{
+		100, 100.01, 100.02, 100.01, 100,
+		150, 150.01, 150.02, 150.01, 150,
+	})
+	score, err := calc.Score(stepFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected step function to be flagged as clustered (score=0), got %v", score)
+	}
+}
+
 func TestSidewaysConsistencyScoreCalculator(t *testing.T) {
 	calc := &scoring.SidewaysConsistencyScoreCalculator{}
 	// Flat line
