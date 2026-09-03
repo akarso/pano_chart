@@ -470,7 +470,17 @@ func main() {
 		log.Fatalf("[main] device credential store: %v", err)
 	}
 	claimDeviceUC := usecases.NewClaimDevice(credentialStore)
-	authMW := middleware.RequireAuth(credentialStore)
+
+	// Log-only by default: a pre-PR-070 client has no claimed secret yet,
+	// so hard-enforcing on day one of this deploy would 401 every existing
+	// install's subscription/device/notification-config calls before
+	// they've had a chance to update and claim one. Flip AUTH_ENFORCE=true
+	// once logs show adoption is high enough (see PR-070.md rollout notes).
+	authEnforce := os.Getenv("AUTH_ENFORCE") == "true"
+	if !authEnforce {
+		log.Println("[main] AUTH_ENFORCE not set — device auth middleware running in LOG-ONLY mode (unauthenticated requests are allowed through and logged, not rejected)")
+	}
+	authMW := middleware.RequireAuth(credentialStore, authEnforce)
 
 	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	fcmProjectID := os.Getenv("FCM_PROJECT_ID")

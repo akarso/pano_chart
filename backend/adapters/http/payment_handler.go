@@ -61,11 +61,16 @@ type subscriptionStatusResponse struct {
 // NewSubscriptionStatusHandler returns an http.HandlerFunc that checks
 // the subscription status for the authenticated caller.
 //
-//	GET /api/subscription/status
+//	GET /api/subscription/status[?userId=...]
 //	Header: Authorization: Bearer <device secret>
 //
-// Must be registered behind middleware.RequireAuth — the user ID comes
-// from the verified secret, never from client input.
+// Must be registered behind middleware.RequireAuth. The user ID comes from
+// the verified secret whenever one is present. The `?userId=` query param
+// is ONLY consulted as a migration-window fallback while RequireAuth is
+// running in log-only mode for a pre-PR-070 client that has no secret yet
+// — once RequireAuth enforces (enforce=true), unauthenticated requests
+// never reach this handler at all, so the fallback branch is dead and can
+// be deleted then.
 func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -73,7 +78,14 @@ func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.Handler
 			return
 		}
 
-		userID := middleware.UserIDFromContext(r.Context())
+		userID, ok := middleware.UserIDFromContextOK(r.Context())
+		if !ok {
+			userID = r.URL.Query().Get("userId")
+			if userID == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
 
 		sub, found, err := svc.GetSubscription(r.Context(), userID)
 		if err != nil {
