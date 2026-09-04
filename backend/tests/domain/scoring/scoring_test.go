@@ -89,6 +89,24 @@ func TestTrendPredictability_StepFunctionStillClustered(t *testing.T) {
 	}
 }
 
+// TestTrendPredictability_TickRoundedStaircaseNotClustered guards against a
+// regression where tick-rounded closes producing a monotonic staircase
+// (each price repeated once, e.g. 100,100,101,101,...) pulled the median
+// adjacent gap to 0 — since at least half the sorted gaps are exact
+// duplicates — which disabled the outlier-jump check entirely and fell
+// back to flagging every step under the bare 10%-of-range rule.
+func TestTrendPredictability_TickRoundedStaircaseNotClustered(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	staircase := makeSeries([]float64{100, 100, 101, 101, 102, 102, 103, 103, 104, 104})
+	score, err := calc.Score(staircase)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if score <= 0 {
+		t.Errorf("expected positive trend score for tick-rounded staircase, got %v (clustering false-positive?)", score)
+	}
+}
+
 // TestTrendPredictability_NonUniformSpacingNotClustered checks the fix
 // against irregular (non-uniformly-spaced) step sizes, as real candle data
 // has from ordinary volatility, rather than only the perfectly-even
