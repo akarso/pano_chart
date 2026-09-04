@@ -277,6 +277,65 @@ func TestCheckMarketForUser_FlappingRegime_StaysBoundedWithinHoldWindow(t *testi
 	}
 }
 
+// TestCheckMarketForUser_FlappingAcrossTimeframes_StaysBoundedWithinHoldWindow
+// is the regression test for the second-round CR follow-up: the hold used
+// to be keyed on "userID|winningTimeframe". A user with different regimes
+// on different timeframes (Uptrend on 15m, Downtrend on 1h —
+// UptrendTimeframe/DowntrendTimeframe are independently configurable) whose
+// winning *timeframe* flips tick to tick landed each flip under a different
+// per-timeframe key, so neither key ever accumulated enough history to
+// trigger the hold — the exact bug the hold was added to close, reopened
+// via a different axis (timeframe instead of label). The hold is now keyed
+// on userID alone.
+func TestCheckMarketForUser_FlappingAcrossTimeframes_StaysBoundedWithinHoldWindow(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := &fakeMarketProvider{
+		summaries: map[string]mkt.Summary{
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "down"},
+		},
+	}
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		Downtrend:             true,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		UptrendTimeframe:      "15m",
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+
+	// 10 checks, one simulated minute apart, alternating which timeframe's
+	// candidate has the higher prevalence — the winning (label, timeframe)
+	// flips between Uptrend/15m and Downtrend/1h every tick, well within
+	// the 15-minute default hold window throughout.
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			market.summaries["15m"] = mkt.Summary{Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "up"}
+			market.summaries["1h"] = mkt.Summary{Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "down"}
+		} else {
+			market.summaries["15m"] = mkt.Summary{Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "up"}
+			market.summaries["1h"] = mkt.Summary{Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "down"}
+		}
+		sched.CheckMarketState(context.Background())
+		now = now.Add(time.Minute)
+	}
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected exactly 1 notification across 10 cross-timeframe flapping ticks within the hold window, got %d", spy.userCount())
+	}
+}
+
 func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())

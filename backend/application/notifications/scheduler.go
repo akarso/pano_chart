@@ -42,17 +42,17 @@ type SchedulerConfig struct {
 	Timeframe           string        // fallback timeframe for legacy broadcast
 
 	// MarketRegimeHoldDuration is the minimum time between two per-user
-	// market notifications for the same (user, timeframe) — see PR-075 CR
+	// market notifications, period — not per timeframe — see PR-075 CR
 	// follow-up. The dedup key change that let a genuine intraday regime
-	// flip re-arm the same day (PR-075) also means the winning candidate's
-	// label can flip every single MarketCheckInterval tick when two
-	// candidates sit close to each other near a threshold, producing a new
-	// key — and therefore a new notification — every tick. This hold
-	// duration is checked BEFORE the per-key dedup, independent of it: no
-	// second notification for a (user, timeframe) fires within this window
-	// no matter how many times the label changes inside it, only once it
-	// has elapsed does the next check's label (whatever it is by then) get
-	// a real chance to notify.
+	// flip re-arm the same day (PR-075) also means the winning candidate
+	// (label and/or timeframe) can flip every single MarketCheckInterval
+	// tick when two candidates sit close to each other near a threshold,
+	// producing a new key — and therefore a new notification — every tick.
+	// This hold duration is checked BEFORE the per-key dedup, independent
+	// of it: no second notification for a user fires within this window no
+	// matter how many times the winning candidate changes inside it, only
+	// once it has elapsed does the next check's candidate (whatever it is
+	// by then) get a real chance to notify.
 	MarketRegimeHoldDuration time.Duration
 }
 
@@ -90,22 +90,39 @@ type Scheduler struct {
 	cfg           SchedulerConfig
 	now           func() time.Time
 
-	// lastMarketNotifyMu/lastMarketChange track, per "<userID>|<timeframe>",
-	// the label and timestamp of the last regime CHANGE this user was
-	// notified (or would-have-been-notified) about — see
+	// lastMarketNotifyMu/lastMarketChange track, per userID (NOT per
+	// timeframe — see PR-075 CR follow-up below), the winning candidate
+	// and timestamp of the last regime CHANGE this user was notified (or
+	// would-have-been-notified) about — see
 	// SchedulerConfig.MarketRegimeHoldDuration. Mutex-protected since Run's
 	// ticker loop and any direct CheckMarketState call could in principle
 	// overlap.
+	//
+	// Keyed on userID alone, not "userID|timeframe": an earlier version of
+	// this hold used the winning candidate's own timeframe as part of the
+	// key, which reopened exactly the bug it was meant to close whenever a
+	// user has different regimes on different timeframes (e.g. Uptrend on
+	// 15m, Downtrend on 1h — cfg.UptrendTimeframe/DowntrendTimeframe are
+	// independently configurable, not required to match) and the winning
+	// *timeframe* — not just the label — flips tick to tick. Each flip
+	// landed under a different per-timeframe key, so neither key ever
+	// accumulated enough history to trigger the hold, and the user could
+	// still get a notification almost every tick, just alternating between
+	// two (timeframe, label) keys instead of oscillating one label. The
+	// user sees a single "Market Update" stream regardless of which
+	// timeframe triggered it, so the hold is a per-user throttle on that
+	// stream, not a per-timeframe one.
 	lastMarketNotifyMu sync.Mutex
 	lastMarketChange   map[string]marketRegimeChange
 }
 
-// marketRegimeChange is the last label a user was (or would have been)
-// notified about for a given timeframe, and when that label was first
+// marketRegimeChange is the winning (label, timeframe) a user was (or
+// would have been) notified about, and when that combination was first
 // observed — the anchor for SchedulerConfig.MarketRegimeHoldDuration.
 type marketRegimeChange struct {
-	label string
-	at    time.Time
+	label     string
+	timeframe string
+	at        time.Time
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -482,35 +499,36 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// Regime-hold check (CR follow-up on PR-075): the dedup key below
 	// includes best.label so a genuine intraday regime change can re-arm
 	// the same day, but that alone means two candidates sitting close to
-	// each other near a threshold can flip the "strongest" label every
+	// each other near a threshold can flip the "strongest" candidate every
 	// single check, producing a new key — and a new notification — every
 	// tick.
 	//
-	// This only gates label CHANGES, not repeats: a steady label is
+	// This only gates CHANGES, not repeats: a steady (label, timeframe) is
 	// already correctly deduped once per day by the per-key dedup below,
-	// and that path is left alone. Only when best.label differs from the
-	// last change we recorded for this (user, timeframe) do we check
-	// whether MarketRegimeHoldDuration has actually elapsed since that
-	// last change — and only a change that clears the hold updates the
-	// recorded state. A suppressed flap does NOT reset the anchor: if it
-	// did, a market that settles back into a steady (but still-changing
-	// vs. the recorded) label every few minutes could keep sliding the
-	// window forward and never let a real change through. Anchoring to the
-	// last accepted change instead guarantees a decision point every
-	// MarketRegimeHoldDuration.
-	holdKey := cfg.UserID + "|" + best.timeframe
+	// and that path is left alone. Only when best differs (by label OR
+	// timeframe — see the struct field's doc comment for why timeframe
+	// alone flipping is included) from the last change recorded for this
+	// user do we check whether MarketRegimeHoldDuration has actually
+	// elapsed since that last change — and only a change that clears the
+	// hold updates the recorded state. A suppressed flap does NOT reset
+	// the anchor: if it did, a market that settles back into a steady (but
+	// still-changing vs. the recorded) candidate every few minutes could
+	// keep sliding the window forward and never let a real change through.
+	// Anchoring to the last accepted change instead guarantees a decision
+	// point every MarketRegimeHoldDuration.
+	holdKey := cfg.UserID
 	now := s.now()
 	s.lastMarketNotifyMu.Lock()
 	prev, hadPrev := s.lastMarketChange[holdKey]
-	labelChanged := !hadPrev || prev.label != best.label
-	if hadPrev && labelChanged && now.Sub(prev.at) < s.cfg.MarketRegimeHoldDuration {
+	changed := !hadPrev || prev.label != best.label || prev.timeframe != best.timeframe
+	if hadPrev && changed && now.Sub(prev.at) < s.cfg.MarketRegimeHoldDuration {
 		s.lastMarketNotifyMu.Unlock()
-		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold, %s since last change to %q)",
-			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label)
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold, %s since last change to %q on %q)",
+			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label, prev.timeframe)
 		return
 	}
-	if labelChanged {
-		s.lastMarketChange[holdKey] = marketRegimeChange{label: best.label, at: now}
+	if changed {
+		s.lastMarketChange[holdKey] = marketRegimeChange{label: best.label, timeframe: best.timeframe, at: now}
 	}
 	s.lastMarketNotifyMu.Unlock()
 
