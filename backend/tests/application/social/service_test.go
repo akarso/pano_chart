@@ -1,6 +1,7 @@
 package social_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ type stubProvider struct {
 
 func (s *stubProvider) Platform() string { return s.platform }
 
-func (s *stubProvider) Fetch(_ domain.Account) ([]domain.Post, error) {
+func (s *stubProvider) Fetch(_ context.Context, _ domain.Account) ([]domain.Post, error) {
 	return s.posts, s.err
 }
 

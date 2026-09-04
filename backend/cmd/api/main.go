@@ -193,7 +193,23 @@ func main() {
 				s.Symbol, s.Timeframe, s.SidewaysScore, s.TrendScore, s.Price, s.ATR, s.AlgoVersion)
 		}
 	})
-	defer snapshotLogger.Stop()
+	// Bounded, not a bare defer snapshotLogger.Stop(): Stop() blocks on its
+	// drain goroutine flushing whatever's buffered via the sink above, with
+	// no timeout of its own. That's fine today (the sink here only logs),
+	// but this whole path only became reachable once main() returns
+	// normally instead of via log.Fatal (see PR-076) — a future sink doing
+	// real I/O could hang shutdown indefinitely with no code here to catch
+	// it, so give it its own deadline rather than trusting callers to add
+	// one later.
+	defer func() {
+		stopped := make(chan struct{})
+		go func() { snapshotLogger.Stop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			log.Println("[main] snapshot logger didn't stop in time, abandoning it")
+		}
+	}()
 
 	// --- Rankings v2 use case ---
 	getRankingsUC := usecases.NewGetRankings(
@@ -649,9 +665,18 @@ func main() {
 	}
 
 	// Only close what the background workers depend on AFTER they've
-	// stopped touching it — closing earlier risks a use-after-close panic
-	// in a goroutine still mid-iteration.
-	_ = paymentRepo.Close() // independent of the social/push workers — fine on its own timeline
+	// stopped touching it — closing earlier risks a lost write (not a
+	// panic: these all wrap *sql.DB, whose Query/Exec return the ordinary
+	// sql.ErrConnDone after Close(), never panic) in a goroutine still
+	// mid-iteration. paymentRepo and regimeHistoryRepo aren't touched by
+	// the social/push background workers at all — they're written from
+	// HTTP handlers instead, which srv.Shutdown above has already
+	// drained (or, on the rarer srv.Close() fallback path, may not fully
+	// have — see PR-076 CR follow-up: a slow handler can in principle
+	// still be mid-flight there, degrading to a logged error for that one
+	// request rather than a crash).
+	_ = paymentRepo.Close()
+	_ = regimeHistoryRepo.Close()
 	_ = socialAccountStore.Close()
 	_ = socialSubStore.Close()
 	_ = deviceStore.Close()

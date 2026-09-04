@@ -2,6 +2,7 @@ package social_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,10 @@ type stubProvider struct {
 	posts    []domain.Post
 }
 
-func (s *stubProvider) Platform() string                              { return s.platform }
-func (s *stubProvider) Fetch(_ domain.Account) ([]domain.Post, error) { return s.posts, nil }
+func (s *stubProvider) Platform() string { return s.platform }
+func (s *stubProvider) Fetch(_ context.Context, _ domain.Account) ([]domain.Post, error) {
+	return s.posts, nil
+}
 
 func newTestService() *appsocial.Service {
 	p := &stubProvider{

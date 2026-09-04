@@ -1,6 +1,7 @@
 package social
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -84,7 +85,12 @@ func (s *Service) Feed(handle string) ([]domain.Post, error) {
 		acc = &tmp
 	}
 
-	posts, err := s.provider.Fetch(*acc)
+	// Feed has no request-scoped context of its own today (unrelated to the
+	// PR-076 shutdown-race fix that added ctx to Provider.Fetch) — a live
+	// cache-miss fetch here isn't part of any background-worker shutdown
+	// path, so context.Background() is correct as-is rather than plumbing
+	// a context through this call chain speculatively.
+	posts, err := s.provider.Fetch(context.Background(), *acc)
 	if err != nil {
 		return nil, err
 	}
