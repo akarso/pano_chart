@@ -101,9 +101,21 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 	// Populate confidence inputs and compute unified confidence.
 	result.VolatilityFit = VolatilityFit(result.Regime, setupCtx.Volatility)
 	if s.fragilityProvider != nil {
-		if frag, err := s.fragilityProvider.Get(ctx, symbol, timeframe); err == nil {
+		frag, err := s.fragilityProvider.Get(ctx, symbol, timeframe)
+		switch {
+		case err == nil:
 			result.Crowding = frag.Score
+		case ctx.Err() != nil:
+			// The caller gave up, not the fragility provider — Crowding's
+			// zero default would otherwise silently maximize the crowding
+			// contribution to ComputeConfidence below, returning a
+			// confidently-computed result built on data we never actually
+			// obtained. Abort instead of masking cancellation as success.
+			return setup.SetupScores{}, ctx.Err()
 		}
+		// else: fragility provider failed for a reason unrelated to
+		// cancellation (network hiccup, bad data) — degrade gracefully,
+		// Crowding stays at its zero default.
 	}
 	result.Confidence = ComputeConfidence(result)
 
