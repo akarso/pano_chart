@@ -384,10 +384,10 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	//
 	// Side effect: existing users' DowntrendMinDominance values were tuned
 	// against Expansion score magnitudes, which have a different
-	// distribution than Trend scores — a threshold that felt "about right"
-	// for expansion activity may now fire more or less often than the user
-	// expects against trend strength. Not auto-migrated; existing configs
-	// keep their stored number as-is under the new meaning.
+	// distribution than Trend scores. SQLiteConfigStore.fromJSON resets this
+	// field to the default for any config stored before this change
+	// (config_version < 1) rather than silently reusing a threshold tuned
+	// for a different metric — see infrastructure/notifications/sqlite_config_store.go.
 	if cfg.Downtrend {
 		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok &&
 			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "down" {

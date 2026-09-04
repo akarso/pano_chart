@@ -622,6 +622,45 @@ func TestConfigStore_TimeframeRoundtrip(t *testing.T) {
 	}
 }
 
+func TestConfigStore_ResetsDowntrendMinDominanceForPreMigrationConfigs(t *testing.T) {
+	// Regression test: DowntrendMinDominance used to threshold Scores.Expansion;
+	// PR-072 repointed it at Scores.Trend, a metric with a different
+	// distribution. A value stored before that change (no config_version
+	// field, i.e. config_version 0) must not be silently reused under the
+	// new meaning — Get should reset it to the current default.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := infranotify.NewSQLiteConfigStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyJSON = `{"downtrend":true,"downtrend_min_dominance":0.40,"uptrend_min_dominance":0.60}`
+	_, err = db.Exec(`INSERT INTO notification_config (user_id, config, updated_at)
+		VALUES (?, ?, datetime('now'))`, "u-pre-migration", legacyJSON)
+	if err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	got, err := store.Get("u-pre-migration")
+	if err != nil {
+		t.Fatalf("get error: %v", err)
+	}
+	if got.DowntrendMinDominance != 0.75 {
+		t.Fatalf("expected DowntrendMinDominance reset to default 0.75, got %f", got.DowntrendMinDominance)
+	}
+	// Unrelated fields must survive untouched.
+	if !got.Downtrend {
+		t.Fatal("expected Downtrend toggle to remain true")
+	}
+	if got.UptrendMinDominance != 0.60 {
+		t.Fatalf("expected UptrendMinDominance to be preserved at 0.60, got %f", got.UptrendMinDominance)
+	}
+}
+
 func TestConfigStore_BackfillsEmptyTimeframes(t *testing.T) {
 	store := openTestConfigStore(t)
 	// Simulate a legacy config without timeframe fields (stored as empty strings).
