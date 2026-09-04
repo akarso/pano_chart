@@ -290,6 +290,66 @@ void main() {
           sideways: 0, compression: 0, expansion: 0, trend: 0,
         ),
         symbolCount: 0,
+        dataQuality: 'unavailable',
+      ));
+      final compositeApi = _FakeCompositeApi(const CompositeIndexData(
+        timeframe: '4h',
+        symbolCount: 0,
+        points: [],
+      ));
+      final regimeApi = _FakeRegimeApi(const RegimeData(
+        timeframe: '4h',
+        regime: 'sideways',
+        prevalence: 0.0,
+        scores: RegimeScores(
+          expansion: 0, compression: 0, trend: 0, sideways: 0,
+        ),
+        metrics: RegimeMetrics(
+          trendBreadth: 0,
+          sidewaysBreadth: 0,
+          expansionBreadth: 0,
+          compressionBreadth: 0,
+          // Deliberately "normal"/nonzero placeholder values — regression
+          // guard for PR-074 CR Issue 1: these must not render as if they
+          // were real measurements just because dataQuality is unavailable.
+          volatilityExpansion: 1,
+          dispersion: 0,
+        ),
+        dataQuality: 'unavailable',
+      ));
+
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: stateApi,
+          compositeIndexApi: compositeApi,
+          regimeApi: regimeApi,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Data unavailable'), findsOneWidget);
+      // Not the normal regime display — an outage must not look like a
+      // legitimate (if empty) "Sideways" reading.
+      expect(find.text('SIDEWAYS'), findsNothing);
+      expect(find.text('0% prevalence  •  4h'), findsNothing);
+      // Nor the metrics/breadth cards, which would otherwise render the
+      // unavailable response's placeholder values as if they were real
+      // volatility/dispersion/breadth measurements (PR-074 CR Issue 1).
+      expect(find.text('Market Metrics'), findsNothing);
+      expect(find.text('Market Breadth'), findsNothing);
+    });
+
+    testWidgets(
+        'breadth card falls back to real state data when only regime is unavailable',
+        (tester) async {
+      final stateApi = _FakeStateApi(const MarketStateData(
+        timeframe: '4h',
+        state: 'trend',
+        confidence: 0.6,
+        breadth: MarketBreadth(
+          sideways: 0.1, compression: 0.1, expansion: 0.1, trend: 0.6,
+        ),
+        symbolCount: 120,
       ));
       final compositeApi = _FakeCompositeApi(const CompositeIndexData(
         timeframe: '4h',
@@ -324,10 +384,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Data unavailable'), findsOneWidget);
-      // Not the normal regime display — an outage must not look like a
-      // legitimate (if empty) "Sideways" reading.
-      expect(find.text('SIDEWAYS'), findsNothing);
-      expect(find.text('0% prevalence  •  4h'), findsNothing);
+      // State's own data is fine, so the breadth card should still show
+      // its real numbers rather than being suppressed along with regime's.
+      expect(find.text('Market Breadth'), findsOneWidget);
     });
 
     testWidgets('shows state card as fallback without regimeApi',

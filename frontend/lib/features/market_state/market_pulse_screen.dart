@@ -309,8 +309,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           const SizedBox(height: 16),
           if (_compositeData != null) _buildCompositeCard(_compositeData!),
           const SizedBox(height: 16),
-          if (_regimeData != null) _buildMetricsCard(_regimeData!),
-          if (_regimeData != null) const SizedBox(height: 16),
+          if (_regimeData != null && !_regimeData!.isDataUnavailable)
+            _buildMetricsCard(_regimeData!),
+          if (_regimeData != null && !_regimeData!.isDataUnavailable)
+            const SizedBox(height: 16),
           if (_transitionData != null) _buildTransitionCard(_transitionData!),
           if (_transitionData != null) const SizedBox(height: 16),
           if (_regimeHistoryData != null)
@@ -947,14 +949,18 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   Widget _buildBreadthCard() {
     // Prefer regime metrics (same pipeline as regime card) so the numbers
     // are consistent.  Fall back to state breadth when regime is unavailable.
+    // Neither source's placeholder values (zeros, "normal" defaults) are
+    // real measurements when isDataUnavailable — see PR-074 — so skip a
+    // source entirely rather than let its outage-time zeros read as "the
+    // market has 0% breadth right now."
     double sideways, compression, expansion, trend;
-    if (_regimeData != null) {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
       final m = _regimeData!.metrics;
       sideways = m.sidewaysBreadth;
       compression = m.compressionBreadth;
       expansion = m.expansionBreadth;
       trend = m.trendBreadth;
-    } else if (_stateData != null) {
+    } else if (_stateData != null && !_stateData!.isDataUnavailable) {
       sideways = _stateData!.breadth.sideways;
       compression = _stateData!.breadth.compression;
       expansion = _stateData!.breadth.expansion;

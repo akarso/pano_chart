@@ -33,6 +33,7 @@ import (
 	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/payment"
 	"pano_chart/backend/infrastructure/rankings"
+	infrascoring "pano_chart/backend/infrastructure/scoring"
 	"pano_chart/backend/infrastructure/snapshot"
 	"pano_chart/backend/infrastructure/symbol_universe"
 
@@ -115,6 +116,13 @@ func main() {
 	if sidewaysAlgo == "" {
 		sidewaysAlgo = usecases.SidewaysAlgoV5 // default
 	}
+	// PR-074: sample-logs SidewaysV5's score distribution in production —
+	// see infrastructure/scoring.LoggingScoreCalculator's doc for why this
+	// lives here rather than inside the domain calculation itself. There's
+	// no historical data available to measure the PR-074 CCS fix's impact
+	// on rankings ahead of shipping it; this is how that gets observed.
+	const sidewaysV5LogSampleRate = 0.05
+
 	var sidewaysCalc scoring.SymbolScoreCalculator
 	switch sidewaysAlgo {
 	case usecases.SidewaysAlgoV2:
@@ -126,14 +134,14 @@ func main() {
 	case usecases.SidewaysAlgoV4:
 		sidewaysCalc = &scoring.SidewaysV4ScoreCalculator{}
 	case usecases.SidewaysAlgoV5:
-		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
 			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}
+		}, sidewaysV5LogSampleRate)
 	default:
 		sidewaysAlgo = usecases.SidewaysAlgoV5
-		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
 			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}
+		}, sidewaysV5LogSampleRate)
 	}
 
 	// --- Use cases ---

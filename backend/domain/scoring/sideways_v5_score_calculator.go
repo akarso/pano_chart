@@ -1,19 +1,11 @@
 package scoring
 
 import (
-	"log"
 	"math"
-	"math/rand"
 	"sort"
 
 	"pano_chart/backend/domain"
 )
-
-// sidewaysV5LogSampleRate is the fraction of DetectSidewaysV5 calls that
-// log their Score/component breakdown — see the comment at the log.Printf
-// call site. rand.Float64() uses the default global Source, which is safe
-// for concurrent use, so no locking is needed here.
-const sidewaysV5LogSampleRate = 0.05
 
 // SidewaysV5ScoreCalculator implements SymbolScoreCalculator for v5
 type SidewaysV5ScoreCalculator struct {
@@ -280,24 +272,12 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// were fit through the same point set, so upperSlope always equaled
 	// lowerSlope). That inflated CCS — and thus this composite Score,
 	// weighted 1/3 into the main ranking alongside Trend and GainLoss
-	// (cmd/api/main.go) — across the board. Logged (not the previous
-	// unconditional stderr dumps this replaces) so the post-fix Score
-	// distribution can actually be observed in production rather than
-	// assumed; there's no historical data available in dev to validate
-	// the shift's magnitude ahead of shipping.
-	//
-	// Sampled, not unconditional (CR follow-up): this runs per-symbol in
-	// the ranking pipeline — ~150 symbols per refresh across however many
-	// timeframes are active. Rankings are Redis-cached (rankingsCacheTTL,
-	// cmd/api/main.go), so this isn't per-HTTP-request, but a full
-	// unconditional per-symbol log would still burst on every cache
-	// refresh. A ~5% random sample gives a representative read on the
-	// Score distribution — which is the actual goal, not per-symbol
-	// tracing — without that volume. Bump sidewaysV5LogSampleRate (or make
-	// it unconditional) if the sample proves too sparse to be useful.
-	if rand.Float64() < sidewaysV5LogSampleRate {
-		log.Printf("[SidewaysV5] score=%.4f CCS=%.4f OQS=%.4f DCS=%.4f VOS=%.4f SRM=%.4f", finalScore, CCS, OQS, DCS, VOS, SRM)
-	}
+	// (cmd/api/main.go) — across the board, with no historical data
+	// available in dev to measure the shift ahead of shipping. Production
+	// observability for that (sampled score logging) deliberately lives
+	// outside this function — see infrastructure/scoring.
+	// LoggingScoreCalculator — so this stays a pure, deterministic domain
+	// calculation with no logging or randomness of its own (CR follow-up).
 
 	return SidewaysResult{
 		Score: finalScore,
@@ -605,6 +585,25 @@ func detectSpike(candles []domain.Candle, atr, k float64) (int, bool) {
 
 func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, float64, float64) {
 	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
+
+	// Guard (PR-074 CR follow-up): regressionThroughHighs/Lows need >= 2
+	// points each and silently return an origin line (slope=0,
+	// intercept=0) otherwise — comparing real candle prices against that
+	// degenerate line (plus widthStabilityScore's independent collapse
+	// when channelWidths ends up empty) was an accident of the math, not a
+	// principled judgment. Make it explicit instead: DetectSidewaysV5's
+	// main path already treats "not enough extrema to size up the
+	// channel" as disqualifying (returns Score 0, not a neutral pass) via
+	// its cfg.ExtremaCount gate — a half with fewer than 2 highs or lows
+	// hasn't oscillated enough to confirm it recovered into a real
+	// channel either, so quickStructure applies the same standard here
+	// rather than inventing a more lenient one for this call site. (A
+	// smoothly-recovered-but-low-oscillation half reading as
+	// "unconfirmed" this way is the same tradeoff the main gate already
+	// makes, not a new one.)
+	if len(highsIdx) < 2 || len(lowsIdx) < 2 {
+		return 0, 0, 0
+	}
 
 	// --- 2. Fit regression lines: upper through highs, lower through lows —
 	// see the identical fix/comment in DetectSidewaysV5 above (PR-074).

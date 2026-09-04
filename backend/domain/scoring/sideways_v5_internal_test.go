@@ -52,3 +52,30 @@ func TestStddevFromLine_UsesRealIndicesNotLoopPosition(t *testing.T) {
 		t.Errorf("expected real-index and compacted-index evaluation to diverge sharply for widely-spaced points; got real=%v compacted=%v", got, buggy)
 	}
 }
+
+// TestQuickStructure_InsufficientHighsOrLows_ReturnsZero is a direct
+// regression test for the PR-074 CR follow-up: quickStructure (used to
+// evaluate the pre/post halves of a spike for SRM recovery scoring) must
+// not fall through to regressionThroughHighs/Lows's degenerate origin-line
+// default when a half has fewer than 2 highs or lows. Before this guard,
+// TestSidewaysV5_BrokenStructureHeavilyPenalized (a black-box test through
+// the full DetectSidewaysV5 pipeline) still passed by coincidence — the
+// degenerate math happened to also produce a low score for that specific
+// input — which is why this needs a direct, deterministic check rather
+// than relying on that test alone.
+func TestQuickStructure_InsufficientHighsOrLows_ReturnsZero(t *testing.T) {
+	cfg := SidewaysV5Config{N: 6}
+	sym, _ := domain.NewSymbol("TEST")
+	tf := domain.Timeframe1h
+	// Fewer candles than detectExtrema's window (N=6) needs on either side
+	// of a candidate extremum — guarantees zero highs/lows/extrema found.
+	candles := make([]domain.Candle, 5)
+	for i := range candles {
+		candles[i] = domain.NewCandleUnsafe(sym, tf, time.Unix(int64(i)*3600, 0).UTC(), 100, 101, 99, 100, 1000)
+	}
+
+	ccs, oqs, dcs := quickStructure(candles, cfg)
+	if ccs != 0 || oqs != 0 || dcs != 0 {
+		t.Errorf("expected (0, 0, 0) for insufficient highs/lows, got (%v, %v, %v)", ccs, oqs, dcs)
+	}
+}
