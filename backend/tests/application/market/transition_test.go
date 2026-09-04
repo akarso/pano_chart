@@ -168,13 +168,13 @@ func TestEngine_probabilities_sum_to_one(t *testing.T) {
 // ---------- transition service ----------
 
 type fakeTransitionRegimeProvider struct {
-	summary mkt.RegimeSummary
+	summary mkt.Summary
 	err     error
 }
 
-func (f *fakeTransitionRegimeProvider) CalculateRegime(_ context.Context, tf string) (mkt.RegimeSummary, error) {
+func (f *fakeTransitionRegimeProvider) Calculate(tf string) (mkt.Summary, error) {
 	if f.err != nil {
-		return mkt.RegimeSummary{}, f.err
+		return mkt.Summary{}, f.err
 	}
 	s := f.summary
 	s.Timeframe = tf
@@ -183,13 +183,13 @@ func (f *fakeTransitionRegimeProvider) CalculateRegime(_ context.Context, tf str
 
 func TestTransitionService_Calculate(t *testing.T) {
 	provider := &fakeTransitionRegimeProvider{
-		summary: mkt.RegimeSummary{
-			Regime:     mkt.RegimeCompression,
-			Prevalence: 0.8,
-			Metrics: mkt.RegimeMetrics{
-				CompressionBreadth:  0.4,
-				VolatilityExpansion: 1.2, // volSlope = 0.2
+		summary: mkt.Summary{
+			State:      mkt.StateCompression,
+			Confidence: 0.8,
+			Breadth: mkt.Breadth{
+				Compression: 0.4,
 			},
+			VolatilityExpansion: 1.2, // volSlope = 0.2
 		},
 	}
 	eng := transition.NewTransitionEngine()

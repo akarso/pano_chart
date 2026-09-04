@@ -7,10 +7,11 @@ import (
 	mkt "pano_chart/backend/domain/market"
 )
 
-// RegimeProvider abstracts the regime detection so the transition service
-// can be tested without the full MetricsService dependency chain.
+// RegimeProvider abstracts market-state computation so the transition
+// service can be tested without the full MarketStateService dependency
+// chain. Satisfied directly by *appmarket.MarketStateService.
 type RegimeProvider interface {
-	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
+	Calculate(timeframe string) (mkt.Summary, error)
 }
 
 // AgeProvider returns the current regime age in candles.
@@ -43,14 +44,14 @@ func (s *TransitionService) SetAgeProvider(ap AgeProvider) {
 // Calculate fetches the current regime summary and returns transition
 // probabilities for the requested timeframe.
 func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mkt.MarketTransition, error) {
-	summary, err := s.regimeProvider.CalculateRegime(ctx, timeframe)
+	summary, err := s.regimeProvider.Calculate(timeframe)
 	if err != nil {
 		return mkt.MarketTransition{}, fmt.Errorf("transition: regime error: %w", err)
 	}
 
 	// Derive volatility slope from the single-point VolatilityExpansion metric.
 	// A value of 1.0 is neutral; >1 means expansion, <1 compression.
-	volSlope := summary.Metrics.VolatilityExpansion - 1.0
+	volSlope := summary.VolatilityExpansion - 1.0
 
 	// Derive regime age from history; fall back to 12 if unavailable.
 	regimeAge := 12
@@ -60,9 +61,10 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		}
 	}
 
+	currentRegime := mkt.Regime(summary.State)
 	probs := s.engine.Calculate(
-		summary.Regime,
-		summary.Metrics.CompressionBreadth,
+		currentRegime,
+		summary.Breadth.Compression,
 		volSlope,
 		regimeAge,
 	)
@@ -74,7 +76,7 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 
 	return mkt.MarketTransition{
 		Timeframe:     summary.Timeframe,
-		CurrentRegime: summary.Regime,
+		CurrentRegime: currentRegime,
 		Probabilities: probs,
 		Horizon:       horizon,
 	}, nil

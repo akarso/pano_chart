@@ -331,7 +331,9 @@ func main() {
 	verifyPurchaseUC := usecases.NewVerifyPurchase(providerRegistry, subscriptionSvc)
 	log.Printf("[main] Payment infrastructure initialized (db=%s)\n", paymentDBPath)
 
-	// --- Market state service ---
+	// --- Market state service (canonical regime/breadth classification —
+	// see PR-073: this replaced a second, independently-evolved softmax
+	// pipeline that could disagree with this one about the same market) ---
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
@@ -347,8 +349,9 @@ func main() {
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 
-	// --- Market regime detector ---
-	metricsService := metrics.NewMetricsService(compositeService, candleProvider, evalProvider)
+	// Enables VolatilityExpansion/Dispersion on the market summary (used by
+	// the legacy /api/market/regime response and the transition engine).
+	marketService.SetCandleProvider(candleProvider)
 
 	// --- Regime history tracker (SQLite-backed) ---
 	regimeHistoryDBPath := os.Getenv("PC_REGIME_HISTORY_DB")
@@ -360,31 +363,17 @@ func main() {
 		log.Fatalf("Failed to open regime history DB: %v", err)
 	}
 	regimeTracker := regimehistory.NewTracker(regimeHistoryRepo)
-	metricsService.SetObserver(regimeTracker)
+	marketService.SetObserver(regimeTracker)
 	regimeHistoryService := regimehistory.NewService(regimeHistoryRepo)
 	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
 	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
 
-	// --- Regime history backfill (runs once when DB is empty) ---
-	backfiller := metrics.NewBackfiller(candleProvider, regimeTracker)
-	for _, bfTF := range []string{"1h", "4h", "1d"} {
-		hist, histErr := regimeHistoryService.GetHistory(bfTF, 1)
-		if histErr != nil || len(hist.Periods) == 0 {
-			log.Printf("[main] Backfilling regime history for %s...", bfTF)
-			if bfErr := backfiller.Run(context.Background(), bfTF, 100); bfErr != nil {
-				log.Printf("[main] Backfill %s failed: %v", bfTF, bfErr)
-			} else {
-				log.Printf("[main] Backfill %s complete", bfTF)
-			}
-		}
-	}
-
-	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
+	regimeHandler := adhttp.NewMarketRegimeHandler(marketService)
 	log.Println("[main] Market regime detector initialized")
 
 	// --- Market transition probability engine ---
 	transitionEngine := transition.NewTransitionEngine()
-	transitionService := transition.NewTransitionService(metricsService, transitionEngine)
+	transitionService := transition.NewTransitionService(marketService, transitionEngine)
 	transitionService.SetAgeProvider(regimeHistoryService)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
@@ -392,7 +381,7 @@ func main() {
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
-	setupService.SetMarketProvider(metricsService)
+	setupService.SetMarketProvider(marketService)
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
@@ -525,7 +514,7 @@ func main() {
 
 			notifyScheduler := appnotify.NewScheduler(
 				notifyEngine,
-				metricsService,   // implements MarketProvider (CalculateRegime)
+				marketService,    // implements MarketProvider (Calculate)
 				setupScanAdapter, // scans top-ranked symbols for best setup
 				macroProvider,
 				appnotify.DefaultSchedulerConfig(),

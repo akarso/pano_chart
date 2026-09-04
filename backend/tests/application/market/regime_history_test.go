@@ -349,13 +349,13 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	}
 
 	provider := &fakeTransitionRegimeProvider{
-		summary: mkt.RegimeSummary{
-			Regime:     mkt.RegimeCompression,
-			Prevalence: 0.8,
-			Metrics: mkt.RegimeMetrics{
-				CompressionBreadth:  0.4,
-				VolatilityExpansion: 1.2,
+		summary: mkt.Summary{
+			State:      mkt.StateCompression,
+			Confidence: 0.8,
+			Breadth: mkt.Breadth{
+				Compression: 0.4,
 			},
+			VolatilityExpansion: 1.2,
 		},
 	}
 

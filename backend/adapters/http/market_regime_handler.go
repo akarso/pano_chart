@@ -1,17 +1,23 @@
 package http
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 
 	mkt "pano_chart/backend/domain/market"
 )
 
-// RegimeCalculator abstracts regime computation so the handler works with
-// both the direct service and any cache decorator.
+// RegimeCalculator abstracts market-state computation so the handler works
+// with both the direct service and any cache decorator. Satisfied directly
+// by *appmarket.MarketStateService.
+//
+// This handler serves the legacy /api/market/regime response shape
+// (regime/prevalence/scores/metrics) for existing frontend clients — see
+// PR-073: it's backed by the same MarketStateService as /api/market/state
+// (adapters/http/market_handler.go) rather than a separate classification
+// pipeline, so the two endpoints can no longer disagree about the market.
 type RegimeCalculator interface {
-	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
+	Calculate(timeframe string) (mkt.Summary, error)
 }
 
 // MarketRegimeHandler handles GET /api/market/regime requests.
@@ -60,30 +66,32 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		tf = "4h"
 	}
 
-	summary, err := h.calculator.CalculateRegime(r.Context(), tf)
+	summary, err := h.calculator.Calculate(tf)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
 	}
 
+	// Metrics' four breadth fields are the same Breadth values also exposed
+	// under "scores" — Summary has one breadth computation now, not two.
 	resp := regimeResponse{
 		Timeframe:  summary.Timeframe,
-		Regime:     string(summary.Regime),
-		Prevalence: roundTo(summary.Prevalence, 4),
+		Regime:     string(summary.State),
+		Prevalence: roundTo(summary.Confidence, 4),
 		Bias:       summary.Bias,
 		Scores: regimeScoresDTO{
-			Expansion:   roundTo(summary.Scores.Expansion, 4),
-			Compression: roundTo(summary.Scores.Compression, 4),
-			Trend:       roundTo(summary.Scores.Trend, 4),
-			Sideways:    roundTo(summary.Scores.Sideways, 4),
+			Expansion:   roundTo(summary.Breadth.Expansion, 4),
+			Compression: roundTo(summary.Breadth.Compression, 4),
+			Trend:       roundTo(summary.Breadth.Trend, 4),
+			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 		},
 		Metrics: regimeMetricsDTO{
-			TrendBreadth:        roundTo(summary.Metrics.TrendBreadth, 4),
-			SidewaysBreadth:     roundTo(summary.Metrics.SidewaysBreadth, 4),
-			CompressionBreadth:  roundTo(summary.Metrics.CompressionBreadth, 4),
-			ExpansionBreadth:    roundTo(summary.Metrics.ExpansionBreadth, 4),
-			VolatilityExpansion: roundTo(summary.Metrics.VolatilityExpansion, 4),
-			Dispersion:          roundTo(summary.Metrics.Dispersion, 4),
+			TrendBreadth:        roundTo(summary.Breadth.Trend, 4),
+			SidewaysBreadth:     roundTo(summary.Breadth.Sideways, 4),
+			CompressionBreadth:  roundTo(summary.Breadth.Compression, 4),
+			ExpansionBreadth:    roundTo(summary.Breadth.Expansion, 4),
+			VolatilityExpansion: roundTo(summary.VolatilityExpansion, 4),
+			Dispersion:          roundTo(summary.Dispersion, 4),
 		},
 		EffectiveTrend: roundTo(summary.EffectiveTrend, 4),
 		BreakdownRate:  roundTo(summary.BreakdownRate, 4),

@@ -1,4 +1,4 @@
-package metrics
+package market
 
 // dispersion computes the mean absolute deviation of individual asset returns
 // from the market return. Low dispersion means assets move together; high

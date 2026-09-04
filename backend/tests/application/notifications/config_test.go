@@ -160,9 +160,9 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
-		Bias:   "up",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -204,9 +204,9 @@ func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
-		Bias:   "down",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:    "down",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -244,9 +244,9 @@ func TestScheduler_PerUser_MarketDowntrend_DoesNotFireOnExpansion(t *testing.T) 
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Expansion: 0.90, Trend: 0.10},
-		Bias:   "up", // strong breakout, but to the upside
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Expansion: 0.90, Trend: 0.10},
+		Bias:    "up", // strong breakout, but to the upside
 	})
 
 	cfgStore := newMemConfigStore()
@@ -275,9 +275,9 @@ func TestScheduler_PerUser_MarketUptrend_DoesNotFireOnBearishRegime(t *testing.T
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
-		Bias:   "down",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.90, Sideways: 0.05},
+		Bias:    "down",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -307,9 +307,9 @@ func TestScheduler_PerUser_NeutralBias_NeitherUptrendNorDowntrendFires(t *testin
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
-		Bias:   "neutral",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.90, Sideways: 0.05},
+		Bias:    "neutral",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -339,8 +339,8 @@ func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.60, Sideways: 0.30},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.60, Sideways: 0.30},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -370,8 +370,8 @@ func TestScheduler_PerUser_DisabledRegime_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -398,8 +398,8 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.40, Sideways: 0.45, Compression: 0.10},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.40, Sideways: 0.45, Compression: 0.10},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -521,9 +521,9 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 
 	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
-		summaries: map[string]mkt.RegimeSummary{
-			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}, Bias: "up"},
-			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}, Bias: "up"},
+		summaries: map[string]mkt.Summary{
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.30, Compression: 0.10}, Bias: "up"},
 		},
 	}
 

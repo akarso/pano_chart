@@ -16,9 +16,9 @@ import (
 	"pano_chart/backend/domain/setup"
 )
 
-// MarketProvider returns the current regime summary for a timeframe.
+// MarketProvider returns the current market summary for a timeframe.
 type MarketProvider interface {
-	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
+	Calculate(timeframe string) (mkt.Summary, error)
 }
 
 // FragilityProvider returns the crowding / fragility assessment for a symbol.
@@ -93,7 +93,7 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 
 	// Apply market-level modifier when a provider is available.
 	if s.marketProvider != nil {
-		if summary, err := s.marketProvider.CalculateRegime(context.Background(), timeframe); err == nil {
+		if summary, err := s.marketProvider.Calculate(timeframe); err == nil {
 			result = ApplyMarketModifier(result, summary.EffectiveTrend)
 		}
 	}

@@ -12,13 +12,13 @@ import (
 )
 
 type fakeMarketProvider struct {
-	summaries map[string]mkt.RegimeSummary // keyed by timeframe
+	summaries map[string]mkt.Summary // keyed by timeframe
 	err       error
 }
 
-func (f *fakeMarketProvider) CalculateRegime(_ context.Context, tf string) (mkt.RegimeSummary, error) {
+func (f *fakeMarketProvider) Calculate(tf string) (mkt.Summary, error) {
 	if f.err != nil {
-		return mkt.RegimeSummary{}, f.err
+		return mkt.Summary{}, f.err
 	}
 	if s, ok := f.summaries[tf]; ok {
 		return s, nil
@@ -27,13 +27,13 @@ func (f *fakeMarketProvider) CalculateRegime(_ context.Context, tf string) (mkt.
 	for _, s := range f.summaries {
 		return s, nil
 	}
-	return mkt.RegimeSummary{}, nil
+	return mkt.Summary{}, nil
 }
 
 // singleMarket is a helper that builds a fakeMarketProvider for one timeframe.
-func singleMarket(tf string, s mkt.RegimeSummary) *fakeMarketProvider {
+func singleMarket(tf string, s mkt.Summary) *fakeMarketProvider {
 	s.Timeframe = tf
-	return &fakeMarketProvider{summaries: map[string]mkt.RegimeSummary{tf: s}}
+	return &fakeMarketProvider{summaries: map[string]mkt.Summary{tf: s}}
 }
 
 type fakeSetupProvider struct {
@@ -60,9 +60,9 @@ func TestScheduler_MarketState_HighConfidence(t *testing.T) {
 	eng := notifications.NewEngine(spy, cfg)
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime:     mkt.RegimeTrend,
-		Prevalence: 0.82,
+	market := singleMarket("1h", mkt.Summary{
+		State:      mkt.StateTrend,
+		Confidence: 0.82,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -83,9 +83,9 @@ func TestScheduler_MarketState_LowConfidence_Suppressed(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime:     mkt.RegimeSideways,
-		Prevalence: 0.50,
+	market := singleMarket("1h", mkt.Summary{
+		State:      mkt.StateSideways,
+		Confidence: 0.50,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -100,8 +100,8 @@ func TestScheduler_MarketState_OncePerDay(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime: mkt.RegimeTrend, Prevalence: 0.9,
+	market := singleMarket("1h", mkt.Summary{
+		State: mkt.StateTrend, Confidence: 0.9,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -226,9 +226,9 @@ func TestScheduler_SubscriptionGating_MarketSuppressedForFreeUser(t *testing.T) 
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
-		Bias:   "up",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -258,9 +258,9 @@ func TestScheduler_SubscriptionGating_MarketSentToProUser(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
-		Bias:   "up",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -321,9 +321,9 @@ func TestScheduler_SubscriptionGating_MixedUsers(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
-		Bias:   "up",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -356,9 +356,9 @@ func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
-		Bias:   "up",
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()

@@ -1,22 +1,59 @@
 package market
 
 import (
+	"context"
 	"math"
+	"sort"
+	"sync"
+	"time"
 
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
+
+// CandleProvider provides candle data and symbol lists for market metrics.
+// Optional dependency of MarketStateService — see SetCandleProvider.
+type CandleProvider interface {
+	// Symbols returns the current symbol universe.
+	Symbols(ctx context.Context) ([]domain.Symbol, error)
+	// GetLastNCandles retrieves the last N candles for a symbol and timeframe.
+	GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
+}
+
+// RegimeObserver is notified after every Calculate call. The Tracker from
+// the regimehistory package satisfies this interface.
+type RegimeObserver interface {
+	Update(timeframe string, regime mkt.Regime, timestamp int64) error
+}
+
+// candleMetricsWindow is the candle window used for VolatilityExpansion /
+// Dispersion — matches the sparkline precision used elsewhere.
+const candleMetricsWindow = 110
 
 // MarketStateService computes the aggregate market state summary
 // by classifying each symbol's evaluation snapshot and computing
 // breadth ratios.
 type MarketStateService struct {
 	provider EvaluationProvider
+	candles  CandleProvider // optional; nil disables VolatilityExpansion/Dispersion
+	observer RegimeObserver // optional; nil disables history tracking
 }
 
 // NewMarketStateService constructs the service.
 func NewMarketStateService(p EvaluationProvider) *MarketStateService {
 	return &MarketStateService{provider: p}
+}
+
+// SetCandleProvider enables VolatilityExpansion/Dispersion computation.
+// Without it, VolatilityExpansion defaults to 1.0 ("normal") and Dispersion
+// to 0 — Calculate remains fully usable, just without these two metrics.
+func (s *MarketStateService) SetCandleProvider(cp CandleProvider) {
+	s.candles = cp
+}
+
+// SetObserver attaches a regime observer (e.g. the history tracker).
+func (s *MarketStateService) SetObserver(o RegimeObserver) {
+	s.observer = o
 }
 
 // Calculate produces a market state summary for the given timeframe.
@@ -39,12 +76,13 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 
 	if len(evaluations) == 0 {
 		return mkt.Summary{
-			Timeframe:   timeframe,
-			State:       mkt.StateSideways,
-			Confidence:  0,
-			Breadth:     mkt.Breadth{},
-			SymbolCount: 0,
-			Label:       BuildMarketLabel(0, 0),
+			Timeframe:           timeframe,
+			State:               mkt.StateSideways,
+			Confidence:          0,
+			Breadth:             mkt.Breadth{},
+			SymbolCount:         0,
+			VolatilityExpansion: 1.0,
+			Label:               BuildMarketLabel(0, 0),
 		}, nil
 	}
 
@@ -182,17 +220,114 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	trendPrevalence := breadth.Trend
 	label := BuildMarketLabel(trendPrevalence, effectiveTrend)
 
+	// ---- 6. Candle-derived metrics (volatility expansion, dispersion) ----
+	// Optional: only computed when a CandleProvider is configured.
+	volExpansion, disp := s.candleMetrics(timeframe)
+
+	// Notify observer (e.g. regime history tracker) — fire-and-forget.
+	if s.observer != nil {
+		_ = s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix())
+	}
+
 	return mkt.Summary{
-		Timeframe:      timeframe,
-		State:          dominant,
-		Confidence:     maxWeight,
-		Breadth:        breadth,
-		SymbolCount:    len(evaluations),
-		Bias:           bias,
-		EffectiveTrend: effectiveTrend,
-		BreakdownRate:  breakdownRate,
-		Label:          label,
+		Timeframe:           timeframe,
+		State:               dominant,
+		Confidence:          maxWeight,
+		Breadth:             breadth,
+		SymbolCount:         len(evaluations),
+		Bias:                bias,
+		EffectiveTrend:      effectiveTrend,
+		BreakdownRate:       breakdownRate,
+		Label:               label,
+		VolatilityExpansion: volExpansion,
+		Dispersion:          disp,
 	}, nil
+}
+
+// candleMetrics computes VolatilityExpansion (median short/long ATR ratio)
+// and Dispersion (MAD of period returns vs. the mean market return) across
+// the symbol universe. Returns the defaults (1.0, 0) when no CandleProvider
+// is configured or the fetch fails — these are supplementary metrics, not
+// required for state classification, so a failure here must not fail
+// Calculate as a whole.
+func (s *MarketStateService) candleMetrics(timeframe string) (volExpansion, disp float64) {
+	volExpansion = 1.0
+	if s.candles == nil {
+		return volExpansion, 0
+	}
+
+	ctx := context.Background()
+	tf, err := domain.NewTimeframe(timeframe)
+	if err != nil {
+		return volExpansion, 0
+	}
+	symbols, err := s.candles.Symbols(ctx)
+	if err != nil || len(symbols) == 0 {
+		return volExpansion, 0
+	}
+
+	type candleResult struct {
+		vol float64
+		ret float64
+	}
+
+	var mu sync.Mutex
+	var results []candleResult
+	sem := make(chan struct{}, 20) // bounded parallelism
+	var wg sync.WaitGroup
+
+	for _, sym := range symbols {
+		sym := sym
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			cs, fetchErr := s.candles.GetLastNCandles(sym, tf, candleMetricsWindow)
+			if fetchErr != nil || cs.Len() < 2 {
+				return
+			}
+			candles := cs.All()
+			first := candles[0].Close()
+			last := candles[len(candles)-1].Close()
+			ret := 0.0
+			if first != 0 {
+				ret = (last - first) / first
+			}
+
+			mu.Lock()
+			results = append(results, candleResult{vol: volatilityExpansion(candles), ret: ret})
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+
+	if len(results) == 0 {
+		return volExpansion, 0
+	}
+
+	vols := make([]float64, len(results))
+	returns := make([]float64, len(results))
+	var returnSum float64
+	for i, r := range results {
+		vols[i] = r.vol
+		returns[i] = r.ret
+		returnSum += r.ret
+	}
+	volExpansion = median(vols)
+	disp = dispersion(returns, returnSum/float64(len(returns)))
+	return volExpansion, disp
+}
+
+// median returns the median of a slice. Modifies the input in place via sort.
+func median(vals []float64) float64 {
+	sort.Float64s(vals)
+	n := len(vals)
+	if n%2 == 1 {
+		return vals[n/2]
+	}
+	return (vals[n/2-1] + vals[n/2]) / 2
 }
 
 // topTwo returns the two highest values from a slice.
