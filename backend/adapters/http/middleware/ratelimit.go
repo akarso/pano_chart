@@ -9,9 +9,40 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// keyLimiterTTL is how long a per-key limiter is kept after its last
-// request before it's eligible for eviction.
-const keyLimiterTTL = 10 * time.Minute
+// keyLimiterMinTTL is the floor for how long a per-key limiter is kept
+// after its last request before it's eligible for eviction — see
+// safeEvictionTTL, which is what actually determines the TTL used.
+const keyLimiterMinTTL = 10 * time.Minute
+
+// safeEvictionTTL returns how long an idle key's rate.Limiter can be
+// evicted after without granting a free quota reset — see PR-075 CR
+// follow-up (Issue 1). Deleting a limiter entry and recreating it on the
+// next request starts that new limiter at a full burst, same as a brand
+// new key. That's only *observably* equivalent to leaving the real
+// limiter in place if the real one would also have refilled to a full
+// burst by then — i.e. the TTL must be at least burst/perSecond, the time
+// a fully-drained bucket takes to refill.
+//
+// This mattered concretely for PerUserRateLimit(5, 3) (5/hour, burst 3):
+// natural refill time is burst/perSecond = 3/(5/3600) = 2160s = 36
+// minutes, but the old shared 10-minute TTL evicted (and therefore
+// refilled) the limiter more than 3x faster than that — a user idle for
+// just over 10 minutes between bursts got a free full burst again well
+// before the real 5/hour rate would have allowed it, permitting
+// materially more than 5 calls/hour by spacing bursts >10 minutes apart.
+// PerIPRateLimit's typical rates (e.g. 60/min, burst 3-10) refill in
+// single-digit seconds, so keyLimiterMinTTL was already safe there — this
+// only changes behavior for callers whose natural refill time exceeds it.
+func safeEvictionTTL(perSecond float64, burst int) time.Duration {
+	if perSecond <= 0 {
+		return keyLimiterMinTTL
+	}
+	refill := time.Duration(float64(burst) / perSecond * float64(time.Second))
+	if refill < keyLimiterMinTTL {
+		return keyLimiterMinTTL
+	}
+	return refill
+}
 
 // keyLimiterCleanupEvery triggers an opportunistic sweep of stale entries
 // every N requests, instead of a background goroutine — these middlewares
@@ -63,6 +94,7 @@ func perKeyRateLimit(keyFunc func(*http.Request) string, perSecond float64, burs
 	var mu sync.Mutex
 	limiters := make(map[string]*keyLimiterEntry)
 	rps := rate.Limit(perSecond)
+	ttl := safeEvictionTTL(perSecond, burst)
 	var requestCount uint64
 	var lastSweep time.Time
 
@@ -73,16 +105,16 @@ func perKeyRateLimit(keyFunc func(*http.Request) string, perSecond float64, burs
 		now := time.Now()
 		requestCount++
 		// Sweep every keyLimiterCleanupEvery requests, OR opportunistically
-		// once keyLimiterTTL has passed since the last sweep regardless of
-		// count — a count-only trigger means a low-traffic caller (e.g.
+		// once ttl has passed since the last sweep regardless of count — a
+		// count-only trigger means a low-traffic caller (e.g.
 		// PerUserRateLimit on a rarely-hit endpoint) might not reach the
 		// threshold for a very long time, leaving stale entries around far
 		// longer than the TTL implies even though the map's total size
 		// stays bounded by distinct-key count either way (not a leak, just
 		// a wider-than-intended staleness window — CR follow-up).
-		if requestCount%keyLimiterCleanupEvery == 0 || now.Sub(lastSweep) > keyLimiterTTL {
+		if requestCount%keyLimiterCleanupEvery == 0 || now.Sub(lastSweep) > ttl {
 			for k, e := range limiters {
-				if now.Sub(e.lastSeen) > keyLimiterTTL {
+				if now.Sub(e.lastSeen) > ttl {
 					delete(limiters, k)
 				}
 			}
@@ -119,7 +151,7 @@ func perKeyRateLimit(keyFunc func(*http.Request) string, perSecond float64, burs
 // (e.g. /api/device/claim) that have no other abuse protection — not a
 // substitute for a real edge/proxy rate limiter in front of the whole API.
 //
-// Per-IP state is bounded via TTL eviction (see keyLimiterTTL): entries
+// Per-IP state is bounded via TTL eviction (see safeEvictionTTL): entries
 // unused for a while are dropped on an opportunistic sweep, so sustained
 // traffic from many distinct IPs doesn't grow the map forever.
 func PerIPRateLimit(requestsPerMinute int, burst int) func(http.Handler) http.Handler {
