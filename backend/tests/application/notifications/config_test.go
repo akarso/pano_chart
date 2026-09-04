@@ -154,6 +154,65 @@ func (m *memConfigStore) All() ([]notifications.NotificationConfig, error) {
 	return out, nil
 }
 
+// TestCheckMarketForUser_RegimeChangeSameDay_SendsSecondNotification is the
+// regression test for PR-075: the per-user market dedup key used to be
+// market_<timeframe>_<dateKey> — no regime component — so a genuine
+// intraday regime flip (e.g. Uptrend to Downtrend) produced no further
+// notification until the next calendar day. The key now includes the
+// winning candidate's label (Uptrend/Downtrend/Sideways/Silent), so a
+// label change re-arms the notification even on the same day, while a
+// steady regime still only fires once (Engine's 24h per-key dedup).
+func TestCheckMarketForUser_RegimeChangeSameDay_SendsSecondNotification(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Timeframe: "1h",
+		Breadth:   mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:      "up",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		Downtrend:             true,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		UptrendTimeframe:      "1h",
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 notification after the initial uptrend check, got %d", spy.userCount())
+	}
+
+	// Re-checking with no change must stay deduped (same day, same label).
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 1 {
+		t.Fatalf("expected the steady regime to stay deduped, got %d", spy.userCount())
+	}
+
+	// Regime flips intraday: uptrend -> downtrend, same calendar day.
+	market.summaries["1h"] = mkt.Summary{
+		Timeframe: "1h",
+		Breadth:   mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:      "down",
+	}
+
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 2 {
+		t.Fatalf("expected a second notification after the same-day regime change, got %d", spy.userCount())
+	}
+}
+
 func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())

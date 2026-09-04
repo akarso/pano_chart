@@ -453,7 +453,13 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		Title: "Market Update",
 		Body:  body,
 		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
-		Key:   fmt.Sprintf("market_%s_%s", best.timeframe, dateKey),
+		// best.label (Uptrend/Downtrend/Sideways/Silent) is included, not
+		// just the date — PR-075. Without it, one notification per
+		// (timeframe, day) meant a genuine intraday regime flip (e.g.
+		// Uptrend to Downtrend) produced no further notification until
+		// tomorrow. The date component stays: a steady regime should still
+		// only fire once per day, not on every scheduler tick.
+		Key: fmt.Sprintf("market_%s_%s_%s", best.timeframe, best.label, dateKey),
 	})
 }
 
