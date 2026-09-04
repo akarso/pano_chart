@@ -65,10 +65,14 @@ func (e *Engine) Send(ctx context.Context, n Notification) error {
 		return nil
 	}
 
-	e.dedup.Mark(n.Key, e.cfg.DefaultDedupTTL)
-
 	log.Printf("[notify] sending: type=%s title=%q key=%s", n.Type, n.Title, n.Key)
-	return e.sender.Broadcast(ctx, n)
+	err := e.sender.Broadcast(ctx, n)
+	if err != nil {
+		return err
+	}
+
+	e.dedup.Mark(n.Key, e.cfg.DefaultDedupTTL)
+	return nil
 }
 
 // SendToUser checks quiet hours and per-user dedup, then delivers to a
@@ -85,10 +89,14 @@ func (e *Engine) SendToUser(ctx context.Context, userID string, n Notification) 
 		return nil
 	}
 
-	e.dedup.Mark(perUserKey, e.cfg.DefaultDedupTTL)
-
 	log.Printf("[notify] sending to user=%s: type=%s title=%q key=%s", userID, n.Type, n.Title, n.Key)
-	return e.sender.SendToUser(ctx, userID, n)
+	err := e.sender.SendToUser(ctx, userID, n)
+	if err != nil {
+		return err
+	}
+
+	e.dedup.Mark(perUserKey, e.cfg.DefaultDedupTTL)
+	return nil
 }
 
 func (e *Engine) withinAllowedHours() bool {
