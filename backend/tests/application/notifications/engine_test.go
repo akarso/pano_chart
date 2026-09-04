@@ -2,6 +2,7 @@ package notifications_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -143,6 +144,113 @@ func TestEngine_DifferentKeysNotDeduped(t *testing.T) {
 
 	if spy.count() != 2 {
 		t.Fatalf("expected 2 different keys, got %d", spy.count())
+	}
+}
+
+// failThenSucceedSender fails the first N calls to each method, then succeeds.
+type failThenSucceedSender struct {
+	mu             sync.Mutex
+	failBroadcasts int
+	failUserSends  int
+	broadcastCalls int
+	userSendCalls  int
+}
+
+func (s *failThenSucceedSender) Broadcast(_ context.Context, _ notifications.Notification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.broadcastCalls++
+	if s.broadcastCalls <= s.failBroadcasts {
+		return errors.New("transient broadcast error")
+	}
+	return nil
+}
+
+func (s *failThenSucceedSender) SendToUser(_ context.Context, _ string, _ notifications.Notification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.userSendCalls++
+	if s.userSendCalls <= s.failUserSends {
+		return errors.New("transient send error")
+	}
+	return nil
+}
+
+func TestEngine_SendToUser_FailedSendDoesNotBlockRetry(t *testing.T) {
+	sender := &failThenSucceedSender{failUserSends: 1}
+	eng := notifications.NewEngine(sender, notifications.DefaultEngineConfig())
+
+	eng.SetClock(func() time.Time {
+		return time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	})
+
+	n := notifications.Notification{
+		Type: notifications.TypeMarket, Title: "t", Body: "b", Key: "market_1h_Uptrend_2025-06-01",
+	}
+
+	if err := eng.SendToUser(context.Background(), "u1", n); err == nil {
+		t.Fatal("expected first send to return the sender's error")
+	}
+
+	if err := eng.SendToUser(context.Background(), "u1", n); err != nil {
+		t.Fatalf("expected retry with same key to succeed, got error: %v", err)
+	}
+
+	if sender.userSendCalls != 2 {
+		t.Fatalf("expected the retry to actually reach the sender, got %d calls", sender.userSendCalls)
+	}
+}
+
+func TestEngine_Send_FailedBroadcastDoesNotBlockRetry(t *testing.T) {
+	sender := &failThenSucceedSender{failBroadcasts: 1}
+	eng := notifications.NewEngine(sender, notifications.DefaultEngineConfig())
+
+	eng.SetClock(func() time.Time {
+		return time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	})
+
+	n := notifications.Notification{
+		Type: notifications.TypeMacro, Title: "FOMC", Body: "30 min", Key: "macro_fomc_retry",
+	}
+
+	if err := eng.Send(context.Background(), n); err == nil {
+		t.Fatal("expected first broadcast to return the sender's error")
+	}
+
+	if err := eng.Send(context.Background(), n); err != nil {
+		t.Fatalf("expected retry with same key to succeed, got error: %v", err)
+	}
+
+	if sender.broadcastCalls != 2 {
+		t.Fatalf("expected the retry to actually reach the sender, got %d calls", sender.broadcastCalls)
+	}
+}
+
+func TestEngine_SendToUser_ConcurrentSameKeyOnlyDeliversOnce(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+
+	eng.SetClock(func() time.Time {
+		return time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	})
+
+	n := notifications.Notification{
+		Type: notifications.TypeMarket, Title: "t", Body: "b", Key: "market_1h_Uptrend_2025-06-01",
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_ = eng.SendToUser(context.Background(), "u1", n)
+		}()
+	}
+	wg.Wait()
+
+	if got := spy.userCount(); got != 1 {
+		t.Fatalf("expected exactly 1 delivery for concurrent same-key sends, got %d", got)
 	}
 }
 

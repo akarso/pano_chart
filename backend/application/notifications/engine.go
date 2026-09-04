@@ -60,15 +60,18 @@ func (e *Engine) Send(ctx context.Context, n Notification) error {
 		return nil
 	}
 
-	if e.dedup.Seen(n.Key) {
+	if !e.dedup.TryReserve(n.Key, e.cfg.DefaultDedupTTL) {
 		log.Printf("[notify] suppressed (dedup): type=%s key=%s", n.Type, n.Key)
 		return nil
 	}
 
-	e.dedup.Mark(n.Key, e.cfg.DefaultDedupTTL)
-
 	log.Printf("[notify] sending: type=%s title=%q key=%s", n.Type, n.Title, n.Key)
-	return e.sender.Broadcast(ctx, n)
+	err := e.sender.Broadcast(ctx, n)
+	if err != nil {
+		e.dedup.Release(n.Key)
+		return err
+	}
+	return nil
 }
 
 // SendToUser checks quiet hours and per-user dedup, then delivers to a
@@ -80,15 +83,18 @@ func (e *Engine) SendToUser(ctx context.Context, userID string, n Notification) 
 	}
 
 	perUserKey := userID + ":" + n.Key
-	if e.dedup.Seen(perUserKey) {
+	if !e.dedup.TryReserve(perUserKey, e.cfg.DefaultDedupTTL) {
 		log.Printf("[notify] suppressed (dedup): type=%s key=%s user=%s", n.Type, n.Key, userID)
 		return nil
 	}
 
-	e.dedup.Mark(perUserKey, e.cfg.DefaultDedupTTL)
-
 	log.Printf("[notify] sending to user=%s: type=%s title=%q key=%s", userID, n.Type, n.Title, n.Key)
-	return e.sender.SendToUser(ctx, userID, n)
+	err := e.sender.SendToUser(ctx, userID, n)
+	if err != nil {
+		e.dedup.Release(perUserKey)
+		return err
+	}
+	return nil
 }
 
 func (e *Engine) withinAllowedHours() bool {
