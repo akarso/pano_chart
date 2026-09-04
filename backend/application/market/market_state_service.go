@@ -306,13 +306,35 @@ func (s *MarketStateService) candleMetrics(ctx context.Context, timeframe string
 		return volExpansion, 0
 	}
 
-	type candleResult struct {
-		vol float64
-		ret float64
+	results, cancelled := fetchCandleResults(ctx, s.candles, tf, symbols)
+	if cancelled {
+		log.Printf("[market] candleMetrics: cancelled for %s before all fetches completed; any still in flight will finish in the background and be discarded", timeframe)
 	}
+	return aggregateCandleResults(results)
+}
 
+// candleResult is one symbol's contribution to the market-wide metrics.
+type candleResult struct {
+	vol float64 // this symbol's volatilityExpansion
+	ret float64 // this symbol's period return
+}
+
+// fetchCandleResults fetches candleMetricsWindow candles per symbol, bounded
+// to candleMetricsFanoutLimit concurrent requests, and computes each
+// symbol's volatility/return contribution. A symbol whose fetch errors or
+// returns too little data is silently skipped — a single bad symbol
+// shouldn't fail the whole market-wide computation.
+//
+// cancelled reports whether ctx was done before every fetch finished. The
+// underlying CandleProvider.GetLastNCandles call takes no context (a
+// repo-wide convention, not specific to this method), so a fetch already
+// past the concurrency gate cannot be aborted mid-flight — cancellation
+// here means "stop waiting for it", not "stop it". Any such fetch keeps
+// running in the background and its result is discarded, so this method
+// can return to the caller promptly instead of blocking through the
+// straggler's rate-limit waits, retries, or network round-trip.
+func fetchCandleResults(ctx context.Context, candles CandleProvider, tf domain.Timeframe, symbols []domain.Symbol) (results []candleResult, cancelled bool) {
 	var mu sync.Mutex
-	var results []candleResult
 	sem := make(chan struct{}, candleMetricsFanoutLimit)
 	var wg sync.WaitGroup
 
@@ -328,25 +350,45 @@ func (s *MarketStateService) candleMetrics(ctx context.Context, timeframe string
 			}
 			defer func() { <-sem }()
 
-			cs, fetchErr := s.candles.GetLastNCandles(sym, tf, candleMetricsWindow)
+			cs, fetchErr := candles.GetLastNCandles(sym, tf, candleMetricsWindow)
 			if fetchErr != nil || cs.Len() < 2 {
 				return
 			}
-			candles := cs.All()
-			first := candles[0].Close()
-			last := candles[len(candles)-1].Close()
+			all := cs.All()
+			first := all[0].Close()
+			last := all[len(all)-1].Close()
 			ret := 0.0
 			if first != 0 {
 				ret = (last - first) / first
 			}
 
 			mu.Lock()
-			results = append(results, candleResult{vol: volatilityExpansion(candles), ret: ret})
+			results = append(results, candleResult{vol: volatilityExpansion(all), ret: ret})
 			mu.Unlock()
 		}()
 	}
-	wg.Wait()
 
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return results, false
+	case <-ctx.Done():
+		return nil, true
+	}
+}
+
+// aggregateCandleResults reduces per-symbol results to the two market-wide
+// metrics: VolatilityExpansion (median across symbols) and Dispersion (MAD
+// of returns from the mean return). Pure arithmetic — no I/O, no
+// concurrency — so it's independently testable from the fetch/orchestration
+// above.
+func aggregateCandleResults(results []candleResult) (volExpansion, disp float64) {
+	volExpansion = 1.0
 	if len(results) == 0 {
 		return volExpansion, 0
 	}

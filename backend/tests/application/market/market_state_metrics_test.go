@@ -198,3 +198,58 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 		t.Errorf("expected observer notified of trend, got %s", obs.calls[0])
 	}
 }
+
+// --- Cancellation ---
+
+// stuckCandleProvider's GetLastNCandles blocks until the test process exits
+// — simulating a slow repository call (network stall, rate-limit wait) that
+// can't itself be aborted, since CandleProvider.GetLastNCandles takes no
+// context (a repo-wide convention, not something this package controls).
+type stuckCandleProvider struct {
+	symbols []domain.Symbol
+}
+
+func (p *stuckCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error) {
+	return p.symbols, nil
+}
+
+func (p *stuckCandleProvider) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+	select {} // block forever
+}
+
+// TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly
+// covers the CR finding that a cancelled request context left the caller
+// blocked through in-flight candle fetches. GetLastNCandles genuinely can't
+// be aborted mid-call (see stuckCandleProvider), but the caller must not
+// wait for it regardless — it should get its answer (defaults, since no
+// real result exists) as soon as ctx is done, not after the stuck fetch
+// eventually completes (which in this test is never).
+func TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly(t *testing.T) {
+	sym := makeSymbol2("BTCUSDT")
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
+	svc.SetCandleProvider(&stuckCandleProvider{symbols: []domain.Symbol{sym}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	var s mkt.Summary
+	var err error
+	go func() {
+		s, err = svc.CalculateWithCandleMetrics(ctx, "4h")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CalculateWithCandleMetrics did not return promptly after context cancellation")
+	}
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.VolatilityExpansion != 1.0 {
+		t.Errorf("expected default VolatilityExpansion on cancellation, got %f", s.VolatilityExpansion)
+	}
+}
