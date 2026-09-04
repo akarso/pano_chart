@@ -91,6 +91,21 @@ const noKeySentinel = "\x00__no_key__"
 // no authenticated user yet) — see noKeySentinel: such requests all share
 // one bucket rather than bypassing the limiter.
 func perKeyRateLimit(keyFunc func(*http.Request) string, perSecond float64, burst int) func(http.Handler) http.Handler {
+	return perKeyRateLimitWithClock(keyFunc, perSecond, burst, time.Now)
+}
+
+// perKeyRateLimitWithClock is perKeyRateLimit with an injectable clock,
+// used only for this package's own eviction/sweep bookkeeping (which key
+// is stale enough to evict) — never for the underlying rate.Limiter's own
+// token accounting, which always uses real wall-clock time internally
+// regardless of nowFn (golang.org/x/time/rate has no clock injection of
+// its own). That split is enough to deterministically test the eviction
+// question ("did the CR-follow-up TTL fix actually prevent a premature
+// reset") without needing to fake the limiter's own timing too: a freshly
+// created rate.Limiter grants a full burst immediately in real time, so a
+// test just needs to control when eviction fires, not the token math
+// itself. See ratelimit_internal_test.go.
+func perKeyRateLimitWithClock(keyFunc func(*http.Request) string, perSecond float64, burst int, nowFn func() time.Time) func(http.Handler) http.Handler {
 	var mu sync.Mutex
 	limiters := make(map[string]*keyLimiterEntry)
 	rps := rate.Limit(perSecond)
@@ -102,7 +117,7 @@ func perKeyRateLimit(keyFunc func(*http.Request) string, perSecond float64, burs
 		mu.Lock()
 		defer mu.Unlock()
 
-		now := time.Now()
+		now := nowFn()
 		requestCount++
 		// Sweep every keyLimiterCleanupEvery requests, OR opportunistically
 		// once ttl has passed since the last sweep regardless of count — a

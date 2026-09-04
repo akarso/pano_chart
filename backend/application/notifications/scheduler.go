@@ -469,9 +469,18 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// (two candidates near a threshold can otherwise flip the "strongest"
 	// one, and therefore the dedup key below, every single check) and why
 	// it's a separate type rather than inline state here.
+	//
+	// reserve() does not yet commit the new anchor — see PR-075 CR
+	// follow-up (Issue 2): committing before SendToUser is known to have
+	// succeeded would consume the hold window (and block a concurrent
+	// duplicate call) even for a change that never actually reached the
+	// user. The anchor is only committed below once SendToUser returns
+	// successfully; on failure the reservation is released so the next
+	// check can retry without waiting out the full hold.
 	now := s.now()
-	if suppressed, prev := s.marketHold.evaluate(cfg.UserID, best.label, best.timeframe, now); suppressed {
-		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold, %s since last change to %q on %q)",
+	proceed, prev, changed := s.marketHold.reserve(cfg.UserID, best.label, best.timeframe, now)
+	if !proceed {
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold or send already in flight, %s since last change to %q on %q)",
 			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label, prev.timeframe)
 		return
 	}
@@ -479,7 +488,7 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
 	dateKey := now.Format("2006-01-02")
 
-	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
+	err := s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
@@ -495,6 +504,22 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		// alone doesn't achieve that.
 		Key: fmt.Sprintf("market_%s_%s_%s", best.timeframe, best.label, dateKey),
 	})
+
+	if !changed {
+		// A repeat of the current anchor never reserved anything — see
+		// reserve's doc comment — so there is nothing to commit or release.
+		if err != nil {
+			log.Printf("[notify-scheduler] market: user=%s send failed: %v", cfg.UserID, err)
+		}
+		return
+	}
+	if err != nil {
+		s.marketHold.release(cfg.UserID)
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s send failed, hold not consumed: %v",
+			cfg.UserID, best.timeframe, best.label, err)
+		return
+	}
+	s.marketHold.commit(cfg.UserID, best.label, best.timeframe, now)
 }
 
 func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
