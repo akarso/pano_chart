@@ -6,7 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/cors"
@@ -163,46 +166,6 @@ func main() {
 		usecases.MaxSymbolDetailLimit,
 	)
 
-	// --- State snapshot before handler registration ---
-	ctx := context.Background()
-
-	// Test universe
-	univ, err := cachedUniverse.Symbols(ctx, exchangeInfoURL, tickerURL)
-	if err != nil {
-		fmt.Printf("[main] Universe error: %v\n", err)
-	} else {
-		fmt.Printf("[main] Universe size: %d\n", len(univ))
-		if len(univ) > 0 {
-			fmt.Printf("[main] Universe sample (first 5):\n")
-			for i := 0; i < 5 && i < len(univ); i++ {
-				fmt.Printf("[main]   [%d] %s\n", i, univ[i].String())
-			}
-		}
-	}
-
-	// Test volume provider
-	vols, err := cachedVolumeProvider.Volumes(ctx)
-	if err != nil {
-		fmt.Printf("[main] Volume provider error: %v\n", err)
-	} else {
-		fmt.Printf("[main] Volume map size: %d\n", len(vols))
-		if len(univ) > 0 && len(vols) > 0 {
-			// Check if sample universe symbols exist in volume map
-			foundCount := 0
-			for i := 0; i < 5 && i < len(univ); i++ {
-				if vol, ok := vols[univ[i].String()]; ok {
-					fmt.Printf("[main]   %s: volume=%.2f\n", univ[i].String(), vol)
-					foundCount++
-				}
-			}
-			if foundCount == 0 {
-				fmt.Printf("[main]   WARNING: First 5 universe symbols NOT found in volume map!\n")
-			}
-		}
-	}
-
-	// Test ranker
-
 	// --- Overview use case ---
 	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
 
@@ -230,7 +193,23 @@ func main() {
 				s.Symbol, s.Timeframe, s.SidewaysScore, s.TrendScore, s.Price, s.ATR, s.AlgoVersion)
 		}
 	})
-	defer snapshotLogger.Stop()
+	// Bounded, not a bare defer snapshotLogger.Stop(): Stop() blocks on its
+	// drain goroutine flushing whatever's buffered via the sink above, with
+	// no timeout of its own. That's fine today (the sink here only logs),
+	// but this whole path only became reachable once main() returns
+	// normally instead of via log.Fatal (see PR-076) — a future sink doing
+	// real I/O could hang shutdown indefinitely with no code here to catch
+	// it, so give it its own deadline rather than trusting callers to add
+	// one later.
+	defer func() {
+		stopped := make(chan struct{})
+		go func() { snapshotLogger.Stop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			log.Println("[main] snapshot logger didn't stop in time, abandoning it")
+		}
+	}()
 
 	// --- Rankings v2 use case ---
 	getRankingsUC := usecases.NewGetRankings(
@@ -297,7 +276,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] FATAL: payment DB init failed: %v", err)
 	}
-	defer func() { _ = paymentRepo.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// not deferred here.
 
 	providerRegistry := usecases.NewPaymentProviderRegistry()
 
@@ -437,13 +417,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] social account store: %v", err)
 	}
-	defer func() { _ = socialAccountStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped.
 
 	socialSubStore, err := infrasocial.NewSQLiteSubscriptionStore(socialDBPath)
 	if err != nil {
 		log.Fatalf("[main] social subscription store: %v", err)
 	}
-	defer func() { _ = socialSubStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped.
 
 	socialCache := appsocial.NewPostCache(socialCacheTTL)
 	socialDispatcher := appsocial.NewDispatcher(256)
@@ -455,8 +437,19 @@ func main() {
 		socialDispatcher, appsocial.DefaultWatcherConfig(),
 	)
 	socialCtx, socialCancel := context.WithCancel(context.Background())
-	defer socialCancel()
-	go socialWatcher.Run(socialCtx)
+
+	// Tracks every background goroutine below (socialWatcher, pushConsumer,
+	// notifyScheduler) so graceful shutdown can wait for them to actually
+	// exit instead of just cancelling their context and racing to close
+	// the stores they use — see the shutdown sequence at the bottom of
+	// main().
+	var backgroundWG sync.WaitGroup
+
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		socialWatcher.Run(socialCtx)
+	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
 	// --- Push notifications (FCM) ---
@@ -468,7 +461,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] device token store: %v", err)
 	}
-	defer func() { _ = deviceStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped. Also backs
+	// credentialStore and notifConfigStore below (they share its DB
+	// connection via deviceStore.DB()), so this one Close() covers all
+	// three.
 
 	// --- Device credential store (server-issued auth secrets) ---
 	// Shares deviceStore's DB connection — same convention as
@@ -500,7 +497,11 @@ func main() {
 			pushConsumer := appsocial.NewPushConsumer(
 				socialDispatcher.Events(), socialSubStore, deviceStore, fcmNotifier,
 			)
-			go pushConsumer.Run(socialCtx)
+			backgroundWG.Add(1)
+			go func() {
+				defer backgroundWG.Done()
+				pushConsumer.Run(socialCtx)
+			}()
 			log.Println("[main] Push notification consumer started")
 		}
 	} else {
@@ -540,7 +541,11 @@ func main() {
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
 			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
-			go notifyScheduler.Run(socialCtx)
+			backgroundWG.Add(1)
+			go func() {
+				defer backgroundWG.Done()
+				notifyScheduler.Run(socialCtx)
+			}()
 			log.Println("[main] Notification engine + scheduler started")
 		}
 	}
@@ -614,15 +619,68 @@ func main() {
 	log.Println("[main] /api/volatility endpoint registered")
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		// Mobile clients don't send an Origin header for native HTTP calls,
+		// so this mainly matters for the webpage/ marketing site and any
+		// future web client — now that PR-070 adds real device auth
+		// headers, a wide-open "*" origin/header policy no longer matches
+		// the actual trust model. The "*.panocharts.com" wildcard (rs/cors
+		// supports one wildcard segment per pattern) covers www and any
+		// other subdomain (e.g. a future app./api. web client) without
+		// listing each one.
+		AllowedOrigins:   []string{"https://panocharts.com", "https://*.panocharts.com"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: false,
 	})
 	handler := c.Handler(mux)
 
-	fmt.Printf("Server starting on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, handler))
+	srv := &http.Server{Addr: addr, Handler: handler}
+	go func() {
+		fmt.Printf("Server starting on %s\n", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[main] server error: %v", err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	log.Println("[main] shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[main] graceful HTTP shutdown failed, forcing close: %v", err)
+		_ = srv.Close() // deadline hit with requests still in flight — cut them off rather than hang
+	}
+
+	socialCancel() // signal socialWatcher/pushConsumer/notifyScheduler to stop
+
+	waitDone := make(chan struct{})
+	go func() { backgroundWG.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		log.Println("[main] background workers didn't exit in time, closing stores anyway")
+	}
+
+	// Only close what the background workers depend on AFTER they've
+	// stopped touching it — closing earlier risks a lost write (not a
+	// panic: these all wrap *sql.DB, whose Query/Exec return the ordinary
+	// sql.ErrConnDone after Close(), never panic) in a goroutine still
+	// mid-iteration. paymentRepo and regimeHistoryRepo aren't touched by
+	// the social/push background workers at all — they're written from
+	// HTTP handlers instead, which srv.Shutdown above has already
+	// drained (or, on the rarer srv.Close() fallback path, may not fully
+	// have — see PR-076 CR follow-up: a slow handler can in principle
+	// still be mid-flight there, degrading to a logged error for that one
+	// request rather than a crash).
+	_ = paymentRepo.Close()
+	_ = regimeHistoryRepo.Close()
+	_ = socialAccountStore.Close()
+	_ = socialSubStore.Close()
+	_ = deviceStore.Close()
+	log.Println("[main] shutdown complete")
 }
 
 // eventsAdapter adapts EventsUseCase to the notification scheduler's EventProvider.

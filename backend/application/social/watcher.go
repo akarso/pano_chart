@@ -87,7 +87,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-pollTicker.C:
-			w.pollNext()
+			w.pollNext(ctx)
 		case <-refreshTicker.C:
 			w.refreshAccounts()
 		case <-cleanupTicker.C:
@@ -97,8 +97,12 @@ func (w *Watcher) Run(ctx context.Context) {
 }
 
 // pollNext fetches the next account in the rotation, skipping any account
-// that was polled less than accountCooldown ago.
-func (w *Watcher) pollNext() {
+// that was polled less than accountCooldown ago. ctx is passed through to
+// the provider so a cancellation (e.g. graceful shutdown) can abort an
+// in-flight fetch instead of blocking pollNext (and therefore Run, and
+// therefore the shutdown sequence's wait for this goroutine to exit) for
+// up to the provider's own timeout — see domain/social.Provider.Fetch.
+func (w *Watcher) pollNext(ctx context.Context) {
 	n := w.scheduler.Len()
 	if n == 0 {
 		return
@@ -125,7 +129,7 @@ func (w *Watcher) pollNext() {
 
 	w.lastPolled[acc.ID] = now
 
-	posts, err := w.provider.Fetch(acc)
+	posts, err := w.provider.Fetch(ctx, acc)
 	if err != nil {
 		log.Printf("[social] fetch %s: %v", acc.Handle, err)
 		return

@@ -1,10 +1,12 @@
 package social_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	domain "pano_chart/backend/domain/social"
 	infrasocial "pano_chart/backend/infrastructure/social"
@@ -51,7 +53,7 @@ func TestRSSProvider_FetchParsesPosts(t *testing.T) {
 		Handle:   "realDonaldTrump",
 	}
 
-	posts, err := provider.Fetch(acc)
+	posts, err := provider.Fetch(context.Background(), acc)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -97,9 +99,51 @@ func TestRSSProvider_HandlesHTTPError(t *testing.T) {
 	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
 	acc := domain.Account{ID: "twitter:test", Handle: "test"}
 
-	_, err := provider.Fetch(acc)
+	_, err := provider.Fetch(context.Background(), acc)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
+	}
+}
+
+// TestRSSProvider_AbortsOnContextCancellation is the regression test for
+// PR-076 CR follow-up: Fetch must actually abort an in-flight request when
+// its context is cancelled, not merely rely on the client's own Timeout —
+// otherwise Watcher shutdown can't count on pollNext returning promptly
+// (see application/social.Watcher.pollNext and domain/social.Provider).
+// Uses a handler that blocks until the request context is cancelled (never
+// finishes on its own) to prove cancellation — not the client's Timeout —
+// is what unblocks Fetch.
+func TestRSSProvider_AbortsOnContextCancellation(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never responds on its own
+	}))
+	defer srv.Close()
+
+	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
+	acc := domain.Account{ID: "twitter:test", Handle: "test"}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	fetchDone := make(chan error, 1)
+	go func() {
+		_, err := provider.Fetch(ctx, acc)
+		fetchDone <- err
+	}()
+
+	// Give Fetch time to actually be in-flight before cancelling, so this
+	// exercises cancellation of a request already sent, not a pre-send
+	// short-circuit.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-fetchDone:
+		if err == nil {
+			t.Fatal("expected an error from a cancelled fetch")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Fetch did not return promptly after context cancellation — " +
+			"it's blocking on something other than ctx, defeating graceful shutdown")
 	}
 }
 
@@ -112,7 +156,7 @@ func TestRSSProvider_HandlesInvalidXML(t *testing.T) {
 	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
 	acc := domain.Account{ID: "twitter:test", Handle: "test"}
 
-	_, err := provider.Fetch(acc)
+	_, err := provider.Fetch(context.Background(), acc)
 	if err == nil {
 		t.Fatal("expected error for invalid XML")
 	}
@@ -148,7 +192,7 @@ func TestRSSProvider_UnescapesHTMLEntities(t *testing.T) {
 	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
 	acc := domain.Account{ID: "twitter:test", Platform: "twitter", Handle: "test"}
 
-	posts, err := provider.Fetch(acc)
+	posts, err := provider.Fetch(context.Background(), acc)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -194,7 +238,7 @@ func TestRSSProvider_StripsHTMLTagsFromTitle(t *testing.T) {
 	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
 	acc := domain.Account{ID: "twitter:leon", Platform: "twitter", Handle: "leon"}
 
-	posts, err := provider.Fetch(acc)
+	posts, err := provider.Fetch(context.Background(), acc)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -224,7 +268,7 @@ func TestRSSProvider_DetectsRetweets(t *testing.T) {
 	provider := infrasocial.NewRSSProvider(srv.URL, srv.Client())
 	acc := domain.Account{ID: "twitter:test", Platform: "twitter", Handle: "test"}
 
-	posts, err := provider.Fetch(acc)
+	posts, err := provider.Fetch(context.Background(), acc)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
