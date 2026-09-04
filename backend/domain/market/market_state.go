@@ -38,4 +38,11 @@ type Summary struct {
 	EffectiveTrend float64 // average trend health across all tokens (0–1)
 	BreakdownRate  float64 // fraction of trending tokens with health < 0.4
 	Label          string  // human-readable quality label
+
+	// Candle-derived market-wide metrics (additive — see PR-073). Populated
+	// only when MarketStateService has a CandleProvider configured;
+	// otherwise VolatilityExpansion defaults to 1.0 ("normal") and
+	// Dispersion to 0.
+	VolatilityExpansion float64 // median short/long ATR ratio across symbols
+	Dispersion          float64 // mean absolute deviation of asset returns from the market return
 }

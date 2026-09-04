@@ -1,17 +1,48 @@
 package market
 
 import (
+	"context"
+	"log"
 	"math"
+	"sort"
+	"sync"
+	"time"
 
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
+
+// CandleProvider provides candle data and symbol lists for market metrics.
+// Optional dependency of MarketStateService — see SetCandleProvider.
+type CandleProvider interface {
+	// Symbols returns the current symbol universe.
+	Symbols(ctx context.Context) ([]domain.Symbol, error)
+	// GetLastNCandles retrieves the last N candles for a symbol and timeframe.
+	GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
+}
+
+// RegimeObserver is notified after every Calculate call. The Tracker from
+// the regimehistory package satisfies this interface.
+type RegimeObserver interface {
+	Update(timeframe string, regime mkt.Regime, timestamp int64) error
+}
+
+// candleMetricsWindow is the candle window used for VolatilityExpansion /
+// Dispersion — matches the sparkline precision used elsewhere.
+const candleMetricsWindow = 110
+
+// candleMetricsFanoutLimit bounds concurrent candle fetches in
+// candleMetrics — one goroutine per symbol would be excessive for a large
+// universe.
+const candleMetricsFanoutLimit = 20
 
 // MarketStateService computes the aggregate market state summary
 // by classifying each symbol's evaluation snapshot and computing
 // breadth ratios.
 type MarketStateService struct {
 	provider EvaluationProvider
+	candles  CandleProvider // optional; nil disables VolatilityExpansion/Dispersion
+	observer RegimeObserver // optional; nil disables history tracking
 }
 
 // NewMarketStateService constructs the service.
@@ -19,7 +50,28 @@ func NewMarketStateService(p EvaluationProvider) *MarketStateService {
 	return &MarketStateService{provider: p}
 }
 
-// Calculate produces a market state summary for the given timeframe.
+// SetCandleProvider enables VolatilityExpansion/Dispersion computation.
+// Without it, VolatilityExpansion defaults to 1.0 ("normal") and Dispersion
+// to 0 — Calculate remains fully usable, just without these two metrics.
+func (s *MarketStateService) SetCandleProvider(cp CandleProvider) {
+	s.candles = cp
+}
+
+// SetObserver attaches a regime observer (e.g. the history tracker).
+func (s *MarketStateService) SetObserver(o RegimeObserver) {
+	s.observer = o
+}
+
+// Calculate produces a market state summary for the given timeframe from
+// evaluation snapshots only — no candle I/O, cheap regardless of symbol
+// universe size. VolatilityExpansion/Dispersion are left at their defaults
+// (1.0/0); use CalculateWithCandleMetrics when a caller actually needs them
+// (the legacy /api/market/regime response, the transition engine's
+// volatility slope). Consumers that don't read those two fields —
+// /api/market/state, the notification scheduler, the setup scanner — should
+// keep using this cheaper method: see PR-073 CR follow-up, which found
+// every Calculate() call was paying for a full symbol-universe candle
+// fan-out regardless of whether the caller needed it.
 //
 // Breadth is computed using proportional weighting: every symbol distributes
 // its scores continuously across all four regimes (sideways, compression,
@@ -38,13 +90,18 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	}
 
 	if len(evaluations) == 0 {
+		// No observer notification here (intentional): a "no data" period
+		// isn't a regime observation, so it isn't recorded as one. Regime
+		// history will show a gap rather than a fabricated "sideways" point
+		// for whatever window had no evaluations.
 		return mkt.Summary{
-			Timeframe:   timeframe,
-			State:       mkt.StateSideways,
-			Confidence:  0,
-			Breadth:     mkt.Breadth{},
-			SymbolCount: 0,
-			Label:       BuildMarketLabel(0, 0),
+			Timeframe:           timeframe,
+			State:               mkt.StateSideways,
+			Confidence:          0,
+			Breadth:             mkt.Breadth{},
+			SymbolCount:         0,
+			VolatilityExpansion: 1.0,
+			Label:               BuildMarketLabel(0, 0),
 		}, nil
 	}
 
@@ -182,17 +239,181 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	trendPrevalence := breadth.Trend
 	label := BuildMarketLabel(trendPrevalence, effectiveTrend)
 
+	// Notify observer (e.g. regime history tracker) — fire-and-forget, but
+	// logged: a persistent write failure to the regime-history DB would
+	// otherwise be invisible.
+	if s.observer != nil {
+		if err := s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix()); err != nil {
+			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
+		}
+	}
+
 	return mkt.Summary{
-		Timeframe:      timeframe,
-		State:          dominant,
-		Confidence:     maxWeight,
-		Breadth:        breadth,
-		SymbolCount:    len(evaluations),
-		Bias:           bias,
-		EffectiveTrend: effectiveTrend,
-		BreakdownRate:  breakdownRate,
-		Label:          label,
+		Timeframe:           timeframe,
+		State:               dominant,
+		Confidence:          maxWeight,
+		Breadth:             breadth,
+		SymbolCount:         len(evaluations),
+		Bias:                bias,
+		EffectiveTrend:      effectiveTrend,
+		BreakdownRate:       breakdownRate,
+		Label:               label,
+		VolatilityExpansion: 1.0,
 	}, nil
+}
+
+// CalculateWithCandleMetrics is Calculate plus VolatilityExpansion/Dispersion,
+// computed from raw candle data across the whole symbol universe (bounded
+// concurrent fetch, candleMetricsFanoutLimit at a time). Meaningfully more
+// expensive than Calculate — use it only where these two fields are actually
+// consumed. ctx bounds the candle fan-out only; Calculate's own evaluation
+// fetch is unchanged (it never took a context, matching its pre-existing
+// EvaluationProvider interface).
+func (s *MarketStateService) CalculateWithCandleMetrics(ctx context.Context, timeframe string) (mkt.Summary, error) {
+	summary, err := s.Calculate(timeframe)
+	if err != nil {
+		return summary, err
+	}
+	summary.VolatilityExpansion, summary.Dispersion = s.candleMetrics(ctx, timeframe)
+	return summary, nil
+}
+
+// candleMetrics computes VolatilityExpansion (median short/long ATR ratio)
+// and Dispersion (MAD of period returns vs. the mean market return) across
+// the symbol universe. Returns the defaults (1.0, 0) when no CandleProvider
+// is configured or the fetch fails — these are supplementary metrics, not
+// required for state classification, so a failure here must not fail the
+// caller as a whole. Symbols()/timeframe-parse failures are logged rather
+// than swallowed silently, so a broken CandleProvider is diagnosable
+// instead of reporting VolatilityExpansion=1.0 forever with no signal.
+func (s *MarketStateService) candleMetrics(ctx context.Context, timeframe string) (volExpansion, disp float64) {
+	volExpansion = 1.0
+	if s.candles == nil {
+		return volExpansion, 0
+	}
+
+	tf, err := domain.NewTimeframe(timeframe)
+	if err != nil {
+		log.Printf("[market] candleMetrics: invalid timeframe %q: %v", timeframe, err)
+		return volExpansion, 0
+	}
+	symbols, err := s.candles.Symbols(ctx)
+	if err != nil {
+		log.Printf("[market] candleMetrics: fetching symbols failed: %v", err)
+		return volExpansion, 0
+	}
+	if len(symbols) == 0 {
+		return volExpansion, 0
+	}
+
+	results, cancelled := fetchCandleResults(ctx, s.candles, tf, symbols)
+	if cancelled {
+		log.Printf("[market] candleMetrics: cancelled for %s before all fetches completed; any still in flight will finish in the background and be discarded", timeframe)
+	}
+	return aggregateCandleResults(results)
+}
+
+// candleResult is one symbol's contribution to the market-wide metrics.
+type candleResult struct {
+	vol float64 // this symbol's volatilityExpansion
+	ret float64 // this symbol's period return
+}
+
+// fetchCandleResults fetches candleMetricsWindow candles per symbol, bounded
+// to candleMetricsFanoutLimit concurrent requests, and computes each
+// symbol's volatility/return contribution. A symbol whose fetch errors or
+// returns too little data is silently skipped — a single bad symbol
+// shouldn't fail the whole market-wide computation.
+//
+// cancelled reports whether ctx was done before every fetch finished. The
+// underlying CandleProvider.GetLastNCandles call takes no context (a
+// repo-wide convention, not specific to this method), so a fetch already
+// past the concurrency gate cannot be aborted mid-flight — cancellation
+// here means "stop waiting for it", not "stop it". Any such fetch keeps
+// running in the background and its result is discarded, so this method
+// can return to the caller promptly instead of blocking through the
+// straggler's rate-limit waits, retries, or network round-trip.
+func fetchCandleResults(ctx context.Context, candles CandleProvider, tf domain.Timeframe, symbols []domain.Symbol) (results []candleResult, cancelled bool) {
+	var mu sync.Mutex
+	sem := make(chan struct{}, candleMetricsFanoutLimit)
+	var wg sync.WaitGroup
+
+	for _, sym := range symbols {
+		sym := sym
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			cs, fetchErr := candles.GetLastNCandles(sym, tf, candleMetricsWindow)
+			if fetchErr != nil || cs.Len() < 2 {
+				return
+			}
+			all := cs.All()
+			first := all[0].Close()
+			last := all[len(all)-1].Close()
+			ret := 0.0
+			if first != 0 {
+				ret = (last - first) / first
+			}
+
+			mu.Lock()
+			results = append(results, candleResult{vol: volatilityExpansion(all), ret: ret})
+			mu.Unlock()
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return results, false
+	case <-ctx.Done():
+		return nil, true
+	}
+}
+
+// aggregateCandleResults reduces per-symbol results to the two market-wide
+// metrics: VolatilityExpansion (median across symbols) and Dispersion (MAD
+// of returns from the mean return). Pure arithmetic — no I/O, no
+// concurrency — so it's independently testable from the fetch/orchestration
+// above.
+func aggregateCandleResults(results []candleResult) (volExpansion, disp float64) {
+	volExpansion = 1.0
+	if len(results) == 0 {
+		return volExpansion, 0
+	}
+
+	vols := make([]float64, len(results))
+	returns := make([]float64, len(results))
+	var returnSum float64
+	for i, r := range results {
+		vols[i] = r.vol
+		returns[i] = r.ret
+		returnSum += r.ret
+	}
+	volExpansion = median(vols)
+	disp = dispersion(returns, returnSum/float64(len(returns)))
+	return volExpansion, disp
+}
+
+// median returns the median of a slice. Modifies the input in place via sort.
+func median(vals []float64) float64 {
+	sort.Float64s(vals)
+	n := len(vals)
+	if n%2 == 1 {
+		return vals[n/2]
+	}
+	return (vals[n/2-1] + vals[n/2]) / 2
 }
 
 // topTwo returns the two highest values from a slice.
