@@ -194,6 +194,32 @@ func TestDominantRegime_DirectionMatchesPriceAction(t *testing.T) {
 	})
 }
 
+func TestDominantRegime_ScoreMismatchFallsBackToSideways(t *testing.T) {
+	// Regression test for the scoresAgree safety net: if the fake/stale
+	// "Trend Predictability" score doesn't match what ScoreWithDirection
+	// actually recomputes for the series, dominantRegime must not trust the
+	// recomputed bias and should fall back to "sideways" instead of
+	// reporting a possibly-mismatched direction.
+	series := makeDirectionalSeries(50, true) // real recomputed score saturates at 1.0, not 0.42
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{
+			"Compression":          0.1,
+			"Trend Predictability": 0.42, // deliberately mismatched vs. the real recomputed score
+			"Sideways":             0.1,
+		},
+	}}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Regime != "sideways" {
+		t.Errorf("expected sideways on score mismatch, got %q", result.Regime)
+	}
+}
+
 func TestSetupService_InvalidSymbol(t *testing.T) {
 	eng := setups.NewEngine()
 	svc := setups.NewSetupService(&fakeCandleRepo{}, &fakeScorer{}, eng)

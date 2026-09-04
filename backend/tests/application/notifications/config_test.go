@@ -193,6 +193,9 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	if rec.n.Type != notifications.TypeMarket {
 		t.Fatalf("expected TypeMarket, got %s", rec.n.Type)
 	}
+	if rec.n.Body != "Market is Uptrend (82%, 1h)" {
+		t.Fatalf("unexpected body: %s", rec.n.Body)
+	}
 }
 
 func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
@@ -222,8 +225,12 @@ func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
 	if spy.userCount() != 1 {
 		t.Fatalf("expected 1 per-user downtrend notification, got %d", spy.userCount())
 	}
-	if spy.lastUserSend().userID != "u1" {
-		t.Fatalf("expected user u1, got %s", spy.lastUserSend().userID)
+	rec := spy.lastUserSend()
+	if rec.userID != "u1" {
+		t.Fatalf("expected user u1, got %s", rec.userID)
+	}
+	if rec.n.Body != "Market is Downtrend (82%, 1h)" {
+		t.Fatalf("unexpected body: %s", rec.n.Body)
 	}
 }
 
