@@ -3,6 +3,7 @@ package candle_repository_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	cr "pano_chart/backend/adapters/candle_repository"
@@ -37,6 +38,49 @@ func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
 	c, _ := series.At(0)
 	if c.Close() != 47150.0 {
 		t.Errorf("expected close 47150, got %v", c.Close())
+	}
+}
+
+// TestCoinGeckoCandleRepository_GetSeries_AbortsOnContextCancellation proves
+// the propagated ctx reaches the underlying HTTP request: the handler
+// blocks until the client has connected, then the test cancels ctx and
+// asserts GetSeries returns promptly with an error wrapping
+// context.Canceled, rather than waiting for the handler to ever respond.
+func TestCoinGeckoCandleRepository_GetSeries_AbortsOnContextCancellation(t *testing.T) {
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf := domain.Timeframe1h
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := cr.NewCoinGeckoCandleRepository(server.Client())
+	repo.BaseURL = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := repo.GetSeries(ctx, sym, tf, time.Time{}, time.Time{})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetSeries to abort promptly on cancellation, took %v", elapsed)
 	}
 }
 

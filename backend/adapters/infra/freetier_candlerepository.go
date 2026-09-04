@@ -121,7 +121,11 @@ func (r *FreeTierCandleRepository) GetSeries(ctx context.Context, symbol domain.
 			atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
 			if attempt < maxRetries {
 				fmt.Printf("[freetier] 429 on %s, backing off %v (attempt %d/%d)\n", symbol.String(), backoff, attempt+1, maxRetries)
-				time.Sleep(backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return domain.CandleSeries{}, ctx.Err()
+				}
 				backoff *= 2
 				continue
 			}

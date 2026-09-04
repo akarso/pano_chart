@@ -3,6 +3,7 @@ package infra_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -104,6 +105,90 @@ func TestFreeTierCandleRepository_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	_, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
+	}
+}
+
+// TestFreeTierCandleRepository_GetSeries_AbortsOnContextCancellation proves
+// the propagated ctx actually reaches the underlying HTTP request: the
+// handler blocks until the client has connected, then the test cancels ctx
+// and asserts GetSeries returns promptly with an error wrapping
+// context.Canceled, rather than waiting for the handler to ever respond.
+func TestFreeTierCandleRepository_GetSeries_AbortsOnContextCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
+
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1m")
+	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	to := from.Add(1 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := repo.GetSeries(ctx, sym, tf, from, to)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetSeries to abort promptly on cancellation, took %v", elapsed)
+	}
+}
+
+// TestFreeTierCandleRepository_GetLastNCandles_AbortsOnContextCancellation
+// is the same proof at the GetLastNCandles entry point (the method the
+// original CR finding named) rather than GetSeries directly.
+func TestFreeTierCandleRepository_GetLastNCandles_AbortsOnContextCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
+
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1m")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := repo.GetLastNCandles(ctx, sym, tf, 10)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetLastNCandles to abort promptly on cancellation, took %v", elapsed)
 	}
 }
 

@@ -12,8 +12,8 @@ import (
 
 // MinimalRedisClient is the minimal interface required by the decorator.
 type MinimalRedisClient interface {
-	Get(key string) ([]byte, error)
-	Set(key string, value []byte, ttl time.Duration) error
+	Get(ctx context.Context, key string) ([]byte, error)
+	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 }
 
 // RedisCandleRepository is a caching decorator that implements ports.CandleRepositoryPort.
@@ -53,7 +53,7 @@ func (r *RedisCandleRepository) GetSeries(ctx context.Context, symbol domain.Sym
 
 	// Try cache
 	if r.client != nil {
-		b, err := r.client.Get(key)
+		b, err := r.client.Get(ctx, key)
 		if err == nil && len(b) > 0 {
 			// unmarshal and reconstruct
 			var items []payloadItem
@@ -107,7 +107,7 @@ func (r *RedisCandleRepository) GetSeries(ctx context.Context, symbol domain.Sym
 		}
 		if len(items) > 0 {
 			if b, merr := json.Marshal(items); merr == nil {
-				_ = r.client.Set(key, b, r.ttl)
+				_ = r.client.Set(ctx, key, b, r.ttl)
 			}
 		}
 	}
@@ -131,7 +131,7 @@ func (r *RedisCandleRepository) GetLastNCandles(ctx context.Context, symbol doma
 
 	// Try cache
 	if r.client != nil {
-		b, err := r.client.Get(key)
+		b, err := r.client.Get(ctx, key)
 		if err == nil && len(b) > 0 {
 			var items []payloadItem
 			if err := json.Unmarshal(b, &items); err == nil && len(items) > 0 {
@@ -182,7 +182,7 @@ func (r *RedisCandleRepository) GetLastNCandles(ctx context.Context, symbol doma
 				if untilNext > 0 && untilNext < ttl {
 					ttl = untilNext
 				}
-				_ = r.client.Set(key, b, ttl)
+				_ = r.client.Set(ctx, key, b, ttl)
 			}
 		}
 	}
