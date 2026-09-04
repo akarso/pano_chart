@@ -44,6 +44,7 @@ type regimeResponse struct {
 	EffectiveTrend float64          `json:"effectiveTrend"`
 	BreakdownRate  float64          `json:"breakdownRate"`
 	Label          string           `json:"label"`
+	DataQuality    string           `json:"dataQuality"`
 }
 
 type regimeScoresDTO struct {
@@ -99,6 +100,7 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		EffectiveTrend: roundTo(summary.EffectiveTrend, 4),
 		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
 		Label:          summary.Label,
+		DataQuality:    string(summary.DataQuality),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

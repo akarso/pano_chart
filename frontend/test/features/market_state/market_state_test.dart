@@ -50,6 +50,65 @@ void main() {
       final data = MarketStateData.fromJson(json);
       expect(data.confidence, 1.0);
     });
+
+    test('fromJson defaults dataQuality to ok when absent', () {
+      final json = {
+        'timeframe': '4h',
+        'state': 'sideways',
+        'confidence': 0.0,
+        'breadth': {
+          'sideways': 0.0,
+          'compression': 0.0,
+          'trend': 0.0,
+          'expansion': 0.0,
+        },
+        'symbolCount': 0,
+      };
+
+      final data = MarketStateData.fromJson(json);
+      expect(data.dataQuality, 'ok');
+      expect(data.isDataUnavailable, isFalse);
+    });
+
+    test('fromJson parses dataQuality unavailable', () {
+      final json = {
+        'timeframe': '4h',
+        'state': 'sideways',
+        'confidence': 0.0,
+        'breadth': {
+          'sideways': 0.0,
+          'compression': 0.0,
+          'trend': 0.0,
+          'expansion': 0.0,
+        },
+        'symbolCount': 0,
+        'dataQuality': 'unavailable',
+      };
+
+      final data = MarketStateData.fromJson(json);
+      expect(data.dataQuality, 'unavailable');
+      expect(data.isDataUnavailable, isTrue);
+    });
+
+    test('fromJson parses dataQuality degraded as not unavailable', () {
+      final json = {
+        'timeframe': '4h',
+        'state': 'sideways',
+        'confidence': 0.3,
+        'breadth': {
+          'sideways': 0.3,
+          'compression': 0.1,
+          'trend': 0.1,
+          'expansion': 0.1,
+        },
+        'symbolCount': 10,
+        'dataQuality': 'degraded',
+      };
+
+      final data = MarketStateData.fromJson(json);
+      expect(data.dataQuality, 'degraded');
+      expect(data.isDataUnavailable, isFalse);
+    });
   });
 
   group('MarketBreadth', () {

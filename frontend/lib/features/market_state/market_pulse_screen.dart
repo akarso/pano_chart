@@ -326,6 +326,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Regime Card ----------
 
   Widget _buildRegimeCard(RegimeData data) {
+    if (data.isDataUnavailable) {
+      return const _DataUnavailableBanner();
+    }
     final color = data.regime == 'trend'
         ? _trendBiasColor(data.bias)
         : _regimeColor(data.regime);
@@ -761,6 +764,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Market State Card (fallback when no regime API) ----------
 
   Widget _buildStateCard(MarketStateData data) {
+    if (data.isDataUnavailable) {
+      return const _DataUnavailableBanner();
+    }
     final color = _stateColor(data.state, data.bias);
     final pct = (data.confidence * 100).toStringAsFixed(1);
     final hasLabel = data.label.isNotEmpty;
@@ -1262,5 +1268,51 @@ class _CompositeChartPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CompositeChartPainter other) {
     return other.points != points || other.lineColor != lineColor;
+  }
+}
+
+/// Shown instead of the regime/state card when DataQuality is
+/// "unavailable" — a full evaluation-source outage, distinct from a
+/// legitimate "Indecisive"/"Sideways, low confidence" reading, which
+/// otherwise looks identical (see PR-074).
+class _DataUnavailableBanner extends StatelessWidget {
+  const _DataUnavailableBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orangeAccent.withAlpha(120)),
+      ),
+      child: const Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.cloud_off, color: Colors.orangeAccent, size: 28),
+              SizedBox(width: 8),
+              Text(
+                'Data unavailable',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orangeAccent,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 6),
+          Text(
+            'Market data could not be read right now — this is not a quiet '
+            'market, the read itself failed. Pull to refresh in a moment.',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
   }
 }

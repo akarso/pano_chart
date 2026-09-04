@@ -9,6 +9,7 @@ class RegimeData {
   final double effectiveTrend;
   final double breakdownRate;
   final String label;
+  final String dataQuality;
 
   const RegimeData({
     required this.timeframe,
@@ -20,7 +21,13 @@ class RegimeData {
     this.effectiveTrend = 0.0,
     this.breakdownRate = 0.0,
     this.label = '',
+    this.dataQuality = 'ok',
   });
+
+  /// Whether this reading reflects a real market read, as opposed to a
+  /// full evaluation-source outage — see PR-074. Without this check, an
+  /// outage looks identical to a genuinely quiet market.
+  bool get isDataUnavailable => dataQuality == 'unavailable';
 
   factory RegimeData.fromJson(Map<String, dynamic> json) {
     return RegimeData(
@@ -35,6 +42,7 @@ class RegimeData {
       effectiveTrend: (json['effectiveTrend'] as num?)?.toDouble() ?? 0.0,
       breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0.0,
       label: json['label'] as String? ?? '',
+      dataQuality: json['dataQuality'] as String? ?? 'ok',
     );
   }
 }

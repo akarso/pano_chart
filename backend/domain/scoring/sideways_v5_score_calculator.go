@@ -179,13 +179,20 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// --- 1. Detect local extrema ---
 	// (already done above)
 
-	// --- 2. Fit regression lines to all extrema ---
+	// --- 2. Fit regression lines: upper boundary through highs, lower
+	// boundary through lows (previously both were fit through the same
+	// combined highs+lows point set, making upperSlope == lowerSlope
+	// always and parallelScore a guaranteed 1.0 regardless of actual
+	// channel shape — see PR-074). Fit straight off candles + the original
+	// index lists rather than a compacted extremaCandles slice, since
+	// regressionThroughHighs/Lows use each point's true chronological
+	// index as x; a compacted slice would silently shift that spacing.
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	upperSlope, upperIntercept := linearRegression(extremaCandles)
-	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
+	upperSlope, upperIntercept := regressionThroughHighs(candles, highsIdx)
+	lowerSlope, lowerIntercept := regressionThroughLows(candles, lowsIdx)
 
 	// --- 3. Compute CCS ---
 	peaks := make([]domain.Candle, len(highsIdx))
@@ -565,13 +572,14 @@ func detectSpike(candles []domain.Candle, atr, k float64) (int, bool) {
 func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, float64, float64) {
 	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
 
-	// --- 2. Fit regression lines to all extrema ---
+	// --- 2. Fit regression lines: upper through highs, lower through lows —
+	// see the identical fix/comment in DetectSidewaysV5 above (PR-074).
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	upperSlope, upperIntercept := linearRegression(extremaCandles)
-	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
+	upperSlope, upperIntercept := regressionThroughHighs(candles, highsIdx)
+	lowerSlope, lowerIntercept := regressionThroughLows(candles, lowsIdx)
 
 	peaks := make([]domain.Candle, len(highsIdx))
 	for i, idx := range highsIdx {
