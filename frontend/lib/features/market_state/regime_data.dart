@@ -1,3 +1,5 @@
+import 'data_quality.dart';
+
 /// Data model for the market regime API response.
 class RegimeData {
   final String timeframe;
@@ -27,7 +29,7 @@ class RegimeData {
   /// Whether this reading reflects a real market read, as opposed to a
   /// full evaluation-source outage — see PR-074. Without this check, an
   /// outage looks identical to a genuinely quiet market.
-  bool get isDataUnavailable => dataQuality == 'unavailable';
+  bool get isDataUnavailable => isDataQualityUnavailable(dataQuality);
 
   factory RegimeData.fromJson(Map<String, dynamic> json) {
     return RegimeData(

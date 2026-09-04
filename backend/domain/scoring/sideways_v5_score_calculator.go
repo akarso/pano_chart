@@ -1,9 +1,8 @@
 package scoring
 
 import (
-	"fmt"
+	"log"
 	"math"
-	"os"
 	"sort"
 
 	"pano_chart/backend/domain"
@@ -44,7 +43,6 @@ func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, 
 		candles[i] = c
 	}
 	sc := DetectSidewaysV5(candles, cfg).Score
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 1: %+v\n", sc)
 	return sc, nil
 }
 
@@ -206,7 +204,7 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	widths := channelWidths(peaks, troughs)
 	parallelScore := 1 - math.Abs(upperSlope-lowerSlope)/0.1 // slopeNormalization=0.1
 	parallelScore = clamp(parallelScore, 0, 1)
-	deviationScore := 1 - stddevFromLine(extremaCandles, upperSlope, upperIntercept)/1.0 // 1.0 normalization
+	deviationScore := 1 - stddevFromLine(extremaCandles, extremaIdx, upperSlope, upperIntercept)/1.0 // 1.0 normalization
 	deviationScore = clamp(deviationScore, 0, 1)
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
@@ -261,16 +259,26 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	}
 
 	// --- 9. Final composition (Weighted Average) ---
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] cfg:: %+v\n", cfg)
 	weightedSum := cfg.W1*CCS + cfg.W2*OQS + cfg.W3*DCS + cfg.W4*VOS
 	totalWeight := cfg.W1 + cfg.W2 + cfg.W3 + cfg.W4
 	avgScore := 0.0
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] totalWeight: %+v\n", totalWeight)
 	if totalWeight > 0 {
 		avgScore = weightedSum / totalWeight
 	}
 	finalScore := avgScore * SRM
 	finalScore = clamp(finalScore, 0, 1)
+
+	// PR-074 fixed a bug where CCS's parallelScore component was a
+	// hardcoded 1.0 for nearly every real symbol (both channel boundaries
+	// were fit through the same point set, so upperSlope always equaled
+	// lowerSlope). That inflated CCS — and thus this composite Score,
+	// weighted 1/3 into the main ranking alongside Trend and GainLoss
+	// (cmd/api/main.go) — across the board. Logged (not the previous
+	// unconditional stderr dumps this replaces) so the post-fix Score
+	// distribution can actually be observed in production rather than
+	// assumed; there's no historical data available in dev to validate
+	// the shift's magnitude ahead of shipping.
+	log.Printf("[SidewaysV5] score=%.4f CCS=%.4f OQS=%.4f DCS=%.4f VOS=%.4f SRM=%.4f", finalScore, CCS, OQS, DCS, VOS, SRM)
 
 	return SidewaysResult{
 		Score: finalScore,
@@ -394,13 +402,20 @@ func linearRegression(candles []domain.Candle) (slope, intercept float64) {
 	return
 }
 
-func stddevFromLine(candles []domain.Candle, slope, intercept float64) float64 {
+// stddevFromLine measures how far each candle's midpoint deviates from a
+// fitted line y = slope*x + intercept. indices[i] must be candles[i]'s true
+// chronological index into the original series (PR-074 CR fix) — evaluating
+// at the loop position instead, when candles is a compacted subset (e.g.
+// extremaCandles), would evaluate the line at the wrong x whenever the fit
+// itself (regressionThroughHighs/Lows) was computed against the real
+// indices, silently inflating the measured deviation.
+func stddevFromLine(candles []domain.Candle, indices []int, slope, intercept float64) float64 {
 	if len(candles) == 0 {
 		return 1
 	}
 	var sum, mean float64
 	for i, c := range candles {
-		x := float64(i)
+		x := float64(indices[i])
 		y := (c.High() + c.Low()) / 2
 		dist := math.Abs(y - (slope*x + intercept))
 		sum += dist
@@ -408,7 +423,7 @@ func stddevFromLine(candles []domain.Candle, slope, intercept float64) float64 {
 	mean = sum / float64(len(candles))
 	var variance float64
 	for i, c := range candles {
-		x := float64(i)
+		x := float64(indices[i])
 		y := (c.High() + c.Low()) / 2
 		dist := math.Abs(y - (slope*x + intercept))
 		variance += (dist - mean) * (dist - mean)
@@ -592,7 +607,7 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 	widths := channelWidths(peaks, troughs)
 	parallelScore := 1 - math.Abs(upperSlope-lowerSlope)/0.1
 	parallelScore = clamp(parallelScore, 0, 1)
-	deviationScore := 1 - stddevFromLine(extremaCandles, upperSlope, upperIntercept)/1.0
+	deviationScore := 1 - stddevFromLine(extremaCandles, extremaIdx, upperSlope, upperIntercept)/1.0
 	deviationScore = clamp(deviationScore, 0, 1)
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
@@ -814,7 +829,6 @@ func (s SidewaysV5Subscore) Compute(data interface{}, cfg interface{}) SubscoreR
 		v5cfg = NewSidewaysV5ConfigForTimeframe("1h")
 	}
 	res := DetectSidewaysV5(candles, v5cfg)
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 2: %+v\n", res.Score)
 	return SubscoreResult{
 		Value:      clamp(res.Score, 0, 1),
 		Confidence: 1.0,

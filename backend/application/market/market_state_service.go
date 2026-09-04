@@ -126,6 +126,13 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	if 2*len(evaluations) < expectedSymbolCount {
 		dataQuality = mkt.DataQualityDegraded
 	}
+	// Logged (timeframe-tagged) so expectedSymbolCount can actually be
+	// tuned from observed counts rather than staying a permanent guess —
+	// see PR-074 CR follow-up. Only on non-OK, to avoid a log line on every
+	// single Calculate() call in steady state.
+	if dataQuality != mkt.DataQualityOK {
+		log.Printf("[market] %s: %d evaluations (expected ~%d) — DataQuality=%s", timeframe, len(evaluations), expectedSymbolCount, dataQuality)
+	}
 
 	total := float64(len(evaluations))
 

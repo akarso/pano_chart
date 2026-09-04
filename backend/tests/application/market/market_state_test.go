@@ -547,3 +547,36 @@ func TestMarketStateService_Calculate_FullUniverse_ReturnsOK(t *testing.T) {
 		t.Errorf("expected DataQuality ok for a full universe, got %q", s.DataQuality)
 	}
 }
+
+// TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary pins
+// down the 2*n < expected boundary at n == expectedSymbolCount/2 exactly
+// (150/2 == 75), and one below it — the exact case the "2*n, not n <
+// expected/2" comment in market_state_service.go argues about but wasn't
+// previously exercised by a test.
+func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testing.T) {
+	mkEvals := func(n int) []domain.EvaluationSnapshot {
+		evals := make([]domain.EvaluationSnapshot, n)
+		for i := range evals {
+			evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+		}
+		return evals
+	}
+
+	svc75 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(75)})
+	s75, err := svc75.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s75.DataQuality != mkt.DataQualityOK {
+		t.Errorf("expected DataQuality ok at exactly half (75/150), got %q", s75.DataQuality)
+	}
+
+	svc74 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(74)})
+	s74, err := svc74.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s74.DataQuality != mkt.DataQualityDegraded {
+		t.Errorf("expected DataQuality degraded one below half (74/150), got %q", s74.DataQuality)
+	}
+}
