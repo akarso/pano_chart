@@ -253,6 +253,11 @@ func closePricesClustered(vals []float64) bool {
 	}
 	medianGap := medianOfFloats(gaps)
 
+	// jumpMultiplier is a heuristic tuned against synthetic monotonic-trend
+	// and step-function cases, not measured against production candle data —
+	// revisit if real-world false positives/negatives show up (e.g. a
+	// legitimate trend with one outsized single-candle move, which this
+	// gap-only heuristic cannot distinguish from a true two-plateau shift).
 	const jumpMultiplier = 3.0 // candidate gap must be this many times the typical gap
 
 	minGroupSize := n / 4 // each plateau must hold ≥ 25% of candles

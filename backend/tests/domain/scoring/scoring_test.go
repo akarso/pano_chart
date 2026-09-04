@@ -89,6 +89,41 @@ func TestTrendPredictability_StepFunctionStillClustered(t *testing.T) {
 	}
 }
 
+// TestTrendPredictability_NonUniformSpacingNotClustered checks the fix
+// against irregular (non-uniformly-spaced) step sizes, as real candle data
+// has from ordinary volatility, rather than only the perfectly-even
+// synthetic series above.
+func TestTrendPredictability_NonUniformSpacingNotClustered(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	// Monotonic uptrend with varied (1-2 unit) step sizes, no single move
+	// dominating — realistic minor volatility around a clean trend.
+	uneven := makeSeries([]float64{100, 101, 102, 104, 105, 106, 108, 109, 110, 112})
+	score, err := calc.Score(uneven)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if score <= 0 {
+		t.Errorf("expected positive trend score for non-uniform monotonic trend, got %v (clustering false-positive?)", score)
+	}
+}
+
+// TestTrendPredictability_ClusteredFallsBackWhenMedianGapZero exercises the
+// path where medianGap == 0 (at least half the sorted adjacent gaps are
+// exact duplicates, plausible with tick-rounded closes) — closePricesClustered
+// falls back to the original 10%-of-range-only rule in that case, which is
+// correct here since the series is a genuine two-plateau step function.
+func TestTrendPredictability_ClusteredFallsBackWhenMedianGapZero(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	stepFn := makeSeries([]float64{100, 100, 100, 100, 150, 150, 150, 150})
+	score, err := calc.Score(stepFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if score != 0 {
+		t.Errorf("expected step function with duplicate closes to be flagged as clustered (score=0), got %v", score)
+	}
+}
+
 func TestSidewaysConsistencyScoreCalculator(t *testing.T) {
 	calc := &scoring.SidewaysConsistencyScoreCalculator{}
 	// Flat line
