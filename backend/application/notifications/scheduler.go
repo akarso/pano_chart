@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"pano_chart/backend/domain"
@@ -39,6 +40,20 @@ type SchedulerConfig struct {
 	SetupCheckInterval  time.Duration // how often to check best setup
 	SetupMinScore       float64       // minimum score to notify (legacy)
 	Timeframe           string        // fallback timeframe for legacy broadcast
+
+	// MarketRegimeHoldDuration is the minimum time between two per-user
+	// market notifications for the same (user, timeframe) — see PR-075 CR
+	// follow-up. The dedup key change that let a genuine intraday regime
+	// flip re-arm the same day (PR-075) also means the winning candidate's
+	// label can flip every single MarketCheckInterval tick when two
+	// candidates sit close to each other near a threshold, producing a new
+	// key — and therefore a new notification — every tick. This hold
+	// duration is checked BEFORE the per-key dedup, independent of it: no
+	// second notification for a (user, timeframe) fires within this window
+	// no matter how many times the label changes inside it, only once it
+	// has elapsed does the next check's label (whatever it is by then) get
+	// a real chance to notify.
+	MarketRegimeHoldDuration time.Duration
 }
 
 // DefaultSchedulerConfig returns production defaults.
@@ -50,13 +65,14 @@ type SchedulerConfig struct {
 // unreachable after PR-073.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		MacroCheckInterval:  1 * time.Minute,
-		MacroLeadTime:       30 * time.Minute,
-		MarketCheckInterval: 1 * time.Minute,
-		MarketMinConfidence: 0.35,
-		SetupCheckInterval:  1 * time.Minute,
-		SetupMinScore:       0.75,
-		Timeframe:           "1h",
+		MacroCheckInterval:       1 * time.Minute,
+		MacroLeadTime:            30 * time.Minute,
+		MarketCheckInterval:      1 * time.Minute,
+		MarketMinConfidence:      0.35,
+		SetupCheckInterval:       1 * time.Minute,
+		SetupMinScore:            0.75,
+		Timeframe:                "1h",
+		MarketRegimeHoldDuration: 15 * time.Minute,
 	}
 }
 
@@ -73,6 +89,23 @@ type Scheduler struct {
 	subscriptions SubscriptionChecker     // optional — gates pro-only notifications
 	cfg           SchedulerConfig
 	now           func() time.Time
+
+	// lastMarketNotifyMu/lastMarketChange track, per "<userID>|<timeframe>",
+	// the label and timestamp of the last regime CHANGE this user was
+	// notified (or would-have-been-notified) about — see
+	// SchedulerConfig.MarketRegimeHoldDuration. Mutex-protected since Run's
+	// ticker loop and any direct CheckMarketState call could in principle
+	// overlap.
+	lastMarketNotifyMu sync.Mutex
+	lastMarketChange   map[string]marketRegimeChange
+}
+
+// marketRegimeChange is the last label a user was (or would have been)
+// notified about for a given timeframe, and when that label was first
+// observed — the anchor for SchedulerConfig.MarketRegimeHoldDuration.
+type marketRegimeChange struct {
+	label string
+	at    time.Time
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -84,12 +117,13 @@ func NewScheduler(
 	cfg SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		engine: engine,
-		market: market,
-		setups: setups,
-		events: events,
-		cfg:    cfg,
-		now:    time.Now,
+		engine:           engine,
+		market:           market,
+		setups:           setups,
+		events:           events,
+		cfg:              cfg,
+		now:              time.Now,
+		lastMarketChange: make(map[string]marketRegimeChange),
 	}
 }
 
@@ -445,8 +479,43 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		}
 	}
 
+	// Regime-hold check (CR follow-up on PR-075): the dedup key below
+	// includes best.label so a genuine intraday regime change can re-arm
+	// the same day, but that alone means two candidates sitting close to
+	// each other near a threshold can flip the "strongest" label every
+	// single check, producing a new key — and a new notification — every
+	// tick.
+	//
+	// This only gates label CHANGES, not repeats: a steady label is
+	// already correctly deduped once per day by the per-key dedup below,
+	// and that path is left alone. Only when best.label differs from the
+	// last change we recorded for this (user, timeframe) do we check
+	// whether MarketRegimeHoldDuration has actually elapsed since that
+	// last change — and only a change that clears the hold updates the
+	// recorded state. A suppressed flap does NOT reset the anchor: if it
+	// did, a market that settles back into a steady (but still-changing
+	// vs. the recorded) label every few minutes could keep sliding the
+	// window forward and never let a real change through. Anchoring to the
+	// last accepted change instead guarantees a decision point every
+	// MarketRegimeHoldDuration.
+	holdKey := cfg.UserID + "|" + best.timeframe
+	now := s.now()
+	s.lastMarketNotifyMu.Lock()
+	prev, hadPrev := s.lastMarketChange[holdKey]
+	labelChanged := !hadPrev || prev.label != best.label
+	if hadPrev && labelChanged && now.Sub(prev.at) < s.cfg.MarketRegimeHoldDuration {
+		s.lastMarketNotifyMu.Unlock()
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold, %s since last change to %q)",
+			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label)
+		return
+	}
+	if labelChanged {
+		s.lastMarketChange[holdKey] = marketRegimeChange{label: best.label, at: now}
+	}
+	s.lastMarketNotifyMu.Unlock()
+
 	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
-	dateKey := s.now().Format("2006-01-02")
+	dateKey := now.Format("2006-01-02")
 
 	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
@@ -458,7 +527,10 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		// (timeframe, day) meant a genuine intraday regime flip (e.g.
 		// Uptrend to Downtrend) produced no further notification until
 		// tomorrow. The date component stays: a steady regime should still
-		// only fire once per day, not on every scheduler tick.
+		// only fire once per day, not on every scheduler tick. The regime
+		// hold check above is what actually prevents rapid flapping near a
+		// threshold from bypassing this via a new key every tick — this key
+		// alone doesn't achieve that.
 		Key: fmt.Sprintf("market_%s_%s_%s", best.timeframe, best.label, dateKey),
 	})
 }

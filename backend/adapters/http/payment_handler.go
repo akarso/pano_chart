@@ -71,13 +71,19 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 // user can hit /api/payments/verify. Each call triggers a live provider API
 // request (Google Play/App Store) with a real cost, and — unlike outbound
 // exchange calls, already throttled via infrastructure/ratelimiter — this
-// endpoint had no abuse protection at all before PR-075. Burst equals the
-// hourly limit so a legitimate user isn't blocked retrying a few times in
-// quick succession after a flaky provider response, but sustained
-// hammering past 5/hour is rejected.
+// endpoint had no abuse protection at all before PR-075.
+//
+// Burst is intentionally smaller than the hourly limit, not equal to it
+// (CR follow-up): token-bucket burst refills immediately once the bucket
+// is full again, so burst == limit would let a user spend the entire
+// hourly allowance right at the top of one hour and again right at the
+// top of the next — effectively ~10 calls in a short window straddling
+// the boundary, not a smooth 5/hour. Burst 3 still covers a legitimate
+// user retrying a few times after a flaky provider response without
+// permitting that doubling.
 const (
 	verifyPurchaseRateLimitPerHour = 5
-	verifyPurchaseRateLimitBurst   = 5
+	verifyPurchaseRateLimitBurst   = 3
 )
 
 // NewVerifyPurchaseRoute wires the production handler chain for

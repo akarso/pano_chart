@@ -121,17 +121,47 @@ func TestPerUserRateLimit_TracksUsersIndependently(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, w3.Result().StatusCode)
 }
 
-func TestPerUserRateLimit_NoUserInContext_PassesThroughUnlimited(t *testing.T) {
-	// PerUserRateLimit has no identity to key on without an authenticated
-	// user in context — it must not block the request itself (that's
-	// RequireAuth's job when registered ahead of it), and must not panic.
+func TestPerUserRateLimit_NoUserInContext_SharesOneBoundedBucket(t *testing.T) {
+	// PerUserRateLimit has no per-request identity to key on without an
+	// authenticated user in context. Regression guard (CR follow-up): this
+	// must NOT mean "unlimited" — a future route wiring this behind
+	// log-only auth would otherwise give unauthenticated traffic (exactly
+	// the traffic most likely to abuse a costly endpoint) zero rate
+	// limiting. Instead every such request shares one bucket, so it's
+	// still bounded — just coarsely, not per-user. (RequireAuth, not this
+	// middleware, is what should actually reject unauthenticated
+	// requests.)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	handler := middleware.PerUserRateLimit(300, 1)(next)
+	handler := middleware.PerUserRateLimit(300, 3)(next) // burst 3
 
-	for i := 0; i < 5; i++ {
+	codes := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/anything", nil) // no WithUserID
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
-		assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+		codes = append(codes, w.Result().StatusCode)
 	}
+
+	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusOK, http.StatusTooManyRequests}, codes)
+}
+
+func TestPerUserRateLimit_NoUserRequests_DoNotConsumeAnAuthenticatedUsersBucket(t *testing.T) {
+	// The shared "no key" bucket must not be confused with any real user's
+	// bucket — an authenticated user's allowance is untouched by however
+	// much anonymous traffic came through first.
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := middleware.PerUserRateLimit(300, 1)(next) // burst 1
+
+	// Exhaust the shared anonymous bucket.
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, httptest.NewRequest(http.MethodPost, "/anything", nil))
+	assert.Equal(t, http.StatusOK, w1.Result().StatusCode)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, httptest.NewRequest(http.MethodPost, "/anything", nil))
+	assert.Equal(t, http.StatusTooManyRequests, w2.Result().StatusCode)
+
+	// A real authenticated user still gets their own fresh allowance.
+	w3 := httptest.NewRecorder()
+	handler.ServeHTTP(w3, withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-a"))
+	assert.Equal(t, http.StatusOK, w3.Result().StatusCode)
 }

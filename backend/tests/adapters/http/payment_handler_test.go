@@ -220,8 +220,9 @@ func TestVerifyPurchaseRoute_RateLimited_Returns429(t *testing.T) {
 		return w.Result().StatusCode
 	}
 
-	// Burst allowance (5) must all succeed.
-	for i := 0; i < 5; i++ {
+	// Burst allowance (3 — intentionally less than the 5/hour limit, see
+	// the constants' doc comment) must all succeed.
+	for i := 0; i < 3; i++ {
 		if code := doRequest(); code != http.StatusOK {
 			t.Fatalf("request %d: expected 200 within the burst allowance, got %d", i+1, code)
 		}
@@ -255,7 +256,7 @@ func TestVerifyPurchaseRoute_RateLimitTracksUsersIndependently(t *testing.T) {
 		return w.Result().StatusCode
 	}
 
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 3; i++ {
 		if code := doRequest("secret-a"); code != http.StatusOK {
 			t.Fatalf("user-a request %d: expected 200, got %d", i+1, code)
 		}
