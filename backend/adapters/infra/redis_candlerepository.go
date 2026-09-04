@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -46,7 +47,7 @@ type payloadItem struct {
 }
 
 // GetSeries implements the ports.CandleRepositoryPort interface.
-func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (r *RedisCandleRepository) GetSeries(ctx context.Context, symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	key := cacheKey(symbol, tf, from.UTC(), to.UTC())
 	fmt.Printf("[RedisCandleRepository] GetSeries: symbol=%s, tf=%s, from=%s, to=%s\n", symbol.String(), tf.String(), from.Format(time.RFC3339), to.Format(time.RFC3339))
 
@@ -82,7 +83,7 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 
 	// Cache miss or client absent -> delegate to wrapped repository
 	fmt.Printf("[RedisCandleRepository] cache miss or client absent: symbol=%s, tf=%s\n", symbol.String(), tf.String())
-	series, err := r.wrapped.GetSeries(symbol, tf, from, to)
+	series, err := r.wrapped.GetSeries(ctx, symbol, tf, from, to)
 	if err != nil {
 		fmt.Printf("[RedisCandleRepository] wrapped repo error: symbol=%s, tf=%s, err=%v\n", symbol.String(), tf.String(), err)
 		return domain.CandleSeries{}, err
@@ -117,7 +118,7 @@ func (r *RedisCandleRepository) GetSeries(symbol domain.Symbol, tf domain.Timefr
 // GetLastNCandles retrieves the last N completed candles for a given symbol and timeframe.
 // Results are cached in Redis with a key quantized to the current timeframe boundary,
 // so all callers within the same candle period share one cache entry.
-func (r *RedisCandleRepository) GetLastNCandles(symbol domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (r *RedisCandleRepository) GetLastNCandles(ctx context.Context, symbol domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if n <= 0 {
 		return domain.NewCandleSeries(symbol, tf, []domain.Candle{})
 	}
@@ -154,7 +155,7 @@ func (r *RedisCandleRepository) GetLastNCandles(symbol domain.Symbol, tf domain.
 	}
 
 	// Cache miss — delegate
-	series, err := r.wrapped.GetLastNCandles(symbol, tf, n)
+	series, err := r.wrapped.GetLastNCandles(ctx, symbol, tf, n)
 	if err != nil {
 		return domain.CandleSeries{}, err
 	}

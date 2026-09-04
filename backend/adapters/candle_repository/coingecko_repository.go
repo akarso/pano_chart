@@ -1,6 +1,7 @@
 package candle_repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,7 +29,7 @@ func NewCoinGeckoCandleRepository(client *http.Client) *CoinGeckoCandleRepositor
 	}
 }
 
-func (r *CoinGeckoCandleRepository) GetSeries(symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
+func (r *CoinGeckoCandleRepository) GetSeries(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
 	cgID, err := symbolToCoinGeckoID(symbol)
 	if err != nil {
 		return domain.CandleSeries{}, err
@@ -39,7 +40,11 @@ func (r *CoinGeckoCandleRepository) GetSeries(symbol domain.Symbol, timeframe do
 	}
 	// CoinGecko only supports vs_currency=usd, days=1-90, interval in [15,60,240,1440]
 	url := fmt.Sprintf("%s/coins/%s/ohlc?vs_currency=usd&days=1&interval=%d", r.BaseURL, cgID, interval)
-	resp, err := r.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return domain.CandleSeries{}, err
+	}
+	resp, err := r.httpClient.Do(req)
 	if err != nil {
 		return domain.CandleSeries{}, err
 	}

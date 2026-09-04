@@ -37,6 +37,6 @@ func (p *CompositeCandleProvider) Symbols(ctx context.Context) ([]domain.Symbol,
 }
 
 // GetLastNCandles implements metrics.CandleProvider.
-func (p *CompositeCandleProvider) GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
-	return p.candleRepo.GetLastNCandles(symbol, timeframe, n)
+func (p *CompositeCandleProvider) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
+	return p.candleRepo.GetLastNCandles(ctx, symbol, timeframe, n)
 }

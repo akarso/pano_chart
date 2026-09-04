@@ -32,7 +32,7 @@ func (p *CandleBasedDataProvider) Get(ctx context.Context, symbol, timeframe str
 		return MarketRiskData{}, err
 	}
 
-	series, err := p.candleRepo.GetLastNCandles(sym, tf, riskCandleLimit)
+	series, err := p.candleRepo.GetLastNCandles(ctx, sym, tf, riskCandleLimit)
 	if err != nil {
 		return MarketRiskData{}, err
 	}

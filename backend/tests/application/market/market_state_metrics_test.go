@@ -35,7 +35,7 @@ func (f *fakeMetricsCandleProvider) Symbols(_ context.Context) ([]domain.Symbol,
 	return f.symbols, f.err
 }
 
-func (f *fakeMetricsCandleProvider) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeMetricsCandleProvider) GetLastNCandles(_ context.Context, sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	key := sym.String() + ":" + tf.String()
 	fcs, ok := f.candles[key]
 	if !ok {
@@ -112,7 +112,7 @@ func (f *fanoutSpyCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, e
 	return nil, nil
 }
 
-func (f *fanoutSpyCandleProvider) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+func (f *fanoutSpyCandleProvider) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
 	return domain.CandleSeries{}, fmt.Errorf("should never be called by Calculate")
 }
 
@@ -202,9 +202,14 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 // --- Cancellation ---
 
 // stuckCandleProvider's GetLastNCandles blocks until the test process exits
-// — simulating a slow repository call (network stall, rate-limit wait) that
-// can't itself be aborted, since CandleProvider.GetLastNCandles takes no
-// context (a repo-wide convention, not something this package controls).
+// — simulating a provider that ignores the context it's handed (a stalled
+// network call whose driver doesn't honor cancellation, or simply a buggy
+// implementation). GetLastNCandles now takes a context.Context, and
+// well-behaved implementations (e.g. FreeTierCandleRepository) abort their
+// underlying HTTP request when it's cancelled, but fetchCandleResults must
+// not assume every implementation does — this fake deliberately discards
+// ctx to prove the racing-select safety net still protects the caller even
+// then.
 type stuckCandleProvider struct {
 	symbols []domain.Symbol
 }
@@ -213,17 +218,17 @@ func (p *stuckCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error
 	return p.symbols, nil
 }
 
-func (p *stuckCandleProvider) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
-	select {} // block forever
+func (p *stuckCandleProvider) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+	select {} // block forever, ignoring ctx
 }
 
 // TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly
 // covers the CR finding that a cancelled request context left the caller
-// blocked through in-flight candle fetches. GetLastNCandles genuinely can't
-// be aborted mid-call (see stuckCandleProvider), but the caller must not
-// wait for it regardless — it should get its answer (defaults, since no
-// real result exists) as soon as ctx is done, not after the stuck fetch
-// eventually completes (which in this test is never).
+// blocked through in-flight candle fetches. stuckCandleProvider ignores the
+// ctx it's given, so it genuinely can't be aborted mid-call, but the caller
+// must not wait for it regardless — it should get its answer (defaults,
+// since no real result exists) as soon as ctx is done, not after the stuck
+// fetch eventually completes (which in this test is never).
 func TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly(t *testing.T) {
 	sym := makeSymbol2("BTCUSDT")
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})

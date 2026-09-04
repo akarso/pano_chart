@@ -86,7 +86,7 @@ func (g *GetOverview) Execute(ctx context.Context, req GetOverviewRequest) ([]Ov
 	successCount := 0
 
 	sem := make(chan struct{}, g.maxWorkers)
-	eg, _ := errgroup.WithContext(ctx)
+	eg, gCtx := errgroup.WithContext(ctx)
 
 	for i, ranked := range ranked {
 		i := i
@@ -97,7 +97,7 @@ func (g *GetOverview) Execute(ctx context.Context, req GetOverviewRequest) ([]Ov
 			defer func() { <-sem }()
 
 			// Fetch last N candles for this symbol.
-			series, err := g.candleRepo.GetLastNCandles(rs.Symbol, req.Timeframe, g.precision)
+			series, err := g.candleRepo.GetLastNCandles(gCtx, rs.Symbol, req.Timeframe, g.precision)
 			if err != nil {
 				// Log and skip this symbol; do not fail entire overview.
 				fmt.Printf("[GetOverview] Error fetching candles for %s: %v\n", rs.Symbol.String(), err)

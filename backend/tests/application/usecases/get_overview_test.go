@@ -44,7 +44,7 @@ func NewFakeCandleRepository(candlesPerSymbol map[domain.Symbol]domain.CandleSer
 	}
 }
 
-func (f *FakeCandleRepository) GetSeries(symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
+func (f *FakeCandleRepository) GetSeries(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
@@ -54,7 +54,7 @@ func (f *FakeCandleRepository) GetSeries(symbol domain.Symbol, timeframe domain.
 	return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
 }
 
-func (f *FakeCandleRepository) GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *FakeCandleRepository) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}

@@ -20,11 +20,11 @@ type fakeCandleRepo struct {
 	err    error
 }
 
-func (f *fakeCandleRepo) GetSeries(_ domain.Symbol, _ domain.Timeframe, _, _ time.Time) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetSeries(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _, _ time.Time) (domain.CandleSeries, error) {
 	return f.series, f.err
 }
 
-func (f *fakeCandleRepo) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}

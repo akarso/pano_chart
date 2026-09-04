@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"context"
 	"time"
 
 	"pano_chart/backend/domain"
@@ -24,6 +25,7 @@ type CandleRepositoryPort interface {
 	//
 	// The returned series may contain gaps; this is expected when data is not available.
 	GetSeries(
+		ctx context.Context,
 		symbol domain.Symbol,
 		timeframe domain.Timeframe,
 		from time.Time,
@@ -47,6 +49,7 @@ type CandleRepositoryPort interface {
 	//   - Must return exactly N completed candles if available
 	//   - Must handle candle alignment internally (no time math in caller)
 	GetLastNCandles(
+		ctx context.Context,
 		symbol domain.Symbol,
 		timeframe domain.Timeframe,
 		n int,

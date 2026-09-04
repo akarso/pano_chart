@@ -1,13 +1,14 @@
 package candle_repository_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"testing"
-	"time"
 	cr "pano_chart/backend/adapters/candle_repository"
 	"pano_chart/backend/domain"
+	"testing"
+	"time"
 )
 
 func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
@@ -26,7 +27,7 @@ func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
 	defer server.Close()
 	repo := cr.NewCoinGeckoCandleRepository(server.Client())
 	repo.BaseURL = server.URL
-	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
+	series, err := repo.GetSeries(context.Background(), sym, tf, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
 func TestCoinGeckoCandleRepository_UnsupportedTimeframe(t *testing.T) {
 	sym, _ := domain.NewSymbol("BTCUSDT")
 	repo := cr.NewCoinGeckoCandleRepository(nil)
-	_, err := repo.GetSeries(sym, domain.Timeframe5m, time.Time{}, time.Time{})
+	_, err := repo.GetSeries(context.Background(), sym, domain.Timeframe5m, time.Time{}, time.Time{})
 	if err == nil {
 		t.Fatalf("expected error for unsupported timeframe")
 	}

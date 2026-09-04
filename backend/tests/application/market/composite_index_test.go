@@ -34,7 +34,7 @@ func (f *fakeCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error)
 	return f.symbols, f.err
 }
 
-func (f *fakeCandleProvider) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeCandleProvider) GetLastNCandles(_ context.Context, sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	key := sym.String() + ":" + tf.String()
 	fcs, ok := f.candles[key]
 	if !ok {

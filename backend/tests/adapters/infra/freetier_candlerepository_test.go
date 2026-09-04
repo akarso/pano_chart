@@ -1,6 +1,7 @@
 package infra_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,7 +51,7 @@ func TestFreeTierCandleRepository_MapsValidResponseToCandleSeries(t *testing.T) 
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	series, err := repo.GetSeries(sym, tf, from, to)
+	series, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestFreeTierCandleRepository_ReturnsErrorOnHTTPFailure(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(sym, tf, from, to)
+	_, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for HTTP failure")
 	}
@@ -100,7 +101,7 @@ func TestFreeTierCandleRepository_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(sym, tf, from, to)
+	_, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
 	}
@@ -118,7 +119,7 @@ func TestFreeTierCandleRepository_GetSeries_MapsProviderResponse(t *testing.T) {
 	}))
 	defer server.Close()
 	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
-	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
+	series, err := repo.GetSeries(context.Background(), sym, tf, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

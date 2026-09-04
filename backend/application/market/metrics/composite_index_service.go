@@ -14,7 +14,7 @@ type CandleProvider interface {
 	// Symbols returns the current symbol universe.
 	Symbols(ctx context.Context) ([]domain.Symbol, error)
 	// GetLastNCandles retrieves the last N candles for a symbol and timeframe.
-	GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
+	GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
 }
 
 // CompositeIndexService computes a normalized composite market index.
@@ -72,7 +72,7 @@ func (s *CompositeIndexService) Calculate(ctx context.Context, timeframe string,
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			cs, fetchErr := s.provider.GetLastNCandles(sym, tf, limit)
+			cs, fetchErr := s.provider.GetLastNCandles(ctx, sym, tf, limit)
 			if fetchErr != nil || cs.Len() < 2 {
 				return // skip symbols with errors or insufficient data
 			}
