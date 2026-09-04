@@ -43,7 +43,6 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tf, err := domain.NewTimeframe(tfStr)
 	if err != nil {
 		http.Error(w, `{"error":"invalid timeframe"}`, http.StatusBadRequest)
-		http.Error(w, `{"error":"invalid timeframe"}`, http.StatusBadRequest)
 		return
 	}
 	limit := 110
