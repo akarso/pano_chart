@@ -8,6 +8,10 @@ import (
 )
 
 // TrendPredictabilityScoreCalculator scores based on linear trend and fit.
+// Must stay stateless: application/setups keeps a single package-level
+// instance shared across concurrent Evaluate calls. Adding a field here
+// without also making it safe for concurrent reuse would introduce a data
+// race in that caller.
 type TrendPredictabilityScoreCalculator struct{}
 
 func (c *TrendPredictabilityScoreCalculator) Name() string {

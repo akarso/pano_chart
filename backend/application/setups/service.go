@@ -3,6 +3,7 @@ package setups
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 
 	"pano_chart/backend/application/market"
@@ -162,7 +163,12 @@ var trendDirectionCalc = &scoring.TrendPredictabilityScoreCalculator{}
 
 // scoresAgree reports whether two independently-obtained scores for what
 // should be the same computation are close enough to trust — see
-// dominantRegime's doc for why this matters.
+// dominantRegime's doc for why this matters. Today both sides call the
+// exact same deterministic arithmetic on the exact same series, so they
+// match bit-for-bit; epsilon exists only to tolerate future floating-point
+// variation (e.g. a different summation order), not to absorb any
+// currently-expected divergence — hence a very tight tolerance rather than
+// a looser one.
 func scoresAgree(a, b float64) bool {
 	const epsilon = 1e-9
 	diff := a - b
@@ -209,14 +215,26 @@ func dominantRegime(scores map[string]float64, series domain.CandleSeries) strin
 	if trend > sideways {
 		recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
 		switch {
-		case err != nil || bias == "neutral":
+		case err != nil:
+			// Not expected to happen here — computeRegimeAndHealth already
+			// guards series.Len() < 2, and a regression over >= 2 distinct
+			// indices can't hit ScoreWithDirection's other error path
+			// (zero denominator). Logged because a masked error here would
+			// otherwise be undiagnosable in the field.
+			log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
+			return "sideways"
+		case bias == "neutral":
 			// No reliable direction (flat, clustered, or too little data)
 			// despite a nonzero trend score from other calculators —
 			// don't guess a direction that isn't there.
 			return "sideways"
 		case !scoresAgree(recomputed, trend):
 			// The recomputed score doesn't match what was already scored —
-			// series/scorer diverged somewhere; don't trust the bias.
+			// series/scorer diverged somewhere; don't trust the bias. Logged
+			// since this is the one branch scoresAgree's doc comment flags
+			// as "should never happen today" — if it ever fires, that
+			// assumption broke somewhere and needs investigating.
+			log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
 			return "sideways"
 		case bias == "up":
 			return "uptrend"
