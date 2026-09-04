@@ -368,11 +368,11 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "up" {
 			p := sum.Scores.Trend
 			if p >= cfg.UptrendMinDominance {
-				lbl := "Uptrend"
-				if sum.Label != "" {
-					lbl = sum.Label
-				}
-				candidates = append(candidates, candidate{lbl, p, cfg.UptrendTimeframe})
+				// Always "Uptrend", never sum.Label (e.g. "Strong trend") —
+				// BuildMarketLabel's labels are direction-agnostic and would
+				// obscure the very bullish/bearish distinction this
+				// notification exists to convey.
+				candidates = append(candidates, candidate{"Uptrend", p, cfg.UptrendTimeframe})
 			}
 		}
 	}
@@ -393,11 +393,9 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "down" {
 			p := sum.Scores.Trend
 			if p >= cfg.DowntrendMinDominance {
-				lbl := "Downtrend"
-				if sum.Label != "" {
-					lbl = sum.Label
-				}
-				candidates = append(candidates, candidate{lbl, p, cfg.DowntrendTimeframe})
+				// Always "Downtrend" — see the Uptrend branch above for why
+				// sum.Label must not be used here.
+				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
 			}
 		}
 	}
