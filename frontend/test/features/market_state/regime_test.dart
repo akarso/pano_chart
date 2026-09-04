@@ -340,8 +340,8 @@ void main() {
     });
 
     testWidgets(
-        'breadth card falls back to real state data when only regime is unavailable',
-        (tester) async {
+        'headline and breadth card both fall back to healthy state data '
+        'when only regime is unavailable', (tester) async {
       final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'trend',
@@ -383,9 +383,13 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(find.text('Data unavailable'), findsOneWidget);
-      // State's own data is fine, so the breadth card should still show
-      // its real numbers rather than being suppressed along with regime's.
+      // State's own data is fine — the headline must show state's real
+      // reading, not a banner (PR-074 CR follow-up: showing "Data
+      // unavailable" while the breadth card right below it renders real
+      // numbers from a healthy state response was self-contradictory).
+      expect(find.text('Data unavailable'), findsNothing);
+      expect(find.text('TREND'), findsOneWidget);
+      // And the breadth card still shows its real numbers.
       expect(find.text('Market Breadth'), findsOneWidget);
     });
 

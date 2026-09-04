@@ -304,8 +304,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
-          if (_regimeData != null) _buildRegimeCard(_regimeData!)
-          else if (_stateData != null) _buildStateCard(_stateData!),
+          _buildHeadlineCard(),
           const SizedBox(height: 16),
           if (_compositeData != null) _buildCompositeCard(_compositeData!),
           const SizedBox(height: 16),
@@ -323,6 +322,31 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         ],
       ),
     );
+  }
+
+  // ---------- Headline selection ----------
+
+  /// Picks which headline card to show. Previously this always preferred
+  /// `_regimeData` whenever it was non-null, even if it was unavailable and
+  /// `_stateData` was perfectly healthy — showing a "Data unavailable"
+  /// banner while `_buildBreadthCard()` below it fell back to state and
+  /// rendered real numbers, a contradictory screen (PR-074 CR follow-up).
+  /// Prefer whichever source is actually healthy; only fall through to a
+  /// banner when both are unavailable (or only one source exists at all).
+  Widget _buildHeadlineCard() {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
+      return _buildRegimeCard(_regimeData!);
+    }
+    if (_stateData != null && !_stateData!.isDataUnavailable) {
+      return _buildStateCard(_stateData!);
+    }
+    if (_regimeData != null) {
+      return _buildRegimeCard(_regimeData!); // renders the banner itself
+    }
+    if (_stateData != null) {
+      return _buildStateCard(_stateData!); // renders the banner itself
+    }
+    return const SizedBox.shrink();
   }
 
   // ---------- Regime Card ----------
