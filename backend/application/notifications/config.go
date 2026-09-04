@@ -26,6 +26,14 @@ type NotificationConfig struct {
 }
 
 // DefaultNotificationConfig returns sane defaults for a new user.
+//
+// UptrendMinDominance/DowntrendMinDominance/SidewaysMinDominance are 0.35,
+// not 0.75 — see PR-073.md: they threshold MarketStateService's
+// proportional Breadth, averaged across the whole symbol universe, which is
+// structurally flatter than the deleted softmax pipeline these were
+// originally tuned against. Measured on realistic evaluation mixes: a quiet
+// market sits around 0.15-0.25, a genuinely strong trending market around
+// 0.4+; 0.35 fires on the latter without firing on ordinary noise.
 func DefaultNotificationConfig(userID string) NotificationConfig {
 	return NotificationConfig{
 		UserID:                userID,
@@ -37,9 +45,9 @@ func DefaultNotificationConfig(userID string) NotificationConfig {
 		Downtrend:             true,
 		Sideways:              true,
 		SetupOfDay:            true,
-		UptrendMinDominance:   0.75,
-		DowntrendMinDominance: 0.75,
-		SidewaysMinDominance:  0.75,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		SidewaysMinDominance:  0.35,
 		SetupMinScore:         0.75,
 		UptrendTimeframe:      "1h",
 		DowntrendTimeframe:    "1h",

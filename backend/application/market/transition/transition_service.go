@@ -9,9 +9,12 @@ import (
 
 // RegimeProvider abstracts market-state computation so the transition
 // service can be tested without the full MarketStateService dependency
-// chain. Satisfied directly by *appmarket.MarketStateService.
+// chain. Satisfied directly by *appmarket.MarketStateService's
+// CalculateWithCandleMetrics — the transition engine needs
+// VolatilityExpansion for its volatility-slope input, which the cheaper
+// Calculate doesn't compute.
 type RegimeProvider interface {
-	Calculate(timeframe string) (mkt.Summary, error)
+	CalculateWithCandleMetrics(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // AgeProvider returns the current regime age in candles.
@@ -44,7 +47,7 @@ func (s *TransitionService) SetAgeProvider(ap AgeProvider) {
 // Calculate fetches the current regime summary and returns transition
 // probabilities for the requested timeframe.
 func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mkt.MarketTransition, error) {
-	summary, err := s.regimeProvider.Calculate(timeframe)
+	summary, err := s.regimeProvider.CalculateWithCandleMetrics(ctx, timeframe)
 	if err != nil {
 		return mkt.MarketTransition{}, fmt.Errorf("transition: regime error: %w", err)
 	}

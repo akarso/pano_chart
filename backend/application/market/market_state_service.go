@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"log"
 	"math"
 	"sort"
 	"sync"
@@ -30,6 +31,11 @@ type RegimeObserver interface {
 // Dispersion — matches the sparkline precision used elsewhere.
 const candleMetricsWindow = 110
 
+// candleMetricsFanoutLimit bounds concurrent candle fetches in
+// candleMetrics — one goroutine per symbol would be excessive for a large
+// universe.
+const candleMetricsFanoutLimit = 20
+
 // MarketStateService computes the aggregate market state summary
 // by classifying each symbol's evaluation snapshot and computing
 // breadth ratios.
@@ -56,7 +62,16 @@ func (s *MarketStateService) SetObserver(o RegimeObserver) {
 	s.observer = o
 }
 
-// Calculate produces a market state summary for the given timeframe.
+// Calculate produces a market state summary for the given timeframe from
+// evaluation snapshots only — no candle I/O, cheap regardless of symbol
+// universe size. VolatilityExpansion/Dispersion are left at their defaults
+// (1.0/0); use CalculateWithCandleMetrics when a caller actually needs them
+// (the legacy /api/market/regime response, the transition engine's
+// volatility slope). Consumers that don't read those two fields —
+// /api/market/state, the notification scheduler, the setup scanner — should
+// keep using this cheaper method: see PR-073 CR follow-up, which found
+// every Calculate() call was paying for a full symbol-universe candle
+// fan-out regardless of whether the caller needed it.
 //
 // Breadth is computed using proportional weighting: every symbol distributes
 // its scores continuously across all four regimes (sideways, compression,
@@ -75,6 +90,10 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	}
 
 	if len(evaluations) == 0 {
+		// No observer notification here (intentional): a "no data" period
+		// isn't a regime observation, so it isn't recorded as one. Regime
+		// history will show a gap rather than a fabricated "sideways" point
+		// for whatever window had no evaluations.
 		return mkt.Summary{
 			Timeframe:           timeframe,
 			State:               mkt.StateSideways,
@@ -220,13 +239,13 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 	trendPrevalence := breadth.Trend
 	label := BuildMarketLabel(trendPrevalence, effectiveTrend)
 
-	// ---- 6. Candle-derived metrics (volatility expansion, dispersion) ----
-	// Optional: only computed when a CandleProvider is configured.
-	volExpansion, disp := s.candleMetrics(timeframe)
-
-	// Notify observer (e.g. regime history tracker) — fire-and-forget.
+	// Notify observer (e.g. regime history tracker) — fire-and-forget, but
+	// logged: a persistent write failure to the regime-history DB would
+	// otherwise be invisible.
 	if s.observer != nil {
-		_ = s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix())
+		if err := s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix()); err != nil {
+			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
+		}
 	}
 
 	return mkt.Summary{
@@ -239,30 +258,51 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		EffectiveTrend:      effectiveTrend,
 		BreakdownRate:       breakdownRate,
 		Label:               label,
-		VolatilityExpansion: volExpansion,
-		Dispersion:          disp,
+		VolatilityExpansion: 1.0,
 	}, nil
+}
+
+// CalculateWithCandleMetrics is Calculate plus VolatilityExpansion/Dispersion,
+// computed from raw candle data across the whole symbol universe (bounded
+// concurrent fetch, candleMetricsFanoutLimit at a time). Meaningfully more
+// expensive than Calculate — use it only where these two fields are actually
+// consumed. ctx bounds the candle fan-out only; Calculate's own evaluation
+// fetch is unchanged (it never took a context, matching its pre-existing
+// EvaluationProvider interface).
+func (s *MarketStateService) CalculateWithCandleMetrics(ctx context.Context, timeframe string) (mkt.Summary, error) {
+	summary, err := s.Calculate(timeframe)
+	if err != nil {
+		return summary, err
+	}
+	summary.VolatilityExpansion, summary.Dispersion = s.candleMetrics(ctx, timeframe)
+	return summary, nil
 }
 
 // candleMetrics computes VolatilityExpansion (median short/long ATR ratio)
 // and Dispersion (MAD of period returns vs. the mean market return) across
 // the symbol universe. Returns the defaults (1.0, 0) when no CandleProvider
 // is configured or the fetch fails — these are supplementary metrics, not
-// required for state classification, so a failure here must not fail
-// Calculate as a whole.
-func (s *MarketStateService) candleMetrics(timeframe string) (volExpansion, disp float64) {
+// required for state classification, so a failure here must not fail the
+// caller as a whole. Symbols()/timeframe-parse failures are logged rather
+// than swallowed silently, so a broken CandleProvider is diagnosable
+// instead of reporting VolatilityExpansion=1.0 forever with no signal.
+func (s *MarketStateService) candleMetrics(ctx context.Context, timeframe string) (volExpansion, disp float64) {
 	volExpansion = 1.0
 	if s.candles == nil {
 		return volExpansion, 0
 	}
 
-	ctx := context.Background()
 	tf, err := domain.NewTimeframe(timeframe)
 	if err != nil {
+		log.Printf("[market] candleMetrics: invalid timeframe %q: %v", timeframe, err)
 		return volExpansion, 0
 	}
 	symbols, err := s.candles.Symbols(ctx)
-	if err != nil || len(symbols) == 0 {
+	if err != nil {
+		log.Printf("[market] candleMetrics: fetching symbols failed: %v", err)
+		return volExpansion, 0
+	}
+	if len(symbols) == 0 {
 		return volExpansion, 0
 	}
 
@@ -273,7 +313,7 @@ func (s *MarketStateService) candleMetrics(timeframe string) (volExpansion, disp
 
 	var mu sync.Mutex
 	var results []candleResult
-	sem := make(chan struct{}, 20) // bounded parallelism
+	sem := make(chan struct{}, candleMetricsFanoutLimit)
 	var wg sync.WaitGroup
 
 	for _, sym := range symbols {
@@ -281,7 +321,11 @@ func (s *MarketStateService) candleMetrics(timeframe string) (volExpansion, disp
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 			defer func() { <-sem }()
 
 			cs, fetchErr := s.candles.GetLastNCandles(sym, tf, candleMetricsWindow)

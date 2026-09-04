@@ -172,7 +172,7 @@ type fakeTransitionRegimeProvider struct {
 	err     error
 }
 
-func (f *fakeTransitionRegimeProvider) Calculate(tf string) (mkt.Summary, error) {
+func (f *fakeTransitionRegimeProvider) CalculateWithCandleMetrics(_ context.Context, tf string) (mkt.Summary, error) {
 	if f.err != nil {
 		return mkt.Summary{}, f.err
 	}

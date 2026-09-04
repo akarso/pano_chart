@@ -1,6 +1,7 @@
 package market_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -25,7 +26,7 @@ type fakeRegimeCalc struct {
 	err     error
 }
 
-func (f *fakeRegimeCalc) Calculate(_ string) (mkt.Summary, error) {
+func (f *fakeRegimeCalc) CalculateWithCandleMetrics(_ context.Context, _ string) (mkt.Summary, error) {
 	return f.summary, f.err
 }
 

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -9,7 +10,9 @@ import (
 
 // RegimeCalculator abstracts market-state computation so the handler works
 // with both the direct service and any cache decorator. Satisfied directly
-// by *appmarket.MarketStateService.
+// by *appmarket.MarketStateService (its CalculateWithCandleMetrics method —
+// this handler's response includes VolatilityExpansion/Dispersion, which
+// the cheaper Calculate doesn't compute).
 //
 // This handler serves the legacy /api/market/regime response shape
 // (regime/prevalence/scores/metrics) for existing frontend clients — see
@@ -17,7 +20,7 @@ import (
 // (adapters/http/market_handler.go) rather than a separate classification
 // pipeline, so the two endpoints can no longer disagree about the market.
 type RegimeCalculator interface {
-	Calculate(timeframe string) (mkt.Summary, error)
+	CalculateWithCandleMetrics(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // MarketRegimeHandler handles GET /api/market/regime requests.
@@ -66,7 +69,7 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		tf = "4h"
 	}
 
-	summary, err := h.calculator.Calculate(tf)
+	summary, err := h.calculator.CalculateWithCandleMetrics(r.Context(), tf)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return

@@ -42,8 +42,8 @@ func TestConfigStore_GetReturnsDefaultsForUnknownUser(t *testing.T) {
 	if !cfg.Uptrend || !cfg.Downtrend || !cfg.Sideways {
 		t.Fatal("expected all market toggles enabled by default")
 	}
-	if cfg.UptrendMinDominance != 0.75 {
-		t.Fatalf("expected 0.75 default, got %f", cfg.UptrendMinDominance)
+	if cfg.UptrendMinDominance != 0.35 {
+		t.Fatalf("expected 0.35 default, got %f", cfg.UptrendMinDominance)
 	}
 	if cfg.SetupMinScore != 0.75 {
 		t.Fatalf("expected 0.75 setup score, got %f", cfg.SetupMinScore)
@@ -629,12 +629,17 @@ func TestConfigStore_TimeframeRoundtrip(t *testing.T) {
 	}
 }
 
-func TestConfigStore_ResetsDowntrendMinDominanceForPreMigrationConfigs(t *testing.T) {
-	// Regression test: DowntrendMinDominance used to threshold Scores.Expansion;
-	// PR-072 repointed it at Scores.Trend, a metric with a different
-	// distribution. A value stored before that change (no config_version
-	// field, i.e. config_version 0) must not be silently reused under the
-	// new meaning — Get should reset it to the current default.
+func TestConfigStore_ResetsMinDominanceFieldsForPreMigrationConfigs(t *testing.T) {
+	// Regression test covering two successive semantic changes to the
+	// *MinDominance fields:
+	//   - PR-072: DowntrendMinDominance moved from thresholding
+	//     Scores.Expansion to Scores.Trend.
+	//   - PR-073: all three fields moved from thresholding the softmax
+	//     pipeline's output to MarketStateService's proportional Breadth,
+	//     a structurally flatter scale (see DefaultNotificationConfig's doc).
+	// A config stored before either change (config_version 0) must not
+	// silently reuse thresholds tuned for a metric that no longer exists —
+	// Get should reset all three to the current defaults.
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -645,7 +650,7 @@ func TestConfigStore_ResetsDowntrendMinDominanceForPreMigrationConfigs(t *testin
 		t.Fatal(err)
 	}
 
-	const legacyJSON = `{"downtrend":true,"downtrend_min_dominance":0.40,"uptrend_min_dominance":0.60}`
+	const legacyJSON = `{"downtrend":true,"downtrend_min_dominance":0.40,"uptrend_min_dominance":0.60,"sideways_min_dominance":0.60}`
 	_, err = db.Exec(`INSERT INTO notification_config (user_id, config, updated_at)
 		VALUES (?, ?, datetime('now'))`, "u-pre-migration", legacyJSON)
 	if err != nil {
@@ -656,15 +661,19 @@ func TestConfigStore_ResetsDowntrendMinDominanceForPreMigrationConfigs(t *testin
 	if err != nil {
 		t.Fatalf("get error: %v", err)
 	}
-	if got.DowntrendMinDominance != 0.75 {
-		t.Fatalf("expected DowntrendMinDominance reset to default 0.75, got %f", got.DowntrendMinDominance)
+	const wantDefault = 0.35
+	if got.DowntrendMinDominance != wantDefault {
+		t.Fatalf("expected DowntrendMinDominance reset to default %v, got %f", wantDefault, got.DowntrendMinDominance)
 	}
-	// Unrelated fields must survive untouched.
+	if got.UptrendMinDominance != wantDefault {
+		t.Fatalf("expected UptrendMinDominance reset to default %v, got %f", wantDefault, got.UptrendMinDominance)
+	}
+	if got.SidewaysMinDominance != wantDefault {
+		t.Fatalf("expected SidewaysMinDominance reset to default %v, got %f", wantDefault, got.SidewaysMinDominance)
+	}
+	// Genuinely unrelated fields must survive untouched.
 	if !got.Downtrend {
 		t.Fatal("expected Downtrend toggle to remain true")
-	}
-	if got.UptrendMinDominance != 0.60 {
-		t.Fatalf("expected UptrendMinDominance to be preserved at 0.60, got %f", got.UptrendMinDominance)
 	}
 }
 

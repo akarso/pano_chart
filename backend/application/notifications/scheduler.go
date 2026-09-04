@@ -42,12 +42,18 @@ type SchedulerConfig struct {
 }
 
 // DefaultSchedulerConfig returns production defaults.
+//
+// MarketMinConfidence is 0.35, not 0.75 — see
+// notifications.DefaultNotificationConfig's doc and PR-073.md: it gates on
+// MarketStateService's proportional Confidence, which rarely exceeds ~0.4
+// even in a strongly trending market (measured), so 0.75 was practically
+// unreachable after PR-073.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
 		MacroCheckInterval:  1 * time.Minute,
 		MacroLeadTime:       30 * time.Minute,
 		MarketCheckInterval: 1 * time.Minute,
-		MarketMinConfidence: 0.75,
+		MarketMinConfidence: 0.35,
 		SetupCheckInterval:  1 * time.Minute,
 		SetupMinScore:       0.75,
 		Timeframe:           "1h",
@@ -361,11 +367,20 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 
 	// Uptrend — maps to Breadth.Trend, gated on the regime's actual
 	// direction (sum.Bias, an aggregate-return-based signal computed by
-	// MarketStateService.Calculate — see PR-072). Skip if the regime is
-	// indecisive — nothing actionable.
+	// MarketStateService.Calculate — see PR-072).
+	//
+	// Deliberately NOT gated on sum.State != mkt.StateIndecisive (PR-073):
+	// State is a market-wide "which single regime dominates everything"
+	// classification, averaged across the whole symbol universe — under the
+	// proportional pipeline that bar is rarely cleared even in a genuinely
+	// strong trend (measured ~0.4 Breadth.Trend, see PR-073.md), so requiring
+	// a clean State on top of it would leave this notification almost never
+	// firing. Bias + a UptrendMinDominance-cleared Breadth.Trend is already
+	// a sufficient, more targeted signal for "is there real, directional
+	// trend strength on this timeframe" — it doesn't need the market's other
+	// three regimes to also lose to trend.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok &&
-			sum.State != mkt.StateIndecisive && sum.Bias == "up" {
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Bias == "up" {
 			p := sum.Breadth.Trend
 			if p >= cfg.UptrendMinDominance {
 				// Always "Uptrend", never sum.Label (e.g. "Strong trend") —
@@ -388,9 +403,9 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	// field to the default for any config stored before this change
 	// (config_version < 1) rather than silently reusing a threshold tuned
 	// for a different metric — see infrastructure/notifications/sqlite_config_store.go.
+	// Also not gated on State != Indecisive — see the Uptrend branch above.
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok &&
-			sum.State != mkt.StateIndecisive && sum.Bias == "down" {
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Bias == "down" {
 			p := sum.Breadth.Trend
 			if p >= cfg.DowntrendMinDominance {
 				// Always "Downtrend" — see the Uptrend branch above for why

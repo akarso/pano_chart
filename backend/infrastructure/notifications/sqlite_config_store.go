@@ -37,7 +37,7 @@ func (s *SQLiteConfigStore) migrate() error {
 // configSchemaVersion tracks semantic changes to threshold fields whose
 // stored values can become meaningless when what they threshold changes
 // underneath them. Bump it, and add a fromJSON case, whenever that happens.
-const configSchemaVersion = 1
+const configSchemaVersion = 2
 
 // configJSON is the serialised form stored in the config column.
 type configJSON struct {
@@ -116,10 +116,22 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 	// distribution. A pre-migration stored value (config_version < 1) was
 	// tuned against the old metric and carries no meaningful information
 	// under the new one — including the (broken, never-fired-correctly)
-	// default itself — so reset it to the current default rather than
-	// silently reusing a number that means something else now.
-	if j.ConfigVersion < 1 {
-		cfg.DowntrendMinDominance = appnotify.DefaultNotificationConfig(userID).DowntrendMinDominance
+	// default itself.
+	//
+	// PR-073: all three *MinDominance fields changed scale again — they used
+	// to threshold the softmax pipeline's output (MetricsService, deleted),
+	// which skews toward extremes, and now threshold MarketStateService's
+	// proportional breadth averaged across the whole symbol universe, which
+	// is structurally flatter (measured: a realistic strong-trend market
+	// produces Breadth.Trend around 0.4, not the 0.75 the old default
+	// assumed — see docs/v2/PR-073.md). Any config stored before this change
+	// (config_version < 2) has all three reset to the new defaults rather
+	// than silently keeping thresholds that are now nearly unreachable.
+	if j.ConfigVersion < 2 {
+		d := appnotify.DefaultNotificationConfig(userID)
+		cfg.UptrendMinDominance = d.UptrendMinDominance
+		cfg.DowntrendMinDominance = d.DowntrendMinDominance
+		cfg.SidewaysMinDominance = d.SidewaysMinDominance
 	}
 
 	// Backfill empty timeframes from pre-existing configs.

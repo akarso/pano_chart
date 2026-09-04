@@ -85,7 +85,7 @@ func TestScheduler_MarketState_LowConfidence_Suppressed(t *testing.T) {
 	eng.SetClock(func() time.Time { return now })
 	market := singleMarket("1h", mkt.Summary{
 		State:      mkt.StateSideways,
-		Confidence: 0.50,
+		Confidence: 0.20,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })

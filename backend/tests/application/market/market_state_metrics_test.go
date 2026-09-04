@@ -78,6 +78,44 @@ func TestMarketStateService_NoCandleProvider_DefaultsMetrics(t *testing.T) {
 	}
 }
 
+// TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider is the
+// regression test for the PR-073 CR finding that /api/market/state (and the
+// notification scheduler, and the setup scanner) got significantly more
+// expensive because every Calculate() call paid for a full symbol-universe
+// candle fan-out, whether or not the caller read VolatilityExpansion/
+// Dispersion. Calculate must stay cheap even when a CandleProvider is
+// configured for CalculateWithCandleMetrics's benefit — only the latter may
+// touch it.
+func TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider(t *testing.T) {
+	spy := &fanoutSpyCandleProvider{}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
+	svc.SetCandleProvider(spy)
+
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spy.symbolsCalls != 0 {
+		t.Errorf("expected Calculate to never touch the CandleProvider, got %d Symbols() calls", spy.symbolsCalls)
+	}
+	if s.VolatilityExpansion != 1.0 || s.Dispersion != 0 {
+		t.Errorf("expected default metrics from Calculate, got vol=%f disp=%f", s.VolatilityExpansion, s.Dispersion)
+	}
+}
+
+type fanoutSpyCandleProvider struct {
+	symbolsCalls int
+}
+
+func (f *fanoutSpyCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error) {
+	f.symbolsCalls++
+	return nil, nil
+}
+
+func (f *fanoutSpyCandleProvider) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+	return domain.CandleSeries{}, fmt.Errorf("should never be called by Calculate")
+}
+
 func TestMarketStateService_VolatilityExpansion_InsufficientData(t *testing.T) {
 	// < 30 candles → volatility defaults to 1.0 (same rule as the deleted
 	// softmax pipeline's TestMetrics_VolatilityExpansion_InsufficientData).
@@ -95,7 +133,7 @@ func TestMarketStateService_VolatilityExpansion_InsufficientData(t *testing.T) {
 		candles: map[string][]fakeMetricsCandle{"BTCUSDT:4h": candles},
 	})
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.CalculateWithCandleMetrics(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -125,7 +163,7 @@ func TestMarketStateService_Dispersion_DivergentReturns(t *testing.T) {
 		candles: map[string][]fakeMetricsCandle{"BTCUSDT:4h": btc, "ETHUSDT:4h": eth},
 	})
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.CalculateWithCandleMetrics(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

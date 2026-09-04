@@ -368,6 +368,17 @@ func main() {
 	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
 	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
 
+	// PR-073 dropped the candle-based backfill (no equivalent exists for the
+	// proportional pipeline — see docs/v2/PR-073.md). A fresh DB now starts
+	// empty and only accumulates history from live Calculate() calls, which
+	// is invisible unless someone thinks to check — so surface it loudly
+	// once at startup instead.
+	for _, bfTF := range []string{"1h", "4h", "1d"} {
+		if hist, histErr := regimeHistoryService.GetHistory(bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
+			log.Printf("[main] WARNING: regime history for %s is empty (db=%s) — no backfill runs anymore (PR-073); it will accumulate live from now on", bfTF, regimeHistoryDBPath)
+		}
+	}
+
 	regimeHandler := adhttp.NewMarketRegimeHandler(marketService)
 	log.Println("[main] Market regime detector initialized")
 
