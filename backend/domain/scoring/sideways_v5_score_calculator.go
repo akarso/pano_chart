@@ -3,10 +3,17 @@ package scoring
 import (
 	"log"
 	"math"
+	"math/rand"
 	"sort"
 
 	"pano_chart/backend/domain"
 )
+
+// sidewaysV5LogSampleRate is the fraction of DetectSidewaysV5 calls that
+// log their Score/component breakdown — see the comment at the log.Printf
+// call site. rand.Float64() uses the default global Source, which is safe
+// for concurrent use, so no locking is needed here.
+const sidewaysV5LogSampleRate = 0.05
 
 // SidewaysV5ScoreCalculator implements SymbolScoreCalculator for v5
 type SidewaysV5ScoreCalculator struct {
@@ -278,7 +285,19 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// distribution can actually be observed in production rather than
 	// assumed; there's no historical data available in dev to validate
 	// the shift's magnitude ahead of shipping.
-	log.Printf("[SidewaysV5] score=%.4f CCS=%.4f OQS=%.4f DCS=%.4f VOS=%.4f SRM=%.4f", finalScore, CCS, OQS, DCS, VOS, SRM)
+	//
+	// Sampled, not unconditional (CR follow-up): this runs per-symbol in
+	// the ranking pipeline — ~150 symbols per refresh across however many
+	// timeframes are active. Rankings are Redis-cached (rankingsCacheTTL,
+	// cmd/api/main.go), so this isn't per-HTTP-request, but a full
+	// unconditional per-symbol log would still burst on every cache
+	// refresh. A ~5% random sample gives a representative read on the
+	// Score distribution — which is the actual goal, not per-symbol
+	// tracing — without that volume. Bump sidewaysV5LogSampleRate (or make
+	// it unconditional) if the sample proves too sparse to be useful.
+	if rand.Float64() < sidewaysV5LogSampleRate {
+		log.Printf("[SidewaysV5] score=%.4f CCS=%.4f OQS=%.4f DCS=%.4f VOS=%.4f SRM=%.4f", finalScore, CCS, OQS, DCS, VOS, SRM)
+	}
 
 	return SidewaysResult{
 		Score: finalScore,
