@@ -31,5 +31,5 @@ func (r *RankSymbolsWithUniverse) RankAll(ctx context.Context, exchangeInfoURL, 
 			filtered[sym] = s
 		}
 	}
-	return r.Ranker.Rank(filtered)
+	return r.Ranker.Rank(ctx, filtered)
 }

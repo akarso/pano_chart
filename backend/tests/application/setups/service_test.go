@@ -9,6 +9,7 @@ import (
 	"pano_chart/backend/application/setups"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	domainrisk "pano_chart/backend/domain/risk"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
 )
@@ -20,15 +21,34 @@ type fakeCandleRepo struct {
 	err    error
 }
 
-func (f *fakeCandleRepo) GetSeries(_ domain.Symbol, _ domain.Timeframe, _, _ time.Time) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetSeries(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _, _ time.Time) (domain.CandleSeries, error) {
 	return f.series, f.err
 }
 
-func (f *fakeCandleRepo) GetLastNCandles(_ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
 	return f.series, nil
+}
+
+// fakeFragilityProvider lets a test observe the ctx it's given and react —
+// e.g. simulate the caller cancelling mid-lookup — by running onGet before
+// returning the configured result.
+type fakeFragilityProvider struct {
+	frag  domainrisk.Fragility
+	err   error
+	onGet func()
+}
+
+func (f *fakeFragilityProvider) Get(_ context.Context, _, _ string) (domainrisk.Fragility, error) {
+	if f.onGet != nil {
+		f.onGet()
+	}
+	if f.err != nil {
+		return domainrisk.Fragility{}, f.err
+	}
+	return f.frag, nil
 }
 
 type fakeScorer struct {
@@ -301,5 +321,67 @@ func TestSetupService_HighCompressionSelectsCompressionBreakout(t *testing.T) {
 	}
 	if result.BestSetup != setup.CompressionBreakout {
 		t.Errorf("expected compression_breakout, got %s", result.BestSetup)
+	}
+}
+
+// TestSetupService_FragilityCancellation_AbortsInsteadOfDefaultingCrowding
+// is the regression test for the CR finding that a caller-cancelled ctx
+// during the fragility lookup was silently swallowed, leaving Crowding at
+// its zero default (the maximum-confidence value) and returning a
+// successful, confidently-computed result built on data that was never
+// actually obtained. Evaluate must propagate ctx.Err() instead.
+func TestSetupService_FragilityCancellation_AbortsInsteadOfDefaultingCrowding(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		TotalScore: 1.0,
+		Scores:     map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	eng := setups.NewEngine()
+	svc := setups.NewSetupService(repo, scorer, eng)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// onGet simulates the caller giving up while the fragility lookup is
+	// in flight: the provider fails, and by the time Evaluate checks
+	// ctx.Err(), the parent context is already done.
+	svc.SetFragilityProvider(&fakeFragilityProvider{
+		err:   errors.New("lookup interrupted"),
+		onGet: cancel,
+	})
+
+	result, err := svc.Evaluate(ctx, "BTCUSDT", "4h")
+	if err == nil {
+		t.Fatal("expected error when ctx is cancelled during fragility lookup")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	}
+	if result.Symbol != "" || result.Scores != nil {
+		t.Errorf("expected zero-value result on cancellation, got %+v", result)
+	}
+}
+
+// TestSetupService_FragilityError_DegradesGracefullyWhenNotCancelled is the
+// companion case: a fragility-provider failure unrelated to cancellation
+// must still degrade gracefully (Crowding defaults to 0, Evaluate
+// succeeds) — the fix must not turn every fragility error into a hard
+// failure, only ones caused by the caller's own context being done.
+func TestSetupService_FragilityError_DegradesGracefullyWhenNotCancelled(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		TotalScore: 1.0,
+		Scores:     map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	eng := setups.NewEngine()
+	svc := setups.NewSetupService(repo, scorer, eng)
+	svc.SetFragilityProvider(&fakeFragilityProvider{err: errors.New("provider down")})
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Crowding != 0 {
+		t.Errorf("expected Crowding to default to 0 on a non-cancellation error, got %f", result.Crowding)
 	}
 }

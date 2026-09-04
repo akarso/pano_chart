@@ -15,14 +15,14 @@ func NewRedisMinimalAdapter(inner *symbol_universe.GoRedisClient) *RedisMinimalA
 	return &RedisMinimalAdapter{Inner: inner}
 }
 
-func (r *RedisMinimalAdapter) Get(key string) ([]byte, error) {
-	val, err := r.Inner.Get(context.Background(), key)
+func (r *RedisMinimalAdapter) Get(ctx context.Context, key string) ([]byte, error) {
+	val, err := r.Inner.Get(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	return []byte(val), nil
 }
 
-func (r *RedisMinimalAdapter) Set(key string, value []byte, ttl time.Duration) error {
-	return r.Inner.Set(context.Background(), key, string(value), ttl)
+func (r *RedisMinimalAdapter) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	return r.Inner.Set(ctx, key, string(value), ttl)
 }

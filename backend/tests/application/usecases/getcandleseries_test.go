@@ -1,6 +1,7 @@
 package usecases_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ type fakeRepo struct {
 	err      error
 }
 
-func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetSeries(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	f.called = true
 	f.lastSym = sym
 	f.lastTf = tf
@@ -32,7 +33,7 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	return f.series, nil
 }
 
-func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetLastNCandles(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
@@ -48,7 +49,7 @@ func TestGetCandleSeries_DelegatesToRepository(t *testing.T) {
 	repo := &fakeRepo{}
 	uc := usecases.NewGetCandleSeries(repo)
 
-	_, _ = uc.Execute(sym, tf, from, to)
+	_, _ = uc.Execute(context.Background(), sym, tf, from, to)
 
 	if !repo.called {
 		t.Fatal("expected repository to be called")
@@ -76,7 +77,7 @@ func TestGetCandleSeries_ReturnsCandleSeries(t *testing.T) {
 	repo := &fakeRepo{series: series}
 	uc := usecases.NewGetCandleSeries(repo)
 
-	res, err := uc.Execute(sym, tf, from, to)
+	res, err := uc.Execute(context.Background(), sym, tf, from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +96,7 @@ func TestGetCandleSeries_PropagatesRepositoryError(t *testing.T) {
 	repo := &fakeRepo{err: repoErr}
 	uc := usecases.NewGetCandleSeries(repo)
 
-	_, err := uc.Execute(sym, tf, from, to)
+	_, err := uc.Execute(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

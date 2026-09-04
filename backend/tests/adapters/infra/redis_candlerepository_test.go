@@ -1,6 +1,7 @@
 package infra_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -23,7 +24,7 @@ func newFakeRedis() *fakeRedisClient {
 	return &fakeRedisClient{store: make(map[string][]byte)}
 }
 
-func (f *fakeRedisClient) Get(key string) ([]byte, error) {
+func (f *fakeRedisClient) Get(ctx context.Context, key string) ([]byte, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -34,7 +35,7 @@ func (f *fakeRedisClient) Get(key string) ([]byte, error) {
 	return b, nil
 }
 
-func (f *fakeRedisClient) Set(key string, value []byte, ttl time.Duration) error {
+func (f *fakeRedisClient) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if f.setErr != nil {
 		return f.setErr
 	}
@@ -51,7 +52,7 @@ type fakeRepo struct {
 	err    error
 }
 
-func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetSeries(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	f.called = true
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
@@ -59,7 +60,7 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	return f.series, nil
 }
 
-func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetLastNCandles(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
@@ -102,7 +103,7 @@ func TestRedisCandleRepository_ReturnsCachedResultOnHit(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	res, err := repo.GetSeries(domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
+	res, err := repo.GetSeries(context.Background(), domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +124,7 @@ func TestRedisCandleRepository_DelegatesOnCacheMiss(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	res, err := repo.GetSeries(domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
+	res, err := repo.GetSeries(context.Background(), domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestRedisCandleRepository_CachesResultAfterMiss(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
+	_, err := repo.GetSeries(context.Background(), domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestRedisCandleRepository_IgnoresRedisErrors(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	res, err := repo.GetSeries(domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
+	res, err := repo.GetSeries(context.Background(), domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
 	if err != nil {
 		t.Fatalf("expected redis errors to be ignored, got: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestRedisCandleRepository_PropagatesRepositoryError(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
+	_, err := repo.GetSeries(context.Background(), domain.NewSymbolUnsafe("BTC"), domain.NewTimeframeUnsafe("1m"), from, to)
 	if err == nil {
 		t.Fatal("expected repository error to propagate")
 	}

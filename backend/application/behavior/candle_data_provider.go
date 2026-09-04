@@ -34,7 +34,7 @@ func (p *CandleBasedDataProvider) Get(ctx context.Context, symbol, timeframe str
 		return BehaviorData{}, err
 	}
 
-	series, err := p.candleRepo.GetLastNCandles(sym, tf, behaviorCandleLimit)
+	series, err := p.candleRepo.GetLastNCandles(ctx, sym, tf, behaviorCandleLimit)
 	if err != nil {
 		return BehaviorData{}, err
 	}

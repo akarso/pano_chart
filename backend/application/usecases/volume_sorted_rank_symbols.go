@@ -38,8 +38,7 @@ func (v *VolumeSortedRankSymbols) Universe() SymbolUniverseProvider {
 	return v.universe
 }
 
-func (v *VolumeSortedRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
-	ctx := context.Background()
+func (v *VolumeSortedRankSymbols) Rank(ctx context.Context, series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
 	if v.ExchangeInfoURL == "" || v.TickerURL == "" {
 		return nil, fmt.Errorf("exchangeInfo and ticker URLs are required")
 	}
@@ -90,5 +89,5 @@ func (v *VolumeSortedRankSymbols) Rank(series map[domain.Symbol]domain.CandleSer
 
 	// Use DefaultRankSymbols logic for scoring
 	base := NewDefaultRankSymbols(v.Weights)
-	return base.Rank(filteredSeries)
+	return base.Rank(ctx, filteredSeries)
 }

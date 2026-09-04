@@ -132,7 +132,7 @@ func (g *GetSymbolDetail) Execute(ctx context.Context, req GetSymbolDetailReques
 	}
 
 	// 3. Fetch last N candles
-	series, err := g.candleRepo.GetLastNCandles(req.Symbol, req.Timeframe, limit)
+	series, err := g.candleRepo.GetLastNCandles(ctx, req.Symbol, req.Timeframe, limit)
 	if err != nil {
 		return SymbolDetailResult{}, fmt.Errorf("candle fetch failed: %w", err)
 	}

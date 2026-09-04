@@ -18,7 +18,7 @@ type CandleProvider interface {
 	// Symbols returns the current symbol universe.
 	Symbols(ctx context.Context) ([]domain.Symbol, error)
 	// GetLastNCandles retrieves the last N candles for a symbol and timeframe.
-	GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
+	GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
 }
 
 // RegimeObserver is notified after every Calculate call. The Tracker from
@@ -325,11 +325,14 @@ type candleResult struct {
 // returns too little data is silently skipped — a single bad symbol
 // shouldn't fail the whole market-wide computation.
 //
-// cancelled reports whether ctx was done before every fetch finished. The
-// underlying CandleProvider.GetLastNCandles call takes no context (a
-// repo-wide convention, not specific to this method), so a fetch already
-// past the concurrency gate cannot be aborted mid-flight — cancellation
-// here means "stop waiting for it", not "stop it". Any such fetch keeps
+// cancelled reports whether ctx was done before every fetch finished.
+// GetLastNCandles now takes ctx and well-behaved implementations (e.g.
+// FreeTierCandleRepository, via its underlying HTTP request) abort their
+// in-flight I/O when it's cancelled — but a fetch already past the
+// concurrency gate is not guaranteed to return before ctx.Done() fires
+// (e.g. a provider that ignores ctx, or a cancellation that races the
+// response), so this function still races completion against ctx.Done()
+// rather than assuming the former always wins. Any such fetch keeps
 // running in the background and its result is discarded, so this method
 // can return to the caller promptly instead of blocking through the
 // straggler's rate-limit waits, retries, or network round-trip.
@@ -350,7 +353,7 @@ func fetchCandleResults(ctx context.Context, candles CandleProvider, tf domain.T
 			}
 			defer func() { <-sem }()
 
-			cs, fetchErr := candles.GetLastNCandles(sym, tf, candleMetricsWindow)
+			cs, fetchErr := candles.GetLastNCandles(ctx, sym, tf, candleMetricsWindow)
 			if fetchErr != nil || cs.Len() < 2 {
 				return
 			}

@@ -53,7 +53,7 @@ func NewGetCandleSeriesHandler(uc usecases.GetCandleSeries) http.HandlerFunc {
 			to = to.UTC()
 		}
 
-		series, err := uc.Execute(sym, tf, from, to)
+		series, err := uc.Execute(r.Context(), sym, tf, from, to)
 		if err != nil {
 			http.Error(w, "use case error", http.StatusInternalServerError)
 			return

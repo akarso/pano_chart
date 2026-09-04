@@ -59,7 +59,7 @@ func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
 
 // Evaluate fetches candles, computes underlying scores, builds a SetupContext,
 // and runs the engine.
-func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (setup.SetupScores, error) {
+func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (setup.SetupScores, error) {
 	sym, err := domain.NewSymbol(symbol)
 	if err != nil {
 		return setup.SetupScores{}, fmt.Errorf("invalid symbol: %w", err)
@@ -69,7 +69,7 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 		return setup.SetupScores{}, fmt.Errorf("invalid timeframe: %w", err)
 	}
 
-	series, err := s.candleRepo.GetLastNCandles(sym, tf, candleLimit)
+	series, err := s.candleRepo.GetLastNCandles(ctx, sym, tf, candleLimit)
 	if err != nil {
 		return setup.SetupScores{}, fmt.Errorf("candle fetch: %w", err)
 	}
@@ -87,8 +87,8 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 		return setup.SetupScores{}, fmt.Errorf("scoring: %w", err)
 	}
 
-	ctx := buildContext(symbol, series, stats)
-	result := s.engine.Evaluate(ctx)
+	setupCtx := buildContext(symbol, series, stats)
+	result := s.engine.Evaluate(setupCtx)
 	result.Timeframe = timeframe
 
 	// Apply market-level modifier when a provider is available.
@@ -99,11 +99,23 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 	}
 
 	// Populate confidence inputs and compute unified confidence.
-	result.VolatilityFit = VolatilityFit(result.Regime, ctx.Volatility)
+	result.VolatilityFit = VolatilityFit(result.Regime, setupCtx.Volatility)
 	if s.fragilityProvider != nil {
-		if frag, err := s.fragilityProvider.Get(context.Background(), symbol, timeframe); err == nil {
+		frag, err := s.fragilityProvider.Get(ctx, symbol, timeframe)
+		switch {
+		case err == nil:
 			result.Crowding = frag.Score
+		case ctx.Err() != nil:
+			// The caller gave up, not the fragility provider — Crowding's
+			// zero default would otherwise silently maximize the crowding
+			// contribution to ComputeConfidence below, returning a
+			// confidently-computed result built on data we never actually
+			// obtained. Abort instead of masking cancellation as success.
+			return setup.SetupScores{}, ctx.Err()
 		}
+		// else: fragility provider failed for a reason unrelated to
+		// cancellation (network hiccup, bad data) — degrade gracefully,
+		// Crowding stays at its zero default.
 	}
 	result.Confidence = ComputeConfidence(result)
 

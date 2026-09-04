@@ -77,7 +77,7 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		series = make(map[domain.Symbol]domain.CandleSeries)
 		for i, sym := range symbols {
 			fmt.Printf("[rankings] [%d/%d] Fetching series for symbol=%s, timeframe=%s\n", i+1, len(symbols), sym.String(), tf.String())
-			cs, err := h.CandleRepo.GetSeries(sym, tf, time.Time{}, time.Time{}) // TODO: set real time range
+			cs, err := h.CandleRepo.GetSeries(r.Context(), sym, tf, time.Time{}, time.Time{}) // TODO: set real time range
 			if err != nil {
 				fmt.Printf("[rankings] Error fetching series for %s: %v\n", sym.String(), err)
 				continue
@@ -95,7 +95,7 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("[rankings] Total series loaded: %d\n", len(series))
 	}
-	ranked, err := h.Ranker.Rank(series)
+	ranked, err := h.Ranker.Rank(r.Context(), series)
 	if err != nil {
 		fmt.Printf("[rankings] Error ranking: %v\n", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
