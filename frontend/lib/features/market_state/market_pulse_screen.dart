@@ -304,13 +304,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
-          if (_regimeData != null) _buildRegimeCard(_regimeData!)
-          else if (_stateData != null) _buildStateCard(_stateData!),
+          _buildHeadlineCard(),
           const SizedBox(height: 16),
           if (_compositeData != null) _buildCompositeCard(_compositeData!),
           const SizedBox(height: 16),
-          if (_regimeData != null) _buildMetricsCard(_regimeData!),
-          if (_regimeData != null) const SizedBox(height: 16),
+          if (_regimeData != null && !_regimeData!.isDataUnavailable)
+            _buildMetricsCard(_regimeData!),
+          if (_regimeData != null && !_regimeData!.isDataUnavailable)
+            const SizedBox(height: 16),
           if (_transitionData != null) _buildTransitionCard(_transitionData!),
           if (_transitionData != null) const SizedBox(height: 16),
           if (_regimeHistoryData != null)
@@ -323,9 +324,37 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
+  // ---------- Headline selection ----------
+
+  /// Picks which headline card to show. Previously this always preferred
+  /// `_regimeData` whenever it was non-null, even if it was unavailable and
+  /// `_stateData` was perfectly healthy — showing a "Data unavailable"
+  /// banner while `_buildBreadthCard()` below it fell back to state and
+  /// rendered real numbers, a contradictory screen (PR-074 CR follow-up).
+  /// Prefer whichever source is actually healthy; only fall through to a
+  /// banner when both are unavailable (or only one source exists at all).
+  Widget _buildHeadlineCard() {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
+      return _buildRegimeCard(_regimeData!);
+    }
+    if (_stateData != null && !_stateData!.isDataUnavailable) {
+      return _buildStateCard(_stateData!);
+    }
+    if (_regimeData != null) {
+      return _buildRegimeCard(_regimeData!); // renders the banner itself
+    }
+    if (_stateData != null) {
+      return _buildStateCard(_stateData!); // renders the banner itself
+    }
+    return const SizedBox.shrink();
+  }
+
   // ---------- Regime Card ----------
 
   Widget _buildRegimeCard(RegimeData data) {
+    if (data.isDataUnavailable) {
+      return const _DataUnavailableBanner();
+    }
     final color = data.regime == 'trend'
         ? _trendBiasColor(data.bias)
         : _regimeColor(data.regime);
@@ -761,6 +790,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Market State Card (fallback when no regime API) ----------
 
   Widget _buildStateCard(MarketStateData data) {
+    if (data.isDataUnavailable) {
+      return const _DataUnavailableBanner();
+    }
     final color = _stateColor(data.state, data.bias);
     final pct = (data.confidence * 100).toStringAsFixed(1);
     final hasLabel = data.label.isNotEmpty;
@@ -941,14 +973,18 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   Widget _buildBreadthCard() {
     // Prefer regime metrics (same pipeline as regime card) so the numbers
     // are consistent.  Fall back to state breadth when regime is unavailable.
+    // Neither source's placeholder values (zeros, "normal" defaults) are
+    // real measurements when isDataUnavailable — see PR-074 — so skip a
+    // source entirely rather than let its outage-time zeros read as "the
+    // market has 0% breadth right now."
     double sideways, compression, expansion, trend;
-    if (_regimeData != null) {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
       final m = _regimeData!.metrics;
       sideways = m.sidewaysBreadth;
       compression = m.compressionBreadth;
       expansion = m.expansionBreadth;
       trend = m.trendBreadth;
-    } else if (_stateData != null) {
+    } else if (_stateData != null && !_stateData!.isDataUnavailable) {
       sideways = _stateData!.breadth.sideways;
       compression = _stateData!.breadth.compression;
       expansion = _stateData!.breadth.expansion;
@@ -1262,5 +1298,51 @@ class _CompositeChartPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _CompositeChartPainter other) {
     return other.points != points || other.lineColor != lineColor;
+  }
+}
+
+/// Shown instead of the regime/state card when DataQuality is
+/// "unavailable" — a full evaluation-source outage, distinct from a
+/// legitimate "Indecisive"/"Sideways, low confidence" reading, which
+/// otherwise looks identical (see PR-074).
+class _DataUnavailableBanner extends StatelessWidget {
+  const _DataUnavailableBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orangeAccent.withAlpha(120)),
+      ),
+      child: const Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.cloud_off, color: Colors.orangeAccent, size: 28),
+              SizedBox(width: 8),
+              Text(
+                'Data unavailable',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.orangeAccent,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 6),
+          Text(
+            'Market data could not be read right now — this is not a quiet '
+            'market, the read itself failed. Pull to refresh in a moment.',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
   }
 }

@@ -497,3 +497,86 @@ func TestClassify_NotSilent_NoVolumeData(t *testing.T) {
 		t.Errorf("should not be silent without volume data, got %s", s.State)
 	}
 }
+
+// --- DataQuality (PR-074) ---
+//
+// Without this flag, a full evaluation-source outage (zero or a struggling
+// fraction of the usual symbol universe) is indistinguishable from a
+// genuinely quiet market — both read as State=sideways, Confidence≈0.
+
+func TestMarketStateService_Calculate_EmptyEvaluations_ReturnsUnavailable(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: nil})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityUnavailable {
+		t.Errorf("expected DataQuality unavailable for zero evaluations, got %q", s.DataQuality)
+	}
+}
+
+func TestMarketStateService_Calculate_PartialFetchFailure_ReturnsDegraded(t *testing.T) {
+	// Far fewer evaluations than the expected symbol-universe size —
+	// simulates most fetches failing rather than the market genuinely
+	// having little going on.
+	evals := make([]domain.EvaluationSnapshot, 10)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityDegraded {
+		t.Errorf("expected DataQuality degraded for a small fraction of the usual universe, got %q", s.DataQuality)
+	}
+}
+
+func TestMarketStateService_Calculate_FullUniverse_ReturnsOK(t *testing.T) {
+	evals := make([]domain.EvaluationSnapshot, 150)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityOK {
+		t.Errorf("expected DataQuality ok for a full universe, got %q", s.DataQuality)
+	}
+}
+
+// TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary pins
+// down the 2*n < expected boundary at n == expectedSymbolCount/2 exactly
+// (150/2 == 75), and one below it — the exact case the "2*n, not n <
+// expected/2" comment in market_state_service.go argues about but wasn't
+// previously exercised by a test.
+func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testing.T) {
+	mkEvals := func(n int) []domain.EvaluationSnapshot {
+		evals := make([]domain.EvaluationSnapshot, n)
+		for i := range evals {
+			evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+		}
+		return evals
+	}
+
+	svc75 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(75)})
+	s75, err := svc75.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s75.DataQuality != mkt.DataQualityOK {
+		t.Errorf("expected DataQuality ok at exactly half (75/150), got %q", s75.DataQuality)
+	}
+
+	svc74 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(74)})
+	s74, err := svc74.Calculate("4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s74.DataQuality != mkt.DataQualityDegraded {
+		t.Errorf("expected DataQuality degraded one below half (74/150), got %q", s74.DataQuality)
+	}
+}

@@ -1,9 +1,7 @@
 package scoring
 
 import (
-	"fmt"
 	"math"
-	"os"
 	"sort"
 
 	"pano_chart/backend/domain"
@@ -44,7 +42,6 @@ func (s *SidewaysV5ScoreCalculator) Score(series domain.CandleSeries) (float64, 
 		candles[i] = c
 	}
 	sc := DetectSidewaysV5(candles, cfg).Score
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 1: %+v\n", sc)
 	return sc, nil
 }
 
@@ -179,13 +176,20 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// --- 1. Detect local extrema ---
 	// (already done above)
 
-	// --- 2. Fit regression lines to all extrema ---
+	// --- 2. Fit regression lines: upper boundary through highs, lower
+	// boundary through lows (previously both were fit through the same
+	// combined highs+lows point set, making upperSlope == lowerSlope
+	// always and parallelScore a guaranteed 1.0 regardless of actual
+	// channel shape — see PR-074). Fit straight off candles + the original
+	// index lists rather than a compacted extremaCandles slice, since
+	// regressionThroughHighs/Lows use each point's true chronological
+	// index as x; a compacted slice would silently shift that spacing.
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	upperSlope, upperIntercept := linearRegression(extremaCandles)
-	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
+	upperSlope, upperIntercept := regressionThroughHighs(candles, highsIdx)
+	lowerSlope, lowerIntercept := regressionThroughLows(candles, lowsIdx)
 
 	// --- 3. Compute CCS ---
 	peaks := make([]domain.Candle, len(highsIdx))
@@ -199,7 +203,7 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	widths := channelWidths(peaks, troughs)
 	parallelScore := 1 - math.Abs(upperSlope-lowerSlope)/0.1 // slopeNormalization=0.1
 	parallelScore = clamp(parallelScore, 0, 1)
-	deviationScore := 1 - stddevFromLine(extremaCandles, upperSlope, upperIntercept)/1.0 // 1.0 normalization
+	deviationScore := 1 - stddevFromLine(extremaCandles, extremaIdx, upperSlope, upperIntercept)/1.0 // 1.0 normalization
 	deviationScore = clamp(deviationScore, 0, 1)
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
@@ -254,16 +258,26 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	}
 
 	// --- 9. Final composition (Weighted Average) ---
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] cfg:: %+v\n", cfg)
 	weightedSum := cfg.W1*CCS + cfg.W2*OQS + cfg.W3*DCS + cfg.W4*VOS
 	totalWeight := cfg.W1 + cfg.W2 + cfg.W3 + cfg.W4
 	avgScore := 0.0
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] totalWeight: %+v\n", totalWeight)
 	if totalWeight > 0 {
 		avgScore = weightedSum / totalWeight
 	}
 	finalScore := avgScore * SRM
 	finalScore = clamp(finalScore, 0, 1)
+
+	// PR-074 fixed a bug where CCS's parallelScore component was a
+	// hardcoded 1.0 for nearly every real symbol (both channel boundaries
+	// were fit through the same point set, so upperSlope always equaled
+	// lowerSlope). That inflated CCS — and thus this composite Score,
+	// weighted 1/3 into the main ranking alongside Trend and GainLoss
+	// (cmd/api/main.go) — across the board, with no historical data
+	// available in dev to measure the shift ahead of shipping. Production
+	// observability for that (sampled score logging) deliberately lives
+	// outside this function — see infrastructure/scoring.
+	// LoggingScoreCalculator — so this stays a pure, deterministic domain
+	// calculation with no logging or randomness of its own (CR follow-up).
 
 	return SidewaysResult{
 		Score: finalScore,
@@ -387,13 +401,20 @@ func linearRegression(candles []domain.Candle) (slope, intercept float64) {
 	return
 }
 
-func stddevFromLine(candles []domain.Candle, slope, intercept float64) float64 {
+// stddevFromLine measures how far each candle's midpoint deviates from a
+// fitted line y = slope*x + intercept. indices[i] must be candles[i]'s true
+// chronological index into the original series (PR-074 CR fix) — evaluating
+// at the loop position instead, when candles is a compacted subset (e.g.
+// extremaCandles), would evaluate the line at the wrong x whenever the fit
+// itself (regressionThroughHighs/Lows) was computed against the real
+// indices, silently inflating the measured deviation.
+func stddevFromLine(candles []domain.Candle, indices []int, slope, intercept float64) float64 {
 	if len(candles) == 0 {
 		return 1
 	}
 	var sum, mean float64
 	for i, c := range candles {
-		x := float64(i)
+		x := float64(indices[i])
 		y := (c.High() + c.Low()) / 2
 		dist := math.Abs(y - (slope*x + intercept))
 		sum += dist
@@ -401,7 +422,7 @@ func stddevFromLine(candles []domain.Candle, slope, intercept float64) float64 {
 	mean = sum / float64(len(candles))
 	var variance float64
 	for i, c := range candles {
-		x := float64(i)
+		x := float64(indices[i])
 		y := (c.High() + c.Low()) / 2
 		dist := math.Abs(y - (slope*x + intercept))
 		variance += (dist - mean) * (dist - mean)
@@ -565,13 +586,33 @@ func detectSpike(candles []domain.Candle, atr, k float64) (int, bool) {
 func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, float64, float64) {
 	highsIdx, lowsIdx, extremaIdx := detectExtrema(candles, cfg.N)
 
-	// --- 2. Fit regression lines to all extrema ---
+	// Guard (PR-074 CR follow-up): regressionThroughHighs/Lows need >= 2
+	// points each and silently return an origin line (slope=0,
+	// intercept=0) otherwise — comparing real candle prices against that
+	// degenerate line (plus widthStabilityScore's independent collapse
+	// when channelWidths ends up empty) was an accident of the math, not a
+	// principled judgment. Make it explicit instead: DetectSidewaysV5's
+	// main path already treats "not enough extrema to size up the
+	// channel" as disqualifying (returns Score 0, not a neutral pass) via
+	// its cfg.ExtremaCount gate — a half with fewer than 2 highs or lows
+	// hasn't oscillated enough to confirm it recovered into a real
+	// channel either, so quickStructure applies the same standard here
+	// rather than inventing a more lenient one for this call site. (A
+	// smoothly-recovered-but-low-oscillation half reading as
+	// "unconfirmed" this way is the same tradeoff the main gate already
+	// makes, not a new one.)
+	if len(highsIdx) < 2 || len(lowsIdx) < 2 {
+		return 0, 0, 0
+	}
+
+	// --- 2. Fit regression lines: upper through highs, lower through lows —
+	// see the identical fix/comment in DetectSidewaysV5 above (PR-074).
 	extremaCandles := make([]domain.Candle, len(extremaIdx))
 	for i, idx := range extremaIdx {
 		extremaCandles[i] = candles[idx]
 	}
-	upperSlope, upperIntercept := linearRegression(extremaCandles)
-	lowerSlope, lowerIntercept := linearRegression(extremaCandles)
+	upperSlope, upperIntercept := regressionThroughHighs(candles, highsIdx)
+	lowerSlope, lowerIntercept := regressionThroughLows(candles, lowsIdx)
 
 	peaks := make([]domain.Candle, len(highsIdx))
 	for i, idx := range highsIdx {
@@ -584,7 +625,7 @@ func quickStructure(candles []domain.Candle, cfg SidewaysV5Config) (float64, flo
 	widths := channelWidths(peaks, troughs)
 	parallelScore := 1 - math.Abs(upperSlope-lowerSlope)/0.1
 	parallelScore = clamp(parallelScore, 0, 1)
-	deviationScore := 1 - stddevFromLine(extremaCandles, upperSlope, upperIntercept)/1.0
+	deviationScore := 1 - stddevFromLine(extremaCandles, extremaIdx, upperSlope, upperIntercept)/1.0
 	deviationScore = clamp(deviationScore, 0, 1)
 	widthStabilityScore := 1 - stddev(widths)/1.0
 	widthStabilityScore = clamp(widthStabilityScore, 0, 1)
@@ -806,7 +847,6 @@ func (s SidewaysV5Subscore) Compute(data interface{}, cfg interface{}) SubscoreR
 		v5cfg = NewSidewaysV5ConfigForTimeframe("1h")
 	}
 	res := DetectSidewaysV5(candles, v5cfg)
-	fmt.Fprintf(os.Stderr, "[SidewaysV5] score 2: %+v\n", res.Score)
 	return SubscoreResult{
 		Value:      clamp(res.Score, 0, 1),
 		Confidence: 1.0,

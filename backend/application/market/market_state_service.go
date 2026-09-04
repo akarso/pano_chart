@@ -36,6 +36,12 @@ const candleMetricsWindow = 110
 // universe.
 const candleMetricsFanoutLimit = 20
 
+// expectedSymbolCount is the usual symbol-universe size, used to flag
+// DataQuality as degraded when meaningfully fewer evaluations came in than
+// normal (partial fetch failures, a struggling upstream) — see PR-074. A
+// starting point, not a permanent guess: tune from real outage telemetry.
+const expectedSymbolCount = 150
+
 // MarketStateService computes the aggregate market state summary
 // by classifying each symbol's evaluation snapshot and computing
 // breadth ratios.
@@ -94,6 +100,12 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		// isn't a regime observation, so it isn't recorded as one. Regime
 		// history will show a gap rather than a fabricated "sideways" point
 		// for whatever window had no evaluations.
+		//
+		// Still goes through the same non-OK telemetry path as the
+		// degraded case below (CR follow-up) — zero evaluations is the
+		// most severe outage case and was previously the one case that
+		// logged nothing at all.
+		log.Printf("[market] %s: 0 evaluations (expected ~%d) — DataQuality=%s", timeframe, expectedSymbolCount, mkt.DataQualityUnavailable)
 		return mkt.Summary{
 			Timeframe:           timeframe,
 			State:               mkt.StateSideways,
@@ -102,7 +114,30 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 			SymbolCount:         0,
 			VolatilityExpansion: 1.0,
 			Label:               BuildMarketLabel(0, 0),
+			DataQuality:         mkt.DataQualityUnavailable,
 		}, nil
+	}
+
+	// Static threshold, not a new EvaluationProvider method — EvaluationProvider
+	// (application/market/evaluation_provider.go) has exactly one method today
+	// (GetLatestEvaluations); adding a second would mean implementing it on
+	// every real provider AND every test fake for a number that's really just
+	// "the usual universe size", which doesn't change per-call. Tune from real
+	// outage telemetry, not kept as a guess forever — see PR-074.
+	dataQuality := mkt.DataQualityOK
+	// 2*n < expected, not n < expected/2 — integer division floors, so with
+	// an odd expectedSymbolCount the /2 form under-flags right at the
+	// boundary (e.g. expected=151: expected/2==75, so n==75 reads as "not
+	// degraded" even though 75 is less than half of 151).
+	if 2*len(evaluations) < expectedSymbolCount {
+		dataQuality = mkt.DataQualityDegraded
+	}
+	// Logged (timeframe-tagged) so expectedSymbolCount can actually be
+	// tuned from observed counts rather than staying a permanent guess —
+	// see PR-074 CR follow-up. Only on non-OK, to avoid a log line on every
+	// single Calculate() call in steady state.
+	if dataQuality != mkt.DataQualityOK {
+		log.Printf("[market] %s: %d evaluations (expected ~%d) — DataQuality=%s", timeframe, len(evaluations), expectedSymbolCount, dataQuality)
 	}
 
 	total := float64(len(evaluations))
@@ -259,6 +294,7 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		BreakdownRate:       breakdownRate,
 		Label:               label,
 		VolatilityExpansion: 1.0,
+		DataQuality:         dataQuality,
 	}, nil
 }
 

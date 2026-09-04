@@ -1,3 +1,5 @@
+import 'data_quality.dart';
+
 /// Data model for the market state API response.
 class MarketStateData {
   final String timeframe;
@@ -9,6 +11,7 @@ class MarketStateData {
   final double effectiveTrend;
   final double breakdownRate;
   final String label;
+  final String dataQuality;
 
   const MarketStateData({
     required this.timeframe,
@@ -20,20 +23,35 @@ class MarketStateData {
     this.effectiveTrend = 0,
     this.breakdownRate = 0,
     this.label = '',
+    this.dataQuality = 'ok',
   });
 
+  /// Whether this reading reflects a real market read, as opposed to a
+  /// full evaluation-source outage — see PR-074. Without this check, an
+  /// outage looks identical to a genuinely quiet market.
+  bool get isDataUnavailable => isDataQualityUnavailable(dataQuality);
+
   factory MarketStateData.fromJson(Map<String, dynamic> json) {
+    final symbolCount = json['symbolCount'] as int;
+    // A response with no dataQuality field at all is a legacy (pre-PR-074)
+    // response — most just mean "ok", but symbolCount == 0 is exactly the
+    // shape the old empty-evaluations branch always returned, i.e. a real
+    // outage. Treat that specific legacy shape as unavailable rather than
+    // defaulting to ok; an explicit dataQuality value is never overridden.
+    final dataQuality = json['dataQuality'] as String? ??
+        (symbolCount == 0 ? dataQualityUnavailable : 'ok');
     return MarketStateData(
       timeframe: json['timeframe'] as String,
       state: json['state'] as String,
       confidence: (json['confidence'] as num).toDouble(),
       breadth:
           MarketBreadth.fromJson(json['breadth'] as Map<String, dynamic>),
-      symbolCount: json['symbolCount'] as int,
+      symbolCount: symbolCount,
       bias: json['bias'] as String? ?? 'neutral',
       effectiveTrend: (json['effectiveTrend'] as num?)?.toDouble() ?? 0,
       breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0,
       label: json['label'] as String? ?? '',
+      dataQuality: dataQuality,
     );
   }
 }

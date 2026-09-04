@@ -78,6 +78,28 @@ class _MarketStateDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (data.isDataUnavailable) {
+      return AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.cloud_off, color: Colors.orangeAccent, size: 28),
+            SizedBox(width: 8),
+            Text('Market State'),
+          ],
+        ),
+        content: const Text(
+          'Data unavailable — the market read failed, this is not a quiet '
+          'market. Try again in a moment.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('CLOSE'),
+          ),
+        ],
+      );
+    }
+
     final color = _stateColor(data.state, data.bias);
     final pct = (data.confidence * 100).toStringAsFixed(1);
 
