@@ -100,6 +100,12 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 		// isn't a regime observation, so it isn't recorded as one. Regime
 		// history will show a gap rather than a fabricated "sideways" point
 		// for whatever window had no evaluations.
+		//
+		// Still goes through the same non-OK telemetry path as the
+		// degraded case below (CR follow-up) — zero evaluations is the
+		// most severe outage case and was previously the one case that
+		// logged nothing at all.
+		log.Printf("[market] %s: 0 evaluations (expected ~%d) — DataQuality=%s", timeframe, expectedSymbolCount, mkt.DataQualityUnavailable)
 		return mkt.Summary{
 			Timeframe:           timeframe,
 			State:               mkt.StateSideways,

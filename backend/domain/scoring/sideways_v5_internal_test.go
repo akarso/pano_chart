@@ -53,6 +53,51 @@ func TestStddevFromLine_UsesRealIndicesNotLoopPosition(t *testing.T) {
 	}
 }
 
+// TestDetectSidewaysV5_UpperLowerSlopesFitIndependently directly verifies
+// the PR-074 boundary-fit correction: for a channel whose upper boundary
+// visibly drifts up over time while the lower boundary stays flat,
+// regressionThroughHighs and regressionThroughLows (called with the real
+// highsIdx/lowsIdx from detectExtrema, exactly as DetectSidewaysV5 calls
+// them) must fit two genuinely different slopes. Before the fix both
+// boundaries were fit through the same combined highs+lows point set via
+// linearRegression, making upperSlope == lowerSlope always — this isolates
+// that specific correction rather than inferring it from the aggregate CCS
+// score, which also mixes in deviationScore/widthStabilityScore and so
+// isn't identical before/after purely because of parallelScore.
+func TestDetectSidewaysV5_UpperLowerSlopesFitIndependently(t *testing.T) {
+	candles := make([]domain.Candle, 110)
+	base := 100.0
+	sym, _ := domain.NewSymbol("TEST")
+	tf := domain.Timeframe1h
+	cycles := 5.0
+	const upperDriftPerCandle = 0.015
+	for i := range candles {
+		phase := 2 * math.Pi * cycles * float64(i) / 110.0
+		drift := upperDriftPerCandle * float64(i)
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, time.Unix(int64(i)*3600, 0).UTC(),
+			base,
+			base+1.0+drift+0.5*math.Sin(phase), // upper boundary: drifts up over time
+			base-1.0+0.5*math.Sin(phase),       // lower boundary: flat
+			base+0.2*math.Sin(phase),
+			1000,
+		)
+	}
+
+	cfg := NewSidewaysV5ConfigForTimeframe("1h")
+	highsIdx, lowsIdx, _ := detectExtrema(candles, cfg.N)
+	if len(highsIdx) < 2 || len(lowsIdx) < 2 {
+		t.Fatalf("test setup invalid: need at least 2 highs and lows, got %d highs, %d lows", len(highsIdx), len(lowsIdx))
+	}
+
+	upperSlope, _ := regressionThroughHighs(candles, highsIdx)
+	lowerSlope, _ := regressionThroughLows(candles, lowsIdx)
+
+	if upperSlope <= lowerSlope {
+		t.Errorf("expected upperSlope (%v) > lowerSlope (%v) for a channel whose upper boundary drifts up while the lower stays flat", upperSlope, lowerSlope)
+	}
+}
+
 // TestQuickStructure_InsufficientHighsOrLows_ReturnsZero is a direct
 // regression test for the PR-074 CR follow-up: quickStructure (used to
 // evaluate the pre/post halves of a spike for SRM recovery scoring) must

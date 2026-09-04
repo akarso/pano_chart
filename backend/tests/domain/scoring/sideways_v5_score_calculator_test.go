@@ -199,14 +199,19 @@ func TestSidewaysV5_HighVolatilityChaosRejected(t *testing.T) {
 	}
 }
 
-// TestDetectSidewaysV5_NonParallelChannel is the regression test for
-// PR-074: DetectSidewaysV5 used to fit both channel boundaries through the
-// same combined highs+lows point set, making upperSlope == lowerSlope
-// always and CCS's parallelScore component a guaranteed 1.0 regardless of
-// the real channel shape. A visibly widening channel (upper boundary
-// trending up, lower boundary flat) must now score CCS meaningfully below
-// a genuinely parallel channel's — before the fix both scored identically
-// (parallelScore == 1.0 either way).
+// TestDetectSidewaysV5_NonParallelChannel is a secondary, aggregate-level
+// regression test for PR-074: DetectSidewaysV5 used to fit both channel
+// boundaries through the same combined highs+lows point set, making
+// upperSlope == lowerSlope always and CCS's parallelScore component a
+// guaranteed 1.0 regardless of the real channel shape. A visibly widening
+// channel (upper boundary trending up, lower boundary flat) must now score
+// CCS meaningfully below a genuinely parallel channel's. This compares the
+// aggregate CCS score, which also mixes in deviationScore/widthStabilityScore
+// — it does NOT mean CCS was identical for both channels before the fix,
+// only that parallelScore specifically was pinned to 1.0 either way; see
+// TestDetectSidewaysV5_UpperLowerSlopesFitIndependently (internal package
+// test, sideways_v5_internal_test.go) for a direct assertion on the two
+// fitted slopes themselves, isolated from the rest of the CCS composite.
 func TestDetectSidewaysV5_NonParallelChannel(t *testing.T) {
 	buildChannel := func(upperDriftPerCandle float64) []domain.Candle {
 		candles := make([]domain.Candle, 110)
@@ -247,7 +252,7 @@ func TestDetectSidewaysV5_NonParallelChannel(t *testing.T) {
 
 	if wideningCCS >= parallelCCS {
 		t.Errorf("expected widening channel's CCS (%v) to score below the parallel channel's (%v) — "+
-			"before the fix both boundaries were fit through the same point set and always scored identically",
+			"before the fix both boundaries were fit through the same point set, pinning parallelScore to 1.0 either way",
 			wideningCCS, parallelCCS)
 	}
 }
