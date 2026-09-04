@@ -226,6 +226,34 @@ func TestEngine_Send_FailedBroadcastDoesNotBlockRetry(t *testing.T) {
 	}
 }
 
+func TestEngine_SendToUser_ConcurrentSameKeyOnlyDeliversOnce(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+
+	eng.SetClock(func() time.Time {
+		return time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	})
+
+	n := notifications.Notification{
+		Type: notifications.TypeMarket, Title: "t", Body: "b", Key: "market_1h_Uptrend_2025-06-01",
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			_ = eng.SendToUser(context.Background(), "u1", n)
+		}()
+	}
+	wg.Wait()
+
+	if got := spy.userCount(); got != 1 {
+		t.Fatalf("expected exactly 1 delivery for concurrent same-key sends, got %d", got)
+	}
+}
+
 func TestEngine_BoundaryHours(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())

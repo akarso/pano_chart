@@ -41,11 +41,21 @@ func (b *BroadcastSender) Broadcast(ctx context.Context, n appnotify.Notificatio
 	log.Printf("[broadcast] sending %q to %d device(s)", n.Title, len(tokens))
 
 	var lastErr error
+	failed := 0
 	for _, tok := range tokens {
 		if err := b.push.Send(ctx, tok, n.Title, n.Body, n.Data); err != nil {
 			log.Printf("[broadcast] send error token=…%s: %v", lastN(tok, 8), err)
 			lastErr = err
+			failed++
 		}
+	}
+	// A partial failure is reported as delivered: the caller's dedup marks
+	// the key on nil error, and retrying here would re-notify every
+	// already-succeeded token. Only a complete failure — nothing delivered
+	// — should be retried.
+	if failed > 0 && failed < len(tokens) {
+		log.Printf("[broadcast] partial failure: %d/%d token(s) failed, treating as delivered: %v", failed, len(tokens), lastErr)
+		return nil
 	}
 	return lastErr
 }
@@ -71,11 +81,19 @@ func (b *BroadcastSender) SendToUser(ctx context.Context, userID string, n appno
 	log.Printf("[broadcast] sending %q to %d device(s) for user %s", n.Title, len(tokens), userID)
 
 	var lastErr error
+	failed := 0
 	for _, tok := range tokens {
 		if err := b.push.Send(ctx, tok, n.Title, n.Body, n.Data); err != nil {
 			log.Printf("[broadcast] send error token=…%s: %v", lastN(tok, 8), err)
 			lastErr = err
+			failed++
 		}
+	}
+	// See Broadcast: a partial failure is reported as delivered so the
+	// dedup key gets marked and a retry doesn't re-notify succeeded tokens.
+	if failed > 0 && failed < len(tokens) {
+		log.Printf("[broadcast] partial failure for user %s: %d/%d token(s) failed, treating as delivered: %v", userID, failed, len(tokens), lastErr)
+		return nil
 	}
 	return lastErr
 }
