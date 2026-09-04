@@ -11,6 +11,10 @@ import (
 	"pano_chart/backend/adapters/http/middleware"
 )
 
+func withUser(req *http.Request, userID string) *http.Request {
+	return req.WithContext(middleware.WithUserID(req.Context(), userID))
+}
+
 func TestPerIPRateLimit_AllowsWithinBurstThenRejects(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	handler := middleware.PerIPRateLimit(60, 3)(next) // 1/sec, burst 3
@@ -81,4 +85,83 @@ func TestPerIPRateLimit_ManyDistinctIPs_CleanupSweepDoesNotBreakEnforcement(t *t
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
 	assert.Equal(t, http.StatusTooManyRequests, w2.Result().StatusCode)
+}
+
+func TestPerUserRateLimit_AllowsWithinBurstThenRejects(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := middleware.PerUserRateLimit(300, 3)(next) // 5/min, burst 3
+
+	codes := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
+		req := withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-1")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		codes = append(codes, w.Result().StatusCode)
+	}
+
+	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusOK, http.StatusTooManyRequests}, codes)
+}
+
+func TestPerUserRateLimit_TracksUsersIndependently(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := middleware.PerUserRateLimit(300, 1)(next) // burst 1 — second request from the SAME user must 429
+
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-a"))
+	assert.Equal(t, http.StatusOK, w1.Result().StatusCode)
+
+	// Different user — must not be affected by user-a's burst usage.
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-b"))
+	assert.Equal(t, http.StatusOK, w2.Result().StatusCode)
+
+	// user-a again — burst of 1 already used, must reject.
+	w3 := httptest.NewRecorder()
+	handler.ServeHTTP(w3, withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-a"))
+	assert.Equal(t, http.StatusTooManyRequests, w3.Result().StatusCode)
+}
+
+func TestPerUserRateLimit_NoUserInContext_SharesOneBoundedBucket(t *testing.T) {
+	// PerUserRateLimit has no per-request identity to key on without an
+	// authenticated user in context. Regression guard (CR follow-up): this
+	// must NOT mean "unlimited" — a future route wiring this behind
+	// log-only auth would otherwise give unauthenticated traffic (exactly
+	// the traffic most likely to abuse a costly endpoint) zero rate
+	// limiting. Instead every such request shares one bucket, so it's
+	// still bounded — just coarsely, not per-user. (RequireAuth, not this
+	// middleware, is what should actually reject unauthenticated
+	// requests.)
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := middleware.PerUserRateLimit(300, 3)(next) // burst 3
+
+	codes := make([]int, 0, 4)
+	for i := 0; i < 4; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/anything", nil) // no WithUserID
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		codes = append(codes, w.Result().StatusCode)
+	}
+
+	assert.Equal(t, []int{http.StatusOK, http.StatusOK, http.StatusOK, http.StatusTooManyRequests}, codes)
+}
+
+func TestPerUserRateLimit_NoUserRequests_DoNotConsumeAnAuthenticatedUsersBucket(t *testing.T) {
+	// The shared "no key" bucket must not be confused with any real user's
+	// bucket — an authenticated user's allowance is untouched by however
+	// much anonymous traffic came through first.
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := middleware.PerUserRateLimit(300, 1)(next) // burst 1
+
+	// Exhaust the shared anonymous bucket.
+	w1 := httptest.NewRecorder()
+	handler.ServeHTTP(w1, httptest.NewRequest(http.MethodPost, "/anything", nil))
+	assert.Equal(t, http.StatusOK, w1.Result().StatusCode)
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, httptest.NewRequest(http.MethodPost, "/anything", nil))
+	assert.Equal(t, http.StatusTooManyRequests, w2.Result().StatusCode)
+
+	// A real authenticated user still gets their own fresh allowance.
+	w3 := httptest.NewRecorder()
+	handler.ServeHTTP(w3, withUser(httptest.NewRequest(http.MethodPost, "/anything", nil), "user-a"))
+	assert.Equal(t, http.StatusOK, w3.Result().StatusCode)
 }

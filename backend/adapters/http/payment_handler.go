@@ -67,6 +67,25 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 	}
 }
 
+// verifyPurchaseRateLimitPerHour / Burst bound how often one authenticated
+// user can hit /api/payments/verify. Each call triggers a live provider API
+// request (Google Play/App Store) with a real cost, and — unlike outbound
+// exchange calls, already throttled via infrastructure/ratelimiter — this
+// endpoint had no abuse protection at all before PR-075.
+//
+// Burst is intentionally smaller than the hourly limit, not equal to it
+// (CR follow-up): token-bucket burst refills immediately once the bucket
+// is full again, so burst == limit would let a user spend the entire
+// hourly allowance right at the top of one hour and again right at the
+// top of the next — effectively ~10 calls in a short window straddling
+// the boundary, not a smooth 5/hour. Burst 3 still covers a legitimate
+// user retrying a few times after a flaky provider response without
+// permitting that doubling.
+const (
+	verifyPurchaseRateLimitPerHour = 5
+	verifyPurchaseRateLimitBurst   = 3
+)
+
 // NewVerifyPurchaseRoute wires the production handler chain for
 // POST /api/payments/verify: auth is HARD-enforced (enforce=true) here,
 // independent of the general AUTH_ENFORCE env var that the other PR-070
@@ -76,8 +95,13 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 // constructor, not by hand-assembling middleware.RequireAuth(..., false)
 // or authMW — see the router-level test in payment_handler_test.go, which
 // calls this exact function to catch that class of regression.
+//
+// Rate limiting (PR-075) is the innermost layer, applied to the handler
+// before RequireAuth wraps it — PerUserRateLimit reads the authenticated
+// user ID from context, which only exists once RequireAuth has already run.
 func NewVerifyPurchaseRoute(uc usecases.VerifyPurchase, store ports.CredentialStore) http.Handler {
-	return middleware.RequireAuth(store, true)(NewVerifyPurchaseHandler(uc))
+	limited := middleware.PerUserRateLimit(verifyPurchaseRateLimitPerHour, verifyPurchaseRateLimitBurst)(NewVerifyPurchaseHandler(uc))
+	return middleware.RequireAuth(store, true)(limited)
 }
 
 // ---- Subscription Status Handler ----

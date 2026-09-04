@@ -196,6 +196,80 @@ func TestVerifyPurchaseRoute_ValidSecret_Succeeds(t *testing.T) {
 	assert.Equal(t, "user1", uc.lastInput.UserID)
 }
 
+// TestVerifyPurchaseRoute_RateLimited_Returns429 is the regression test for
+// PR-075: /api/payments/verify had no rate limiting at all — each call
+// triggers a live provider API request, an easy cost/abuse amplification
+// vector even with auth in place. Drives requests through the real
+// NewVerifyPurchaseRoute wiring (not the bare handler), same rationale as
+// the auth tests above: this must catch a regression in main.go's wiring,
+// not just in the middleware unit tests.
+func TestVerifyPurchaseRoute_RateLimited_Returns429(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{}
+	store := &fakeRouteCredentialStore{byHash: map[string]string{routeHashOf("s3cr3t"): "user1"}}
+	route := adhttp.NewVerifyPurchaseRoute(uc, store)
+
+	doRequest := func() int {
+		body, _ := json.Marshal(map[string]string{
+			"provider":      "google_play",
+			"purchaseToken": "tok_real",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer s3cr3t")
+		w := httptest.NewRecorder()
+		route.ServeHTTP(w, req)
+		return w.Result().StatusCode
+	}
+
+	// Burst allowance (3 — intentionally less than the 5/hour limit, see
+	// the constants' doc comment) must all succeed.
+	for i := 0; i < 3; i++ {
+		if code := doRequest(); code != http.StatusOK {
+			t.Fatalf("request %d: expected 200 within the burst allowance, got %d", i+1, code)
+		}
+	}
+	// The next one exceeds it.
+	if code := doRequest(); code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 after exhausting the burst allowance, got %d", code)
+	}
+}
+
+// TestVerifyPurchaseRoute_RateLimitTracksUsersIndependently confirms the
+// limit is per-user, not global — a hammered user must not lock out
+// everyone else.
+func TestVerifyPurchaseRoute_RateLimitTracksUsersIndependently(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{}
+	store := &fakeRouteCredentialStore{byHash: map[string]string{
+		routeHashOf("secret-a"): "user-a",
+		routeHashOf("secret-b"): "user-b",
+	}}
+	route := adhttp.NewVerifyPurchaseRoute(uc, store)
+
+	doRequest := func(secret string) int {
+		body, _ := json.Marshal(map[string]string{
+			"provider":      "google_play",
+			"purchaseToken": "tok_real",
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+secret)
+		w := httptest.NewRecorder()
+		route.ServeHTTP(w, req)
+		return w.Result().StatusCode
+	}
+
+	for i := 0; i < 3; i++ {
+		if code := doRequest("secret-a"); code != http.StatusOK {
+			t.Fatalf("user-a request %d: expected 200, got %d", i+1, code)
+		}
+	}
+	if code := doRequest("secret-a"); code != http.StatusTooManyRequests {
+		t.Fatalf("expected user-a to be rate limited, got %d", code)
+	}
+	// user-b's own allowance is untouched by user-a's burst.
+	if code := doRequest("secret-b"); code != http.StatusOK {
+		t.Fatalf("expected user-b's independent allowance to still work, got %d", code)
+	}
+}
+
 func TestVerifyPurchaseHandler_MethodNotAllowed(t *testing.T) {
 	uc := &fakeVerifyPurchaseUC{}
 	handler := adhttp.NewVerifyPurchaseHandler(uc)

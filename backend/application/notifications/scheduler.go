@@ -39,6 +39,20 @@ type SchedulerConfig struct {
 	SetupCheckInterval  time.Duration // how often to check best setup
 	SetupMinScore       float64       // minimum score to notify (legacy)
 	Timeframe           string        // fallback timeframe for legacy broadcast
+
+	// MarketRegimeHoldDuration is the minimum time between two per-user
+	// market notifications, period — not per timeframe — see PR-075 CR
+	// follow-up. The dedup key change that let a genuine intraday regime
+	// flip re-arm the same day (PR-075) also means the winning candidate
+	// (label and/or timeframe) can flip every single MarketCheckInterval
+	// tick when two candidates sit close to each other near a threshold,
+	// producing a new key — and therefore a new notification — every tick.
+	// This hold duration is checked BEFORE the per-key dedup, independent
+	// of it: no second notification for a user fires within this window no
+	// matter how many times the winning candidate changes inside it, only
+	// once it has elapsed does the next check's candidate (whatever it is
+	// by then) get a real chance to notify.
+	MarketRegimeHoldDuration time.Duration
 }
 
 // DefaultSchedulerConfig returns production defaults.
@@ -50,13 +64,14 @@ type SchedulerConfig struct {
 // unreachable after PR-073.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		MacroCheckInterval:  1 * time.Minute,
-		MacroLeadTime:       30 * time.Minute,
-		MarketCheckInterval: 1 * time.Minute,
-		MarketMinConfidence: 0.35,
-		SetupCheckInterval:  1 * time.Minute,
-		SetupMinScore:       0.75,
-		Timeframe:           "1h",
+		MacroCheckInterval:       1 * time.Minute,
+		MacroLeadTime:            30 * time.Minute,
+		MarketCheckInterval:      1 * time.Minute,
+		MarketMinConfidence:      0.35,
+		SetupCheckInterval:       1 * time.Minute,
+		SetupMinScore:            0.75,
+		Timeframe:                "1h",
+		MarketRegimeHoldDuration: 15 * time.Minute,
 	}
 }
 
@@ -73,6 +88,10 @@ type Scheduler struct {
 	subscriptions SubscriptionChecker     // optional — gates pro-only notifications
 	cfg           SchedulerConfig
 	now           func() time.Time
+
+	// marketHold decides suppression for the regime-hold check in
+	// checkMarketForUser — see market_regime_hold.go.
+	marketHold *marketRegimeHold
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -84,12 +103,13 @@ func NewScheduler(
 	cfg SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		engine: engine,
-		market: market,
-		setups: setups,
-		events: events,
-		cfg:    cfg,
-		now:    time.Now,
+		engine:     engine,
+		market:     market,
+		setups:     setups,
+		events:     events,
+		cfg:        cfg,
+		now:        time.Now,
+		marketHold: newMarketRegimeHold(cfg.MarketRegimeHoldDuration),
 	}
 }
 
@@ -445,16 +465,61 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		}
 	}
 
-	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
-	dateKey := s.now().Format("2006-01-02")
+	// Regime-hold check — see market_regime_hold.go for why this exists
+	// (two candidates near a threshold can otherwise flip the "strongest"
+	// one, and therefore the dedup key below, every single check) and why
+	// it's a separate type rather than inline state here.
+	//
+	// reserve() does not yet commit the new anchor — see PR-075 CR
+	// follow-up (Issue 2): committing before SendToUser is known to have
+	// succeeded would consume the hold window (and block a concurrent
+	// duplicate call) even for a change that never actually reached the
+	// user. The anchor is only committed below once SendToUser returns
+	// successfully; on failure the reservation is released so the next
+	// check can retry without waiting out the full hold.
+	now := s.now()
+	proceed, prev, changed := s.marketHold.reserve(cfg.UserID, best.label, best.timeframe, now)
+	if !proceed {
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold or send already in flight, %s since last change to %q on %q)",
+			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label, prev.timeframe)
+		return
+	}
 
-	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
+	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
+	dateKey := now.Format("2006-01-02")
+
+	err := s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
 		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
-		Key:   fmt.Sprintf("market_%s_%s", best.timeframe, dateKey),
+		// best.label (Uptrend/Downtrend/Sideways/Silent) is included, not
+		// just the date — PR-075. Without it, one notification per
+		// (timeframe, day) meant a genuine intraday regime flip (e.g.
+		// Uptrend to Downtrend) produced no further notification until
+		// tomorrow. The date component stays: a steady regime should still
+		// only fire once per day, not on every scheduler tick. The regime
+		// hold check above is what actually prevents rapid flapping near a
+		// threshold from bypassing this via a new key every tick — this key
+		// alone doesn't achieve that.
+		Key: fmt.Sprintf("market_%s_%s_%s", best.timeframe, best.label, dateKey),
 	})
+
+	if !changed {
+		// A repeat of the current anchor never reserved anything — see
+		// reserve's doc comment — so there is nothing to commit or release.
+		if err != nil {
+			log.Printf("[notify-scheduler] market: user=%s send failed: %v", cfg.UserID, err)
+		}
+		return
+	}
+	if err != nil {
+		s.marketHold.release(cfg.UserID)
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s send failed, hold not consumed: %v",
+			cfg.UserID, best.timeframe, best.label, err)
+		return
+	}
+	s.marketHold.commit(cfg.UserID, best.label, best.timeframe, now)
 }
 
 func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
