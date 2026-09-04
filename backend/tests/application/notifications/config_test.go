@@ -162,6 +162,7 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 
 	market := singleMarket("1h", mkt.RegimeSummary{
 		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
+		Bias:   "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -191,6 +192,137 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	}
 	if rec.n.Type != notifications.TypeMarket {
 		t.Fatalf("expected TypeMarket, got %s", rec.n.Type)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
+		Bias:   "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 per-user downtrend notification, got %d", spy.userCount())
+	}
+	if spy.lastUserSend().userID != "u1" {
+		t.Fatalf("expected user u1, got %s", spy.lastUserSend().userID)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_DoesNotFireOnExpansion(t *testing.T) {
+	// Regression test for the PR-072 bug: Downtrend used to read
+	// Scores.Expansion (breakout activity) with no direction check at
+	// all — a high-Expansion, bullish (or even neutral) regime must NOT
+	// trigger a "Downtrend" alert.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Expansion: 0.90, Trend: 0.10},
+		Bias:   "up", // strong breakout, but to the upside
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no downtrend notification for a bullish expansion regime, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_PerUser_MarketUptrend_DoesNotFireOnBearishRegime(t *testing.T) {
+	// Symmetric regression test: a strong trend score with a bearish bias
+	// must not satisfy an Uptrend subscription.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
+		Bias:   "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "u1",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no uptrend notification during a confirmed decline, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_PerUser_NeutralBias_NeitherUptrendNorDowntrendFires(t *testing.T) {
+	// Regression test: a regime with no real direction (Bias == "neutral")
+	// must satisfy neither an Uptrend nor a Downtrend subscription, even
+	// with both configured and their dominance thresholds at 0.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.RegimeSummary{
+		Scores: mkt.RegimeScores{Trend: 0.90, Sideways: 0.05},
+		Bias:   "neutral",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		UptrendMinDominance:   0,
+		UptrendTimeframe:      "1h",
+		Downtrend:             true,
+		DowntrendMinDominance: 0,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no notification for a neutral-bias regime, got %d", spy.userCount())
 	}
 }
 
@@ -383,8 +515,8 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
 		summaries: map[string]mkt.RegimeSummary{
-			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}},
-			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}},
+			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}, Bias: "up"},
 		},
 	}
 
@@ -487,6 +619,45 @@ func TestConfigStore_TimeframeRoundtrip(t *testing.T) {
 	}
 	if got.SetupTimeframe != "5m" {
 		t.Fatalf("expected 5m, got %s", got.SetupTimeframe)
+	}
+}
+
+func TestConfigStore_ResetsDowntrendMinDominanceForPreMigrationConfigs(t *testing.T) {
+	// Regression test: DowntrendMinDominance used to threshold Scores.Expansion;
+	// PR-072 repointed it at Scores.Trend, a metric with a different
+	// distribution. A value stored before that change (no config_version
+	// field, i.e. config_version 0) must not be silently reused under the
+	// new meaning — Get should reset it to the current default.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := infranotify.NewSQLiteConfigStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyJSON = `{"downtrend":true,"downtrend_min_dominance":0.40,"uptrend_min_dominance":0.60}`
+	_, err = db.Exec(`INSERT INTO notification_config (user_id, config, updated_at)
+		VALUES (?, ?, datetime('now'))`, "u-pre-migration", legacyJSON)
+	if err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	got, err := store.Get("u-pre-migration")
+	if err != nil {
+		t.Fatalf("get error: %v", err)
+	}
+	if got.DowntrendMinDominance != 0.75 {
+		t.Fatalf("expected DowntrendMinDominance reset to default 0.75, got %f", got.DowntrendMinDominance)
+	}
+	// Unrelated fields must survive untouched.
+	if !got.Downtrend {
+		t.Fatal("expected Downtrend toggle to remain true")
+	}
+	if got.UptrendMinDominance != 0.60 {
+		t.Fatalf("expected UptrendMinDominance to be preserved at 0.60, got %f", got.UptrendMinDominance)
 	}
 }
 

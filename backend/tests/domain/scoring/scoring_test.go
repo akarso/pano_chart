@@ -124,6 +124,81 @@ func TestTrendPredictability_ClusteredFallsBackWhenMedianGapZero(t *testing.T) {
 	}
 }
 
+func TestScoreWithDirection_UptrendVsDowntrend(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+
+	// 20 points, not 10: with too few evenly-spaced points, the (unrelated,
+	// pre-existing) clustered-price gate — meant to catch real step-function
+	// regime shifts — can false-positive on a perfectly linear series and
+	// zero out the score/bias. More points keeps each step well under that
+	// gate's 10%-of-range threshold, matching what real, noisier candle
+	// data looks like.
+	risingCloses := make([]float64, 20)
+	fallingCloses := make([]float64, 20)
+	for i := range risingCloses {
+		risingCloses[i] = float64(i + 1)
+		fallingCloses[i] = float64(20 - i)
+	}
+
+	up := makeSeries(risingCloses)
+	upScore, upBias, err := calc.ScoreWithDirection(up)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if upBias != "up" {
+		t.Errorf("expected bias=up for a rising series, got %q", upBias)
+	}
+
+	down := makeSeries(fallingCloses)
+	downScore, downBias, err := calc.ScoreWithDirection(down)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if downBias != "down" {
+		t.Errorf("expected bias=down for a falling series, got %q", downBias)
+	}
+
+	// Same magnitude (mirror-image series), opposite bias — the whole
+	// point of PR-072: direction and strength are independent.
+	if diff := upScore - downScore; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("expected mirror-image series to score equally, got up=%v down=%v", upScore, downScore)
+	}
+}
+
+func TestScoreWithDirection_FlatSeries_NeutralBias(t *testing.T) {
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	flat := makeSeries([]float64{5, 5, 5, 5, 5, 5, 5, 5})
+	score, bias, err := calc.ScoreWithDirection(flat)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if bias != "neutral" {
+		t.Errorf("expected bias=neutral for a flat series, got %q", bias)
+	}
+	if score != 0 {
+		t.Errorf("expected score=0 for a flat series, got %v", score)
+	}
+}
+
+func TestScoreWithDirection_MatchesScoreMagnitude(t *testing.T) {
+	// Score() must remain a pure wrapper — same magnitude regardless of
+	// which method callers use.
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	series := makeSeries([]float64{1, 2, 3, 4, 5, 4.5, 6, 7, 8, 9})
+
+	plainScore, err := calc.Score(series)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	dirScore, _, err := calc.ScoreWithDirection(series)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if plainScore != dirScore {
+		t.Errorf("Score() and ScoreWithDirection() disagree: %v vs %v", plainScore, dirScore)
+	}
+}
+
 func TestSidewaysConsistencyScoreCalculator(t *testing.T) {
 	calc := &scoring.SidewaysConsistencyScoreCalculator{}
 	// Flat line

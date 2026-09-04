@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pano_chart/backend/adapters/http/middleware"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 )
 
@@ -14,14 +15,24 @@ import (
 type verifyPurchaseRequest struct {
 	Provider      string `json:"provider"`
 	PurchaseToken string `json:"purchaseToken"`
-	UserID        string `json:"userId"`
 }
 
 // NewVerifyPurchaseHandler returns an http.HandlerFunc that verifies a
-// purchase token via the VerifyPurchase use case.
+// purchase token and activates a subscription for the authenticated
+// caller.
 //
 //	POST /api/payments/verify
-//	Body: { "provider": "...", "purchaseToken": "...", "userId": "..." }
+//	Header: Authorization: Bearer <device secret>
+//	Body: { "provider": "...", "purchaseToken": "..." }
+//
+// Unlike every other PR-070 endpoint, this one has NO migration-window
+// fallback to a client-supplied identity — a wrong `userId` here means an
+// attacker-chosen account gets a paid subscription for free, not just a
+// data leak, so the grace period bought for other routes isn't worth
+// extending here. Use NewVerifyPurchaseRoute to wire this with
+// hard-enforced auth (independent of the general AUTH_ENFORCE flag) —
+// don't register this handler directly behind the shared log-only
+// middleware.
 func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -35,10 +46,15 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 			return
 		}
 
+		// Panics (not UserIDFromContextOK) if this handler is ever reached
+		// without a verified secret — see NewVerifyPurchaseRoute; there is
+		// deliberately no fallback identity to catch a wiring mistake here.
+		userID := middleware.UserIDFromContext(r.Context())
+
 		input := usecases.VerifyPurchaseInput{
 			Provider:      req.Provider,
 			PurchaseToken: req.PurchaseToken,
-			UserID:        req.UserID,
+			UserID:        userID,
 		}
 		if err := uc.Execute(r.Context(), input); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -51,6 +67,19 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 	}
 }
 
+// NewVerifyPurchaseRoute wires the production handler chain for
+// POST /api/payments/verify: auth is HARD-enforced (enforce=true) here,
+// independent of the general AUTH_ENFORCE env var that the other PR-070
+// endpoints share — this is the one route where the financial blast
+// radius of a false negative (free subscription) outweighs the migration
+// grace period. cmd/api/main.go must wire this route through this
+// constructor, not by hand-assembling middleware.RequireAuth(..., false)
+// or authMW — see the router-level test in payment_handler_test.go, which
+// calls this exact function to catch that class of regression.
+func NewVerifyPurchaseRoute(uc usecases.VerifyPurchase, store ports.CredentialStore) http.Handler {
+	return middleware.RequireAuth(store, true)(NewVerifyPurchaseHandler(uc))
+}
+
 // ---- Subscription Status Handler ----
 
 type subscriptionStatusResponse struct {
@@ -61,11 +90,16 @@ type subscriptionStatusResponse struct {
 // NewSubscriptionStatusHandler returns an http.HandlerFunc that checks
 // the subscription status for the authenticated caller.
 //
-//	GET /api/subscription/status
+//	GET /api/subscription/status[?userId=...]
 //	Header: Authorization: Bearer <device secret>
 //
-// Must be registered behind middleware.RequireAuth — the user ID comes
-// from the verified secret, never from client input.
+// Must be registered behind middleware.RequireAuth. The user ID comes from
+// the verified secret whenever one is present. The `?userId=` query param
+// is ONLY consulted as a migration-window fallback while RequireAuth is
+// running in log-only mode for a pre-PR-070 client that has no secret yet
+// — once RequireAuth enforces (enforce=true), unauthenticated requests
+// never reach this handler at all, so the fallback branch is dead and can
+// be deleted then.
 func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -73,7 +107,11 @@ func NewSubscriptionStatusHandler(svc usecases.SubscriptionService) http.Handler
 			return
 		}
 
-		userID := middleware.UserIDFromContext(r.Context())
+		userID, ok := middleware.UserIDOrLegacyFallback(r.Context(), r.URL.Query().Get("userId"))
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 
 		sub, found, err := svc.GetSubscription(r.Context(), userID)
 		if err != nil {

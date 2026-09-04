@@ -11,6 +11,7 @@ import (
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/risk"
+	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
 )
 
@@ -137,7 +138,7 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 		return "sideways", 0
 	}
 
-	regime := dominantRegime(stats.Scores)
+	regime := dominantRegime(stats.Scores, series)
 
 	if regime != "uptrend" && regime != "downtrend" {
 		return regime, 0
@@ -154,8 +155,40 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 	return regime, health
 }
 
+// trendDirectionCalc is the single instance used to recover trend direction
+// in dominantRegime — package-level so it's an explicit, visible
+// dependency and not reallocated on every call.
+var trendDirectionCalc = &scoring.TrendPredictabilityScoreCalculator{}
+
+// scoresAgree reports whether two independently-obtained scores for what
+// should be the same computation are close enough to trust — see
+// dominantRegime's doc for why this matters.
+func scoresAgree(a, b float64) bool {
+	const epsilon = 1e-9
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < epsilon
+}
+
 // dominantRegime maps the highest-scoring dimension to a regime label.
-func dominantRegime(scores map[string]float64) string {
+// series is only consulted when trend is the dominant dimension, to
+// recover the actual direction — see
+// scoring.TrendPredictabilityScoreCalculator.ScoreWithDirection's doc for
+// why this is the canonical direction source, not a magnitude threshold.
+//
+// scores["Trend Predictability"] and ScoreWithDirection(series) are two
+// independent computations that happen to run the identical calculator
+// over the identical series today (the generic WeightedSymbolScorer just
+// calls each calculator's Score(series) unweighted into the map). That's
+// an implicit invariant, not an enforced one — if the scorer is ever
+// swapped for a decorator, cache, or resampled series, the two could
+// silently diverge. scoresAgree checks it explicitly: if the recomputed
+// magnitude doesn't match what the caller already scored, the direction
+// can't be trusted either, so fall back to "sideways" rather than report
+// a bias that might belong to a different series than the score did.
+func dominantRegime(scores map[string]float64, series domain.CandleSeries) string {
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -174,10 +207,22 @@ func dominantRegime(scores map[string]float64) string {
 		return "compression"
 	}
 	if trend > sideways {
-		if trend > 0.5 {
-			return "uptrend" // simplified; direction not in scores
+		recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
+		switch {
+		case err != nil || bias == "neutral":
+			// No reliable direction (flat, clustered, or too little data)
+			// despite a nonzero trend score from other calculators —
+			// don't guess a direction that isn't there.
+			return "sideways"
+		case !scoresAgree(recomputed, trend):
+			// The recomputed score doesn't match what was already scored —
+			// series/scorer diverged somewhere; don't trust the bias.
+			return "sideways"
+		case bias == "up":
+			return "uptrend"
+		default:
+			return "downtrend"
 		}
-		return "downtrend"
 	}
 	return "sideways"
 }

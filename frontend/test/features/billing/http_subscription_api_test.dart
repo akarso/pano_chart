@@ -38,7 +38,9 @@ void main() {
         final body = jsonDecode(capturedBody!) as Map<String, dynamic>;
         expect(body['provider'], 'google_play');
         expect(body['purchaseToken'], 'tok_abc');
-        expect(body['userId'], 'user_1');
+        // userId is deliberately NOT sent — this endpoint has no
+        // migration-window fallback, only the Authorization header counts.
+        expect(body.containsKey('userId'), isFalse);
       });
 
       test('throws on non-200 response', () async {
@@ -62,7 +64,7 @@ void main() {
       });
 
       test(
-          'does not attach Authorization header — server does not check it yet (PR-071)',
+          'attaches Authorization header now that the server checks it (PR-071)',
           () async {
         String? authHeader;
         final client = MockClient((req) async {
@@ -82,7 +84,40 @@ void main() {
           userId: 'u1',
         );
 
-        expect(authHeader, isNull);
+        expect(authHeader, 'Bearer my-secret');
+      });
+
+      test('retries once after 401 with a re-claimed secret', () async {
+        var callCount = 0;
+        var reclaimCalled = false;
+        var secret = 'stale-secret';
+
+        final client = MockClient((req) async {
+          callCount++;
+          if (req.headers['Authorization'] == 'Bearer stale-secret') {
+            return http.Response('unauthorized', 401);
+          }
+          return http.Response('', 200);
+        });
+
+        final api = HttpSubscriptionApi(
+          client: client,
+          baseUrl: 'http://localhost:8080',
+          getAuthSecret: () => secret,
+          onUnauthorized: () async {
+            reclaimCalled = true;
+            secret = 'fresh-secret';
+          },
+        );
+
+        await api.verifyPurchase(
+          provider: 'google_play',
+          purchaseToken: 'tok',
+          userId: 'u1',
+        );
+
+        expect(callCount, 2);
+        expect(reclaimCalled, isTrue);
       });
     });
 

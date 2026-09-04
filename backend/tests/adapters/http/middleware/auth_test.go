@@ -57,7 +57,7 @@ func TestRequireAuth_ValidSecret_InjectsUserID(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer s3cr3t")
 	w := httptest.NewRecorder()
 
-	middleware.RequireAuth(store)(next).ServeHTTP(w, req)
+	middleware.RequireAuth(store, true)(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
 	assert.Equal(t, "user1", gotUserID)
@@ -71,10 +71,84 @@ func TestRequireAuth_MissingHeader_401(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
 	w := httptest.NewRecorder()
 
-	middleware.RequireAuth(store)(next).ServeHTTP(w, req)
+	middleware.RequireAuth(store, true)(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 	assert.False(t, called, "next handler must not run")
+}
+
+func TestRequireAuth_LogOnly_MissingHeader_AllowsThroughWithoutContext(t *testing.T) {
+	store := &fakeCredentialStore{}
+	called := false
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, gotOK = middleware.UserIDFromContextOK(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	w := httptest.NewRecorder()
+
+	middleware.RequireAuth(store, false)(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.True(t, called, "log-only mode must still call the next handler")
+	assert.False(t, gotOK, "no verified identity should be in context")
+}
+
+func TestRequireAuth_LogOnly_ValidSecret_StillInjectsUserID(t *testing.T) {
+	// Log-only only changes what happens on FAILURE to authenticate — a
+	// valid secret is still verified and trusted exactly like enforce=true.
+	store := &fakeCredentialStore{byHash: map[string]string{hashOf("s3cr3t"): "user1"}}
+
+	var gotUserID string
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserID = middleware.UserIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req.Header.Set("Authorization", "Bearer s3cr3t")
+	w := httptest.NewRecorder()
+
+	middleware.RequireAuth(store, false)(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, "user1", gotUserID)
+}
+
+func TestRequireAuth_LogOnly_UnknownSecret_AllowsThroughWithoutContext(t *testing.T) {
+	store := &fakeCredentialStore{}
+	var gotOK bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, gotOK = middleware.UserIDFromContextOK(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req.Header.Set("Authorization", "Bearer nonsense")
+	w := httptest.NewRecorder()
+
+	middleware.RequireAuth(store, false)(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.False(t, gotOK)
+}
+
+func TestRequireAuth_LogOnly_StoreError_Still500(t *testing.T) {
+	// A store error is a real infra failure, not "unauthenticated" — must
+	// still surface as 500 even in log-only mode, not be swallowed.
+	store := &fakeCredentialStore{err: assert.AnError}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/anything", nil)
+	req.Header.Set("Authorization", "Bearer s3cr3t")
+	w := httptest.NewRecorder()
+
+	middleware.RequireAuth(store, false)(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
 }
 
 func TestRequireAuth_MalformedAuthHeader_401(t *testing.T) {
@@ -88,7 +162,7 @@ func TestRequireAuth_MalformedAuthHeader_401(t *testing.T) {
 		req.Header.Set("Authorization", header)
 		w := httptest.NewRecorder()
 
-		middleware.RequireAuth(store)(next).ServeHTTP(w, req)
+		middleware.RequireAuth(store, true)(next).ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode, "header=%q", header)
 	}
@@ -102,7 +176,7 @@ func TestRequireAuth_UnknownSecret_401(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer nonsense")
 	w := httptest.NewRecorder()
 
-	middleware.RequireAuth(store)(next).ServeHTTP(w, req)
+	middleware.RequireAuth(store, true)(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
 }
@@ -115,7 +189,7 @@ func TestRequireAuth_StoreError_500(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer s3cr3t")
 	w := httptest.NewRecorder()
 
-	middleware.RequireAuth(store)(next).ServeHTTP(w, req)
+	middleware.RequireAuth(store, true)(next).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
 }

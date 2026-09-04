@@ -4,9 +4,25 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
+
+// ipLimiterTTL is how long a per-IP limiter is kept after its last request
+// before it's eligible for eviction.
+const ipLimiterTTL = 10 * time.Minute
+
+// ipLimiterCleanupEvery triggers an opportunistic sweep of stale entries
+// every N requests, instead of a background goroutine — this middleware
+// guards one low-traffic endpoint, so a periodic scan on the request path
+// is simpler than managing a ticker's lifecycle for no measurable cost.
+const ipLimiterCleanupEvery = 500
+
+type ipLimiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
 
 // PerIPRateLimit returns middleware that limits each remote IP to
 // requestsPerMinute requests (with the given burst), rejecting excess
@@ -14,24 +30,36 @@ import (
 // (e.g. /api/device/claim) that have no other abuse protection — not a
 // substitute for a real edge/proxy rate limiter in front of the whole API.
 //
-// Known limitation: per-IP limiter state is never evicted, so it grows
-// unboundedly under sustained attack from many distinct IPs. Acceptable for
-// a low-traffic single endpoint; revisit (LRU eviction, or move this in
-// front of a proxy) if it's ever applied more broadly.
+// Per-IP state is bounded via TTL eviction (see ipLimiterTTL): entries
+// unused for a while are dropped on an opportunistic sweep, so sustained
+// traffic from many distinct IPs doesn't grow the map forever.
 func PerIPRateLimit(requestsPerMinute int, burst int) func(http.Handler) http.Handler {
 	var mu sync.Mutex
-	limiters := make(map[string]*rate.Limiter)
+	limiters := make(map[string]*ipLimiterEntry)
 	rps := rate.Limit(float64(requestsPerMinute) / 60.0)
+	var requestCount uint64
 
 	limiterFor := func(ip string) *rate.Limiter {
 		mu.Lock()
 		defer mu.Unlock()
-		l, ok := limiters[ip]
-		if !ok {
-			l = rate.NewLimiter(rps, burst)
-			limiters[ip] = l
+
+		now := time.Now()
+		requestCount++
+		if requestCount%ipLimiterCleanupEvery == 0 {
+			for k, e := range limiters {
+				if now.Sub(e.lastSeen) > ipLimiterTTL {
+					delete(limiters, k)
+				}
+			}
 		}
-		return l
+
+		e, ok := limiters[ip]
+		if !ok {
+			e = &ipLimiterEntry{limiter: rate.NewLimiter(rps, burst)}
+			limiters[ip] = e
+		}
+		e.lastSeen = now
+		return e.limiter
 	}
 
 	return func(next http.Handler) http.Handler {

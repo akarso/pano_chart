@@ -281,8 +281,8 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
 				continue
 			}
-			log.Printf("[notify-scheduler] market %s: regime=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
-				tf, summary.Regime, summary.Prevalence,
+			log.Printf("[notify-scheduler] market %s: regime=%s bias=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
+				tf, summary.Regime, summary.Bias, summary.Prevalence,
 				summary.Scores.Trend, summary.Scores.Sideways,
 				summary.Scores.Compression, summary.Scores.Expansion)
 			summaries[tf] = summary
@@ -310,9 +310,14 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	case mkt.RegimeSideways:
 		msg = "Market mostly sideways today"
 	case mkt.RegimeTrend:
-		if summary.Label != "" {
+		switch {
+		case summary.Label != "":
 			msg = summary.Label
-		} else {
+		case summary.Bias == "up":
+			msg = "Market trending up today"
+		case summary.Bias == "down":
+			msg = "Market trending down today"
+		default:
 			msg = "Market trending today"
 		}
 	case mkt.RegimeCompression:
@@ -354,26 +359,43 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 
 	var candidates []candidate
 
-	// Uptrend — maps to Scores.Trend.
+	// Uptrend — maps to Scores.Trend, gated on the regime's actual
+	// direction (sum.Bias, an aggregate-return-based signal already
+	// computed correctly in MetricsService.CalculateRegime — see PR-072).
 	// Skip if the regime is indecisive — nothing actionable.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok &&
+			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "up" {
 			p := sum.Scores.Trend
 			if p >= cfg.UptrendMinDominance {
-				lbl := "Uptrend"
-				if sum.Label != "" {
-					lbl = sum.Label
-				}
-				candidates = append(candidates, candidate{lbl, p, cfg.UptrendTimeframe})
+				// Always "Uptrend", never sum.Label (e.g. "Strong trend") —
+				// BuildMarketLabel's labels are direction-agnostic and would
+				// obscure the very bullish/bearish distinction this
+				// notification exists to convey.
+				candidates = append(candidates, candidate{"Uptrend", p, cfg.UptrendTimeframe})
 			}
 		}
 	}
-	// Downtrend — maps to Scores.Expansion (breakout/expansion activity).
+	// Downtrend — maps to Scores.Trend gated on sum.Bias == "down". This
+	// used to read Scores.Expansion (breakout/expansion activity, nothing
+	// to do with direction) — a "Downtrend" subscriber was getting
+	// breakout alerts and never anything about actual declines. Fixed in
+	// PR-072.
+	//
+	// Side effect: existing users' DowntrendMinDominance values were tuned
+	// against Expansion score magnitudes, which have a different
+	// distribution than Trend scores. SQLiteConfigStore.fromJSON resets this
+	// field to the default for any config stored before this change
+	// (config_version < 1) rather than silently reusing a threshold tuned
+	// for a different metric — see infrastructure/notifications/sqlite_config_store.go.
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
-			p := sum.Scores.Expansion
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok &&
+			sum.Regime != mkt.RegimeIndecisive && sum.Bias == "down" {
+			p := sum.Scores.Trend
 			if p >= cfg.DowntrendMinDominance {
-				candidates = append(candidates, candidate{"Expansion", p, cfg.DowntrendTimeframe})
+				// Always "Downtrend" — see the Uptrend branch above for why
+				// sum.Label must not be used here.
+				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
 			}
 		}
 	}

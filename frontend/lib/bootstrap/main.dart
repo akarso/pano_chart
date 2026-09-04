@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import '../core/app_lifecycle_manager.dart';
+import '../core/async/single_flight.dart';
 import '../core/config/config.dart';
 import '../core/di/di.dart';
 import '../core/di/composition_root.dart';
@@ -137,16 +138,32 @@ void main() async {
   // spinning up (and leaking) a fresh http.Client per call.
   final authApi = CompositionRoot(apiBaseUrl: config.apiBaseUrl)
       .createDeviceAuthApi();
-  Future<void> reclaimDeviceSecret() async {
+
+  // Wired as `onUnauthorized` into every API client below, so a burst of
+  // requests all getting 401 around the same time (e.g. several calls
+  // firing at startup before a secret exists yet) share ONE claim attempt
+  // via singleFlight instead of racing — see sendAuthenticated's doc for
+  // why an unguarded reclaim would leave losing callers stuck.
+  final reclaimDeviceSecret = singleFlight(() async {
+    if (prefs.deviceSecret != null) {
+      // A secret already exists locally, which means this user id was
+      // already successfully claimed at some point (this session or a
+      // past one). Under first-claim-wins (backend PR-070),
+      // re-claiming the SAME existingUserId can only ever come back 409
+      // — so a 401 while a local secret is already set means that
+      // secret itself is stale/corrupted relative to the server, not
+      // "never claimed". There's no recovery from that short of a fresh
+      // identity (see PR-070.md Addendum 2) — don't waste a round trip
+      // on a claim call that cannot succeed.
+      return;
+    }
     try {
       final claim = await authApi.claim(existingUserId: prefs.userId);
       prefs.deviceSecret = claim.secret;
     } catch (_) {
-      // Backend unreachable, or this user ID was already claimed by an
-      // earlier install (see backend PR-070 first-claim-wins). Callers see
-      // the resulting 401 and handle it as they already do.
+      // Backend unreachable — retry on the next 401/launch.
     }
-  }
+  });
 
   // Claim (or refresh) a server-issued device identity before any
   // authenticated API call is made. existingUserId binds the secret to the

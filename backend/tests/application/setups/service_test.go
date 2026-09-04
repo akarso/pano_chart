@@ -9,6 +9,7 @@ import (
 	"pano_chart/backend/application/setups"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
 )
 
@@ -59,6 +60,28 @@ func makeSeries(n int) domain.CandleSeries {
 	return s
 }
 
+// makeDirectionalSeries builds a monotonically rising or falling close-price
+// series, for tests that need dominantRegime to see a real direction rather
+// than makeSeries' flat 105-close candles.
+func makeDirectionalSeries(n int, rising bool) domain.CandleSeries {
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf, _ := domain.NewTimeframe("4h")
+	candles := make([]domain.Candle, n)
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		price := 100.0 + float64(i)
+		if !rising {
+			price = 100.0 + float64(n-i)
+		}
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, base.Add(time.Duration(i)*4*time.Hour),
+			price, price+2, price-2, price, 1000,
+		)
+	}
+	s, _ := domain.NewCandleSeries(sym, tf, candles)
+	return s
+}
+
 // --- Tests ---
 
 func TestSetupService_HappyPath(t *testing.T) {
@@ -94,6 +117,81 @@ func TestSetupService_HappyPath(t *testing.T) {
 	if result.Score <= 0 {
 		t.Errorf("expected positive best score, got %f", result.Score)
 	}
+}
+
+// trendDominantStatsFor builds fake SymbolStats whose "Trend Predictability"
+// entry matches what the real calculator computes for series — dominantRegime
+// now cross-checks the two (scoresAgree) and falls back to "sideways" if a
+// fake fixture's magnitude doesn't match the recomputed one, so tests must
+// use a real, series-consistent score rather than an arbitrary constant.
+func trendDominantStatsFor(t *testing.T, series domain.CandleSeries) usecases.SymbolStats {
+	t.Helper()
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	score, _, err := calc.ScoreWithDirection(series)
+	if err != nil {
+		t.Fatalf("unexpected error scoring fixture series: %v", err)
+	}
+	return usecases.SymbolStats{
+		Scores: map[string]float64{
+			"Compression":          0.1,
+			"Trend Predictability": score,
+			"Sideways":             0.1,
+		},
+	}
+}
+
+func TestDominantRegime_DirectionMatchesPriceAction(t *testing.T) {
+	// Regression test for the PR-072 bug: dominantRegime used to guess
+	// "uptrend" whenever the trend score exceeded 0.5, regardless of
+	// whether the price actually rose or fell.
+
+	t.Run("rising series classifies as uptrend", func(t *testing.T) {
+		series := makeDirectionalSeries(50, true)
+		repo := &fakeCandleRepo{series: series}
+		scorer := &fakeScorer{stats: trendDominantStatsFor(t, series)}
+		svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+		result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Regime != "uptrend" {
+			t.Errorf("expected uptrend for a rising series, got %q", result.Regime)
+		}
+	})
+
+	t.Run("falling series classifies as downtrend, not uptrend", func(t *testing.T) {
+		series := makeDirectionalSeries(50, false)
+		repo := &fakeCandleRepo{series: series}
+		scorer := &fakeScorer{stats: trendDominantStatsFor(t, series)}
+		svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+		result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Regime != "downtrend" {
+			t.Errorf("expected downtrend for a falling series, got %q", result.Regime)
+		}
+	})
+
+	t.Run("flat series has no direction to claim, falls back to sideways", func(t *testing.T) {
+		// makeSeries' candles all close at 105 — the real calculator scores
+		// this as 0 (flat line), so the fake stats naturally agree with it;
+		// there's no real price direction to report.
+		series := makeSeries(50)
+		repo := &fakeCandleRepo{series: series}
+		scorer := &fakeScorer{stats: trendDominantStatsFor(t, series)}
+		svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+		result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Regime == "uptrend" {
+			t.Errorf("expected no uptrend claim for a flat/undirected series, got %q", result.Regime)
+		}
+	})
 }
 
 func TestSetupService_InvalidSymbol(t *testing.T) {
