@@ -66,7 +66,7 @@ type GetOverviewRequest struct {
 func (g *GetOverview) Execute(ctx context.Context, req GetOverviewRequest) ([]OverviewResult, error) {
 	// Rank symbols using the ranking use case.
 	// Pass empty series map; ranker will fetch its own.
-	ranked, err := g.ranker.Rank(make(map[domain.Symbol]domain.CandleSeries))
+	ranked, err := g.ranker.Rank(ctx, make(map[domain.Symbol]domain.CandleSeries))
 	if err != nil {
 		return nil, fmt.Errorf("ranking failed: %w", err)
 	}

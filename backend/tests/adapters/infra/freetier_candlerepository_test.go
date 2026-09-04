@@ -137,15 +137,29 @@ func TestFreeTierCandleRepository_GetSeries_AbortsOnContextCancellation(t *testi
 		cancel()
 	}()
 
+	type callResult struct {
+		err error
+	}
+	resultCh := make(chan callResult, 1)
 	start := time.Now()
-	_, err := repo.GetSeries(ctx, sym, tf, from, to)
+	go func() {
+		_, err := repo.GetSeries(ctx, sym, tf, from, to)
+		resultCh <- callResult{err: err}
+	}()
+
+	var res callResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetSeries did not return within the test timeout — cancellation is not propagating")
+	}
 	elapsed := time.Since(start)
 
-	if err == nil {
+	if res.err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", res.err)
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("expected GetSeries to abort promptly on cancellation, took %v", elapsed)
@@ -177,15 +191,29 @@ func TestFreeTierCandleRepository_GetLastNCandles_AbortsOnContextCancellation(t 
 		cancel()
 	}()
 
+	type callResult struct {
+		err error
+	}
+	resultCh := make(chan callResult, 1)
 	start := time.Now()
-	_, err := repo.GetLastNCandles(ctx, sym, tf, 10)
+	go func() {
+		_, err := repo.GetLastNCandles(ctx, sym, tf, 10)
+		resultCh <- callResult{err: err}
+	}()
+
+	var res callResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetLastNCandles did not return within the test timeout — cancellation is not propagating")
+	}
 	elapsed := time.Since(start)
 
-	if err == nil {
+	if res.err == nil {
 		t.Fatal("expected error from cancelled context, got nil")
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected error wrapping context.Canceled, got %v", err)
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", res.err)
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("expected GetLastNCandles to abort promptly on cancellation, took %v", elapsed)

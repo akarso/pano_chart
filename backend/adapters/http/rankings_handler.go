@@ -96,7 +96,7 @@ func (h *RankingsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Printf("[rankings] Total series loaded: %d\n", len(series))
 	}
-	ranked, err := h.Ranker.Rank(series)
+	ranked, err := h.Ranker.Rank(r.Context(), series)
 	if err != nil {
 		fmt.Printf("[rankings] Error ranking: %v\n", err)
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

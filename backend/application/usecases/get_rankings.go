@@ -203,7 +203,7 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 
 			// Score inline — avoids building a full map and re-iterating.
 			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
-			ranked, err := ranker.Rank(singleSeries)
+			ranked, err := ranker.Rank(gCtx, singleSeries)
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}

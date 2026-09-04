@@ -24,7 +24,7 @@ func NewFakeRanker(symbols []usecases.RankedSymbol, err error) *FakeRanker {
 	}
 }
 
-func (f *FakeRanker) Rank(series map[domain.Symbol]domain.CandleSeries) ([]usecases.RankedSymbol, error) {
+func (f *FakeRanker) Rank(ctx context.Context, series map[domain.Symbol]domain.CandleSeries) ([]usecases.RankedSymbol, error) {
 	if f.err != nil {
 		return nil, f.err
 	}

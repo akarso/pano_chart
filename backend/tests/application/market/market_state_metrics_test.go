@@ -201,7 +201,7 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 
 // --- Cancellation ---
 
-// stuckCandleProvider's GetLastNCandles blocks until the test process exits
+// stuckCandleProvider's GetLastNCandles blocks until the test releases it
 // — simulating a provider that ignores the context it's handed (a stalled
 // network call whose driver doesn't honor cancellation, or simply a buggy
 // implementation). GetLastNCandles now takes a context.Context, and
@@ -209,9 +209,12 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 // underlying HTTP request when it's cancelled, but fetchCandleResults must
 // not assume every implementation does — this fake deliberately discards
 // ctx to prove the racing-select safety net still protects the caller even
-// then.
+// then. release is closed by the test once the cancellation assertion is
+// done, so the goroutine left blocked inside fetchCandleResults can exit
+// instead of leaking for the rest of the test binary's lifetime.
 type stuckCandleProvider struct {
 	symbols []domain.Symbol
+	release chan struct{}
 }
 
 func (p *stuckCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error) {
@@ -219,7 +222,8 @@ func (p *stuckCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, error
 }
 
 func (p *stuckCandleProvider) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
-	select {} // block forever, ignoring ctx
+	<-p.release // block until the test releases it, ignoring ctx
+	return domain.CandleSeries{}, fmt.Errorf("stuckCandleProvider released")
 }
 
 // TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly
@@ -231,8 +235,11 @@ func (p *stuckCandleProvider) GetLastNCandles(_ context.Context, _ domain.Symbol
 // fetch eventually completes (which in this test is never).
 func TestMarketStateService_CalculateWithCandleMetrics_CancelledContextReturnsPromptly(t *testing.T) {
 	sym := makeSymbol2("BTCUSDT")
+	provider := &stuckCandleProvider{symbols: []domain.Symbol{sym}, release: make(chan struct{})}
+	t.Cleanup(func() { close(provider.release) })
+
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
-	svc.SetCandleProvider(&stuckCandleProvider{symbols: []domain.Symbol{sym}})
+	svc.SetCandleProvider(provider)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

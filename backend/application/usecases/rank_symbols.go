@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"context"
 	"fmt"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
@@ -9,7 +10,7 @@ import (
 
 // RankSymbols ranks symbols based on configured scoring strategies.
 type RankSymbols interface {
-	Rank(series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error)
+	Rank(ctx context.Context, series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error)
 }
 
 type RankedSymbol struct {
@@ -32,7 +33,7 @@ func NewDefaultRankSymbols(weights []ScoreWeight) *DefaultRankSymbols {
 	return &DefaultRankSymbols{Weights: weights}
 }
 
-func (r *DefaultRankSymbols) Rank(series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
+func (r *DefaultRankSymbols) Rank(_ context.Context, series map[domain.Symbol]domain.CandleSeries) ([]RankedSymbol, error) {
 	if len(series) == 0 {
 		return nil, nil
 	}

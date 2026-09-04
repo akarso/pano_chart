@@ -103,7 +103,9 @@ func (r *FreeTierCandleRepository) GetSeries(ctx context.Context, symbol domain.
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if r.rateLimiter != nil {
-			r.rateLimiter.Acquire()
+			if err := r.rateLimiter.Acquire(ctx); err != nil {
+				return domain.CandleSeries{}, err
+			}
 			defer r.rateLimiter.Release()
 		}
 		req, err := http.NewRequestWithContext(ctx, "GET", binanceURL, nil)
