@@ -260,6 +260,25 @@ func trendShapePenalty(closes []float64, slope, minClose, maxClose float64) floa
 // functions / regime shifts).  It sorts the closes and looks for a gap
 // > 10% of the total range that splits the series into two groups, each
 // containing at least 25% of the candles.
+//
+// A flat 10%-of-range threshold isn't enough on its own: for a short,
+// evenly-spaced monotonic trend (e.g. n=8-10), every sorted-adjacent gap
+// is ~range/(n-1), which routinely exceeds 10% purely from having few
+// candles — not from any plateau structure. To tell a real regime-shift
+// jump apart from normal spacing, the candidate gap must also dwarf the
+// typical size of the *other* adjacent gaps — a genuine plateau split
+// leaves tiny within-cluster gaps and one outsized between-cluster gap,
+// while a smooth trend has every gap roughly equal.
+//
+// The "other gaps" average deliberately excludes the candidate gap itself
+// rather than using, say, the median of all gaps: tick-rounded closes
+// routinely produce a monotonic staircase (e.g. 100,100,101,101,102,102,...)
+// where at least half the sorted-adjacent gaps are exactly 0 — that pulls
+// the median to 0 for a perfectly ordinary trend, which would (and
+// previously did) disable the outlier check entirely and fall back to the
+// bare 10%-of-range rule, false-positiving on every step. Averaging only
+// the non-candidate gaps stays representative of "typical spacing" even
+// when duplicates dominate, since sum(gaps) == valRange always holds.
 func closePricesClustered(vals []float64) bool {
 	n := len(vals)
 	if n < 8 {
@@ -281,12 +300,31 @@ func closePricesClustered(vals []float64) bool {
 	if valRange == 0 {
 		return false
 	}
-	minGroupSize := n / 4 // each plateau must hold ≥ 25% of candles
+
+	// jumpMultiplier is a heuristic tuned against synthetic monotonic-trend
+	// and step-function cases, not measured against production candle data —
+	// revisit if real-world false positives/negatives show up (e.g. a
+	// legitimate trend with one outsized single-candle move, which this
+	// gap-only heuristic cannot distinguish from a true two-plateau shift).
+	const jumpMultiplier = 3.0 // candidate gap must be this many times the typical gap
+
+	otherGapsCount := float64(n - 2) // (n-1) adjacent gaps minus the candidate
+	minGroupSize := n / 4            // each plateau must hold ≥ 25% of candles
 	for i := 1; i < n; i++ {
 		gap := sorted[i] - sorted[i-1]
-		if i >= minGroupSize && (n-i) >= minGroupSize && gap > 0.10*valRange {
-			return true
+		if i < minGroupSize || (n-i) < minGroupSize {
+			continue
 		}
+		if gap <= 0.10*valRange {
+			continue
+		}
+		// sum of all sorted-adjacent gaps == valRange, so the sum of every
+		// gap except this one is valRange-gap without re-scanning.
+		avgOtherGap := (valRange - gap) / otherGapsCount
+		if avgOtherGap > 0 && gap < jumpMultiplier*avgOtherGap {
+			continue // gap is in line with normal spacing, not an outlier jump
+		}
+		return true
 	}
 	return false
 }

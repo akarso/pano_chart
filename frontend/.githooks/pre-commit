@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running frontend pre-commit hook..."
+
+if [ -d "frontend" ]; then
+  if command -v dart >/dev/null 2>&1; then
+    echo "Formatting Dart files in frontend..."
+    (cd frontend && dart format .)
+    # Stage any formatting changes
+    git add frontend
+  else
+    echo "Warning: 'dart' not found in PATH. Install Flutter/Dart to enable auto-formatting." >&2
+  fi
+fi
+
+echo "Frontend pre-commit hook finished."
+exit 0
