@@ -13,9 +13,14 @@ import (
 
 // ---------- provider ports ----------
 
-// MarketProvider returns the current market summary for a timeframe.
+// MarketProvider returns the current market summary for a timeframe. Must
+// honor ctx cancellation — see PR-076 CR follow-up: this is called from
+// Scheduler.Run's background goroutine, and a Calculate that can't be
+// aborted keeps Run blocked past graceful shutdown's bounded wait for
+// that goroutine, risking a write to regimeHistoryRepo (via the regime
+// observer inside Calculate) after it's been closed.
 type MarketProvider interface {
-	Calculate(timeframe string) (mkt.Summary, error)
+	Calculate(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // SetupProvider returns the best setup for a timeframe.
@@ -302,7 +307,7 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		tfs := collectTimeframes(configs)
 		summaries := make(map[string]mkt.Summary, len(tfs))
 		for tf := range tfs {
-			summary, err := s.market.Calculate(tf)
+			summary, err := s.market.Calculate(ctx, tf)
 			if err != nil {
 				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
 				continue
@@ -321,7 +326,7 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	}
 
 	// Legacy broadcast path (no config store).
-	summary, err := s.market.Calculate(s.cfg.Timeframe)
+	summary, err := s.market.Calculate(ctx, s.cfg.Timeframe)
 	if err != nil {
 		log.Printf("[notify-scheduler] market state error: %v", err)
 		return

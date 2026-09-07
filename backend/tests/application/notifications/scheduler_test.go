@@ -16,7 +16,7 @@ type fakeMarketProvider struct {
 	err       error
 }
 
-func (f *fakeMarketProvider) Calculate(tf string) (mkt.Summary, error) {
+func (f *fakeMarketProvider) Calculate(_ context.Context, tf string) (mkt.Summary, error) {
 	if f.err != nil {
 		return mkt.Summary{}, f.err
 	}
@@ -34,6 +34,23 @@ func (f *fakeMarketProvider) Calculate(tf string) (mkt.Summary, error) {
 func singleMarket(tf string, s mkt.Summary) *fakeMarketProvider {
 	s.Timeframe = tf
 	return &fakeMarketProvider{summaries: map[string]mkt.Summary{tf: s}}
+}
+
+// blockingMarketProvider's Calculate blocks until ctx is cancelled — a
+// stand-in for a slow real calculation (e.g. a cold-cache rankings run
+// across the whole symbol universe) that never returns on its own.
+type blockingMarketProvider struct {
+	calculateStarted chan struct{}
+}
+
+func newBlockingMarketProvider() *blockingMarketProvider {
+	return &blockingMarketProvider{calculateStarted: make(chan struct{})}
+}
+
+func (p *blockingMarketProvider) Calculate(ctx context.Context, _ string) (mkt.Summary, error) {
+	close(p.calculateStarted) // checkMarketState calls Calculate synchronously, so this fires at most once
+	<-ctx.Done()
+	return mkt.Summary{}, ctx.Err()
 }
 
 type fakeSetupProvider struct {
@@ -437,5 +454,51 @@ func TestScheduler_SetupOfDay_ConfidenceGate_AppliesToAllRegimes(t *testing.T) {
 	sched.CheckSetupOfDay(context.Background())
 	if spy.count() != 0 {
 		t.Fatal("expected no notification for non-trend setup with low confidence")
+	}
+}
+
+// TestScheduler_RunReturnsPromptlyWhenCalculateBlocksOnCancelledContext is
+// the regression test for PR-076 CR follow-up ("Scheduler Outlives
+// Repository"): before MarketProvider.Calculate took a context, a slow/hung
+// calculation could keep checkMarketState (and therefore Run, and therefore
+// graceful shutdown's bounded wait for this goroutine) blocked well past
+// shutdown's own deadline, letting it proceed to close regimeHistoryRepo
+// (reachable via Calculate's regime observer) while a resumed call was still
+// about to write to it. With ctx threaded through, cancelling ctx while
+// Calculate is in flight must unblock Calculate (and therefore Run) promptly
+// instead of leaving it to hang.
+func TestScheduler_RunReturnsPromptlyWhenCalculateBlocksOnCancelledContext(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	market := newBlockingMarketProvider()
+
+	cfg := notifications.DefaultSchedulerConfig()
+	cfg.MarketCheckInterval = 5 * time.Millisecond
+	cfg.MacroCheckInterval = time.Hour
+	cfg.SetupCheckInterval = time.Hour
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		sched.Run(ctx)
+		close(runDone)
+	}()
+
+	select {
+	case <-market.calculateStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Calculate was never invoked")
+	}
+
+	cancel()
+
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return promptly after context cancellation while Calculate was in flight — " +
+			"a graceful shutdown's bounded wait for this goroutine would expire and proceed to close " +
+			"regimeHistoryRepo while a resumed Calculate is still about to write to it")
 	}
 }

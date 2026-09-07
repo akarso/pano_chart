@@ -18,7 +18,7 @@ import (
 
 // MarketProvider returns the current market summary for a timeframe.
 type MarketProvider interface {
-	Calculate(timeframe string) (mkt.Summary, error)
+	Calculate(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // FragilityProvider returns the crowding / fragility assessment for a symbol.
@@ -93,7 +93,7 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 
 	// Apply market-level modifier when a provider is available.
 	if s.marketProvider != nil {
-		if summary, err := s.marketProvider.Calculate(timeframe); err == nil {
+		if summary, err := s.marketProvider.Calculate(ctx, timeframe); err == nil {
 			result = ApplyMarketModifier(result, summary.EffectiveTrend)
 		}
 	}

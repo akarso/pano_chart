@@ -1,6 +1,7 @@
 package social
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	html "html"
@@ -59,11 +60,20 @@ func NewRSSProvider(baseURL string, client *http.Client) *RSSProvider {
 // Platform implements social.Provider.
 func (p *RSSProvider) Platform() string { return "twitter" }
 
-// Fetch implements social.Provider.
-func (p *RSSProvider) Fetch(account domain.Account) ([]domain.Post, error) {
+// Fetch implements social.Provider. The request is bound to ctx for its
+// entire round trip (dial, TLS, headers, body) via NewRequestWithContext —
+// not just wall-clock-limited by the client's own Timeout — so a cancelled
+// ctx (e.g. from Watcher shutdown) aborts an in-flight fetch immediately
+// instead of leaving the caller blocked for up to the client's full
+// timeout.
+func (p *RSSProvider) Fetch(ctx context.Context, account domain.Account) ([]domain.Post, error) {
 	url := fmt.Sprintf("%s/%s/rss", p.baseURL, account.Handle)
 
-	resp, err := p.client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("rss fetch %s: %w", account.Handle, err)
+	}
+	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("rss fetch %s: %w", account.Handle, err)
 	}

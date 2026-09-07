@@ -66,7 +66,7 @@ func oneTrendEval() domain.EvaluationSnapshot {
 func TestMarketStateService_NoCandleProvider_DefaultsMetrics(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider(t *testi
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 	svc.SetCandleProvider(spy)
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 	svc.SetObserver(obs)
 
-	if _, err := svc.Calculate("4h"); err != nil {
+	if _, err := svc.Calculate(context.Background(), "4h"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(obs.calls) != 1 {
@@ -196,6 +196,39 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 	}
 	if obs.calls[0] != mkt.RegimeTrend {
 		t.Errorf("expected observer notified of trend, got %s", obs.calls[0])
+	}
+}
+
+// TestMarketStateService_Calculate_CancelledContext_SkipsObserver is the
+// regression test for PR-076 CR follow-up ("Cancellation Still Reaches
+// Observer"): GetRankings.Execute's per-symbol workers swallow their own
+// errors (including a cancelled-context error from a candle fetch) and just
+// skip that symbol, so the rankings pipeline behind GetLatestEvaluations can
+// return a partial result with a nil error even when ctx was cancelled
+// mid-run — fakeEvalProvider models exactly that by returning a successful,
+// non-empty result unconditionally, ignoring ctx entirely. Calculate must
+// not trust GetLatestEvaluations's nil error alone; it must check ctx
+// itself and skip the regime-observer write (the same write that, in
+// production, would otherwise land on a store already closed by graceful
+// shutdown) when the context is already cancelled — while still returning
+// the summary it already has, no error, exactly like the pre-existing
+// TestMarketStateService_CalculateWithCandleMetrics_
+// CancelledContextReturnsPromptly expects one level up: cancellation must
+// suppress the observer's side effect, not the whole call's usefulness to
+// its caller.
+func TestMarketStateService_Calculate_CancelledContext_SkipsObserver(t *testing.T) {
+	obs := &fakeRegimeObserver{}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
+	svc.SetObserver(obs)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := svc.Calculate(ctx, "4h"); err != nil {
+		t.Fatalf("expected Calculate to still return a best-effort summary (no error) on a cancelled context, got: %v", err)
+	}
+	if len(obs.calls) != 0 {
+		t.Fatalf("expected the regime observer to NOT be notified when ctx is already cancelled, got %d calls", len(obs.calls))
 	}
 }
 
