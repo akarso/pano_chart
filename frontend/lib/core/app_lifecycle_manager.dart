@@ -17,6 +17,12 @@ class AppLifecycleManager with WidgetsBindingObserver {
   /// Whether the app is currently in the background.
   bool get isPaused => _isPaused;
 
+  /// Number of currently-registered pausables — for tests verifying a
+  /// component moved its registration on reparenting rather than leaking
+  /// it on the old manager or duplicating it.
+  @visibleForTesting
+  int get pausableCount => _pausables.length;
+
   /// Call once at startup (after [WidgetsFlutterBinding.ensureInitialized]).
   void init() {
     WidgetsBinding.instance.addObserver(this);
