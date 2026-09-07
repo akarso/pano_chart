@@ -92,7 +92,7 @@ Widget bootstrapApp({
       socialScreen: socialVm != null
           ? () => SocialFeedScreen(viewModel: socialVm)
           : null,
-      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel, isProUser: billingManager?.hasFullAccess ?? true),
+      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel, isProUser: billingManager?.hasFullAccess ?? false),
       newsScreen: () => NewsListScreen(viewModel: newsViewModel),
       setupScreen: (symbol) => SetupDetailLoader(
             symbol: symbol,
@@ -101,7 +101,7 @@ Widget bootstrapApp({
             fragilityApi: fragilityApi,
             behaviorApi: behaviorApi,
             volatilityApi: volatilityApi,
-            isProUser: billingManager?.hasFullAccess ?? true,
+            isProUser: billingManager?.hasFullAccess ?? false,
           ),
       marketScreen: (timeframe) => MarketPulseScreen(
             marketStateApi: marketStateApi,
@@ -110,7 +110,7 @@ Widget bootstrapApp({
             transitionApi: transitionApi,
             regimeHistoryApi: regimeHistoryApi,
             initialTimeframe: timeframe,
-            isProUser: billingManager?.hasFullAccess ?? true,
+            isProUser: billingManager?.hasFullAccess ?? false,
           ),
     );
     onRouterReady?.call(router);

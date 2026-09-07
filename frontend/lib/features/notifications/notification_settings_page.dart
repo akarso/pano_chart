@@ -17,7 +17,7 @@ class NotificationSettingsPage extends StatefulWidget {
     super.key,
     required this.prefs,
     this.configApi,
-    this.isPro = true,
+    this.isPro = false,
   });
 
   @override

@@ -1582,18 +1582,15 @@ class OverviewWidgetState extends State<OverviewWidget>
                     hiddenCount: hiddenTokenCount,
                     columns: _columns,
                     onTap: () {
-                      // billingManager is guaranteed non-null here: this
-                      // tile only builds when showUpgradeBanner is true,
-                      // which requires !_capabilities.fullTokenList — and
-                      // Capabilities.fromBilling(null) is always .pro()
-                      // (fullTokenList: true), so a null billingManager
-                      // can never reach this branch. Assert instead of a
-                      // silent no-op so a future change to that invariant
-                      // fails loudly instead of making this tile a
-                      // silently-broken button — see PR-077 CR follow-up.
+                      // billingManager can legitimately be null here as of
+                      // PR-078: Capabilities.fromBilling(null) now fails
+                      // closed to .free() (was .pro()), so this tile can
+                      // show even without a billing manager to launch a
+                      // purchase flow through (billing unavailable, e.g. a
+                      // future iOS build before billing lands there, or a
+                      // test). Nothing to do in that case — there's no
+                      // UpgradeScreen to navigate to without one.
                       final billing = widget.billingManager;
-                      assert(billing != null,
-                          'upgrade banner shown without a billingManager');
                       if (billing == null) return;
                       Navigator.of(context).push(
                         MaterialPageRoute(
