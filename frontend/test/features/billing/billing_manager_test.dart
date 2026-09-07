@@ -19,6 +19,10 @@ class _FakeSubscriptionApi implements SubscriptionApi {
   int verifyCallCount = 0;
   String? lastVerifiedToken;
 
+  /// When set, verifyPurchase() suspends on this until it's completed —
+  /// lets a test observe state while verification is still in flight.
+  Completer<void>? verifyGate;
+
   @override
   Future<void> verifyPurchase({
     required String provider,
@@ -27,6 +31,7 @@ class _FakeSubscriptionApi implements SubscriptionApi {
   }) async {
     verifyCallCount++;
     lastVerifiedToken = purchaseToken;
+    if (verifyGate != null) await verifyGate!.future;
     if (verifyError != null) throw verifyError!;
   }
 
@@ -268,6 +273,29 @@ void main() {
           reason: 'unlocks only after server verification completes');
       expect(billing.busy, isFalse);
       expect(notifyCount, greaterThan(0));
+    });
+
+    test('TestPurchase_VerificationPending_DoesNotUnlockUntilVerifyCompletes',
+        () async {
+      await billing.init();
+      fakeApi.statusToReturn =
+          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+      final gate = Completer<void>();
+      fakeApi.verifyGate = gate;
+
+      fakePlatform.push(_purchase(token: 'tok-pending'));
+      await pumpEventQueue();
+
+      expect(fakeApi.verifyCallCount, 1);
+      expect(billing.status.active, isFalse,
+          reason: 'refreshStatus() must not run until verifyPurchase() '
+              'resolves — _verifyAndComplete awaits it first');
+
+      gate.complete();
+      await pumpEventQueue();
+
+      expect(billing.status.active, isTrue);
+      expect(billing.busy, isFalse);
     });
 
     test('TestPurchase_ServerVerificationFails_DoesNotUnlock', () async {
