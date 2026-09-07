@@ -175,3 +175,154 @@ func TestVolatilityHandler_LegacyFormat(t *testing.T) {
 		t.Fatalf("expected 2 buckets, got %d", len(tfr.Buckets))
 	}
 }
+
+func TestVolatilityHandler_Reload_PicksUpNewData(t *testing.T) {
+	dir := t.TempDir()
+	path := writeVolJSON(t, dir, sampleFullResult())
+	handler := httpAdapter.NewVolatilityHandler(path)
+
+	if _, err := handler.CurrentResult(); err != nil {
+		t.Fatalf("initial load: unexpected error: %v", err)
+	}
+
+	updated := sampleFullResult()
+	updated.Intraday[0].Buckets[0].SpikeProb = 0.5 // was 0.1
+	if err := os.WriteFile(path, mustMarshal(t, updated), 0o644); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+
+	if err := handler.Reload(); err != nil {
+		t.Fatalf("Reload: unexpected error: %v", err)
+	}
+
+	result, err := handler.CurrentResult()
+	if err != nil {
+		t.Fatalf("CurrentResult after Reload: unexpected error: %v", err)
+	}
+	if result.Intraday[0].Buckets[0].SpikeProb != 0.5 {
+		t.Errorf("expected the reloaded SpikeProb 0.5, got %v", result.Intraday[0].Buckets[0].SpikeProb)
+	}
+}
+
+// TestVolatilityHandler_Reload_FailurePreservesOldCache is the CR follow-up
+// regression test: a transient failure during Reload() (file briefly
+// missing/unreadable — a momentary disk hiccup, or vol_aggregate mid-write)
+// must not wipe previously-good cached data. Before this fix, Reload()
+// cleared h.cached up front, so a failed reload permanently blacked out
+// /api/volatility (and silently degraded VolatilitySeasonalityProvider to
+// neutral) until the next successful reload, up to an hour later given
+// cmd/api/main.go's periodic reload ticker.
+func TestVolatilityHandler_Reload_FailurePreservesOldCache(t *testing.T) {
+	dir := t.TempDir()
+	path := writeVolJSON(t, dir, sampleFullResult())
+	handler := httpAdapter.NewVolatilityHandler(path)
+
+	good, err := handler.CurrentResult()
+	if err != nil {
+		t.Fatalf("initial load: unexpected error: %v", err)
+	}
+	if len(good.Intraday) == 0 {
+		t.Fatal("test fixture must have loaded successfully before simulating a failure")
+	}
+
+	// Simulate a transient disk hiccup: the file becomes unreadable.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+
+	if err := handler.Reload(); err == nil {
+		t.Fatal("expected Reload to fail when the file is missing")
+	}
+
+	// The handler must still serve the last-good cached data, not
+	// DATA_UNAVAILABLE.
+	stillGood, err := handler.CurrentResult()
+	if err != nil {
+		t.Fatalf("expected CurrentResult to still return the preserved cache, got error: %v", err)
+	}
+	if len(stillGood.Intraday) == 0 || stillGood.Intraday[0].Buckets[0].SpikeProb != good.Intraday[0].Buckets[0].SpikeProb {
+		t.Errorf("expected the pre-failure cached data to survive, got %+v", stillGood)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/volatility", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected ServeHTTP to still return 200 from the preserved cache, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return data
+}
+
+// TestVolatilityHandler_Reload_RejectsUsableProfileWithNo1mBuckets is the
+// CR follow-up regression test: a technically-valid JSON payload with no
+// usable 1m timeframe entry (e.g. vol_aggregate wrote an empty/misshapen
+// profile) must not replace a last-good cache — Reload should fail and
+// leave the previous data serving.
+func TestVolatilityHandler_Reload_RejectsUsableProfileWithNo1mBuckets(t *testing.T) {
+	dir := t.TempDir()
+	path := writeVolJSON(t, dir, sampleFullResult())
+	handler := httpAdapter.NewVolatilityHandler(path)
+
+	good, err := handler.CurrentResult()
+	if err != nil {
+		t.Fatalf("initial load: unexpected error: %v", err)
+	}
+
+	// A valid FullResult, but with no 1m entry at all (only 5m) — decodes
+	// fine, just isn't usable.
+	unusable := vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF5m, Buckets: []vol.BucketResult{{MinuteOfDay: 0, SpikeProb: 0.3}}},
+		},
+	}
+	if err := os.WriteFile(path, mustMarshal(t, unusable), 0o644); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+
+	if err := handler.Reload(); err == nil {
+		t.Fatal("expected Reload to reject a profile with no usable 1m buckets")
+	}
+
+	stillGood, err := handler.CurrentResult()
+	if err != nil {
+		t.Fatalf("expected CurrentResult to still return the preserved cache, got error: %v", err)
+	}
+	if len(stillGood.Intraday) == 0 || stillGood.Intraday[0].Buckets[0].SpikeProb != good.Intraday[0].Buckets[0].SpikeProb {
+		t.Errorf("expected the pre-reload cached data to survive, got %+v", stillGood)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/volatility", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected ServeHTTP to still return 200 from the preserved cache, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestVolatilityHandler_InitialLoad_RejectsProfileWithNo1mBuckets covers the
+// same validation on the first-ever load (load(), not Reload()) — an
+// unusable profile must surface as an error rather than being cached as a
+// permanently-useless "success".
+func TestVolatilityHandler_InitialLoad_RejectsProfileWithNo1mBuckets(t *testing.T) {
+	dir := t.TempDir()
+	unusable := vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: nil}, // present, but empty — still unusable
+		},
+	}
+	path := writeVolJSON(t, dir, unusable)
+	handler := httpAdapter.NewVolatilityHandler(path)
+
+	_, err := handler.CurrentResult()
+	if err == nil {
+		t.Fatal("expected the initial load to reject a profile with no usable 1m buckets")
+	}
+}

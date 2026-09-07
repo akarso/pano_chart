@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -55,6 +56,15 @@ func (h *VolatilityHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "TIMEFRAME_NOT_FOUND", "timeframe not available")
 }
 
+// CurrentResult returns the currently-loaded volatility profile, loading it
+// from disk on first use — the same cached data ServeHTTP reads. Exposed
+// for VolatilitySeasonalityProvider (PR-082) to reuse this handler's
+// existing load/cache mechanism instead of a second independent
+// file-read/cache.
+func (h *VolatilityHandler) CurrentResult() (*vol.FullResult, error) {
+	return h.load()
+}
+
 func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 	h.mu.RLock()
 	if h.cached != nil {
@@ -71,6 +81,31 @@ func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 		return h.cached, nil
 	}
 
+	result, err := h.fetch()
+	if err != nil {
+		return nil, err
+	}
+	h.cached = result
+	return h.cached, nil
+}
+
+// fetch reads and parses the volatility profile from disk into a fresh
+// value, without touching h.cached — the caller decides whether/when to
+// commit it. Kept separate from load()/Reload() so neither has to inline
+// (and risk silently dropping) the legacy-format migration below.
+//
+// A successfully-decoded result still needs a usable 1m timeframe entry to
+// actually be useful: ServeHTTP's default response and
+// VolatilitySeasonalityProvider's lookup (adapters/http/
+// volatility_seasonality_provider.go) both depend on one specifically.
+// Without this check, a technically-valid-but-empty/misshapen profile
+// (e.g. vol_aggregate writes {"intraday":[],...} for some reason, or only
+// coarser timeframes) would count as a successful fetch and — via
+// Reload() — silently replace a last-good cache with one that can't
+// actually serve anything, turning /api/volatility into a 404 and setup
+// evaluations into a silent neutral-seasonality fallback until a later
+// successful reload — CR follow-up.
+func (h *VolatilityHandler) fetch() (*vol.FullResult, error) {
 	data, err := os.ReadFile(h.path)
 	if err != nil {
 		return nil, err
@@ -93,16 +128,46 @@ func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 		}
 	}
 
-	h.cached = &result
+	if !hasUsable1mBuckets(&result) {
+		return nil, fmt.Errorf("volatility profile at %s has no usable 1m buckets", h.path)
+	}
+
 	log.Printf("[volatility] loaded %d timeframes from %s", len(result.Intraday), h.path)
-	return h.cached, nil
+	return &result, nil
 }
 
-// Reload forces a cache refresh from disk. Call this after vol_aggregate runs.
+// hasUsable1mBuckets reports whether result has a 1-minute timeframe entry
+// with at least one bucket — the minimum both consumers mentioned in
+// fetch's doc actually need.
+func hasUsable1mBuckets(result *vol.FullResult) bool {
+	for _, entry := range result.Intraday {
+		if entry.Timeframe == vol.TF1m && len(entry.Buckets) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Reload forces a cache refresh from disk. Call this after vol_aggregate
+// runs (or — since PR-082 — periodically via volatilityReloadLoop in
+// cmd/api/main.go, now that this cache backs live setup confidence
+// scoring, not just a display endpoint).
+//
+// Reads and parses into a local value BEFORE touching h.cached, and only
+// swaps it in on success — CR follow-up: the previous version cleared
+// h.cached up front, so a transient failure (a momentary disk hiccup, the
+// file mid-write from a concurrent vol_aggregate run) permanently wiped
+// previously-good data instead of preserving it, blacking out
+// /api/volatility and silently degrading SeasonalityFit to neutral until
+// the next successful reload — the same failure class already fixed for
+// the futures OI cache in PR-081.
 func (h *VolatilityHandler) Reload() error {
+	result, err := h.fetch()
+	if err != nil {
+		return err
+	}
 	h.mu.Lock()
-	h.cached = nil
+	h.cached = result
 	h.mu.Unlock()
-	_, err := h.load()
-	return err
+	return nil
 }

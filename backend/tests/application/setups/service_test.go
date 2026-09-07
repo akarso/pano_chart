@@ -52,6 +52,20 @@ func (f *fakeFragilityProvider) Get(_ context.Context, _, _ string) (domainrisk.
 	return f.frag, nil
 }
 
+// fakeSeasonalityProvider lets a test control CurrentSpikeProbability's
+// result/error — see the SetSeasonalityProvider tests below (PR-082).
+type fakeSeasonalityProvider struct {
+	spikeProb float64
+	err       error
+}
+
+func (f *fakeSeasonalityProvider) CurrentSpikeProbability(_ context.Context, _ string) (float64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.spikeProb, nil
+}
+
 type fakeScorer struct {
 	stats usecases.SymbolStats
 	err   error
@@ -528,5 +542,66 @@ func TestVolatilityFromSeries_PR080_AllTimeframesScaleBySqrtOfTime(t *testing.T)
 				t.Errorf("expected VolatilityFit ≈ 1.0 at %s's own ideal range, got %f — possible sign/exponent slip in volatilityDivisorForTimeframe", tfStr, result.VolatilityFit)
 			}
 		})
+	}
+}
+
+// --- SeasonalityProvider wiring (PR-082) ---
+
+func TestSetupService_NoSeasonalityProvider_DefaultsToNeutralFit(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	// No SetSeasonalityProvider call — nil provider is the default.
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SeasonalityFit != 0.5 {
+		t.Errorf("expected neutral SeasonalityFit 0.5 with no provider, got %f", result.SeasonalityFit)
+	}
+}
+
+func TestSetupService_SeasonalityProvider_ComputesFitFromSpikeProbability(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetSeasonalityProvider(&fakeSeasonalityProvider{spikeProb: 0.0}) // historically calm right now
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.SeasonalityFit != 1.0 {
+		t.Errorf("expected SeasonalityFit 1.0 for zero spike probability, got %f", result.SeasonalityFit)
+	}
+}
+
+func TestSetupService_SeasonalityProviderError_DegradesGracefullyToNeutral(t *testing.T) {
+	// Unlike the fragility provider's ctx.Err() escalation (Crowding is
+	// weighted directly into the score, and a zero default silently
+	// maximizes it), seasonality is explicitly a supplementary metric —
+	// see service.go's doc on this. A failure here must never fail
+	// Evaluate as a whole.
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetSeasonalityProvider(&fakeSeasonalityProvider{err: errors.New("volatility data not loaded")})
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("expected Evaluate to succeed despite the seasonality provider failing, got: %v", err)
+	}
+	if result.SeasonalityFit != 0.5 {
+		t.Errorf("expected neutral SeasonalityFit 0.5 on provider error, got %f", result.SeasonalityFit)
 	}
 }
