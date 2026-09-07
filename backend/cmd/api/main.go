@@ -466,10 +466,10 @@ func main() {
 	socialCtx, socialCancel := context.WithCancel(context.Background())
 
 	// Tracks every background goroutine below (socialWatcher, pushConsumer,
-	// notifyScheduler) so graceful shutdown can wait for them to actually
-	// exit instead of just cancelling their context and racing to close
-	// the stores they use — see the shutdown sequence at the bottom of
-	// main().
+	// notifyScheduler, the volatility-profile reload loop) so graceful
+	// shutdown can wait for them to actually exit instead of just
+	// cancelling their context and racing to close the stores they use —
+	// see the shutdown sequence at the bottom of main().
 	var backgroundWG sync.WaitGroup
 
 	backgroundWG.Add(1)
@@ -478,6 +478,24 @@ func main() {
 		socialWatcher.Run(socialCtx)
 	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
+
+	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
+	// VolatilityHandler.Reload() existed before PR-082 ("call this after
+	// vol_aggregate runs") but nothing ever called it — harmless while this
+	// data only backed a display endpoint, but PR-082 now feeds the same
+	// cached snapshot into every setup's live Confidence score, so a
+	// restart-only refresh path is no longer good enough. cmd/vol_aggregate
+	// is documented (PR-059) as a manually-triggered one-time script with no
+	// fixed regeneration cadence, so there's no real interval to match —
+	// this ticker is a conservative, arbitrary bound (picks up an
+	// out-of-band re-run within at most an hour) rather than a value tied
+	// to any known schedule.
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		volatilityReloadLoop(socialCtx, volatilityHandler, time.Hour)
+	}()
+	log.Println("[main] Volatility profile periodic reload started (interval=1h)")
 
 	// --- Push notifications (FCM) ---
 	deviceDBPath := os.Getenv("DEVICE_DB_PATH")
@@ -718,4 +736,24 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 		DateTo:   to,
 		Country:  "United States",
 	})
+}
+
+// volatilityReloadLoop periodically calls h.Reload() until ctx is done, so
+// an out-of-band vol_aggregate re-run is eventually picked up without
+// requiring a server restart — see PR-082 CR follow-up. Reload errors
+// (e.g. the file briefly missing mid-write) are logged, not fatal: the
+// handler keeps serving its last-good cached snapshot either way.
+func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := h.Reload(); err != nil {
+				log.Printf("[main] volatility profile reload failed: %v", err)
+			}
+		}
+	}
 }
