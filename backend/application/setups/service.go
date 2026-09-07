@@ -380,10 +380,18 @@ func volatilityFromSeries(series domain.CandleSeries) float64 {
 	avg := total / float64(n)
 	divisor := volatilityDivisorForTimeframe(series.Timeframe())
 	if divisor <= 0 {
+		// Not a real runtime path for any of the six canonical Timeframe
+		// values (each has a fixed positive Duration()) — only reachable via
+		// a NewTimeframeUnsafe zero/garbage value from tests or misuse.
 		return 0
 	}
 	return clamp(avg / divisor)
 }
+
+// dailyMinutes is domain.Timeframe1d's duration in minutes, hoisted to
+// package scope so volatilityDivisorForTimeframe doesn't recompute it on
+// every call (CR follow-up, PR-080).
+var dailyMinutes = domain.Timeframe1d.Duration().Minutes()
 
 // volatilityDivisorForTimeframe scales dailyVolatilityDivisor down for
 // sub-daily timeframes using sqrt(time) scaling — the standard random-walk
@@ -395,10 +403,12 @@ func volatilityFromSeries(series domain.CandleSeries) float64 {
 // pinned near 0 for every sub-daily timeframe — see PR-080.
 //
 // This is a scaling heuristic, not an empirically fitted constant (neither
-// was the single fixed divisor it replaces) — a principled starting point to
-// revisit once real per-timeframe score-distribution telemetry exists.
+// was the single fixed divisor it replaces) — provisional pending real
+// per-timeframe score-distribution telemetry, not a calibrated result. Real
+// crypto intraday ranges don't necessarily follow clean sqrt(time) scaling
+// (fee/tick-size floors, session effects), so treat 1m/5m/1h/4h as
+// plausible starting points, not validated — see PR-080's doc.
 func volatilityDivisorForTimeframe(tf domain.Timeframe) float64 {
-	dailyMinutes := domain.Timeframe1d.Duration().Minutes()
 	if dailyMinutes <= 0 {
 		return 0
 	}

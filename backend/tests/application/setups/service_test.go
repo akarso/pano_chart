@@ -3,6 +3,7 @@ package setups_test
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -483,5 +484,49 @@ func TestVolatilityFromSeries_PR080_DailyBehaviorUnchanged(t *testing.T) {
 	// 0.05 / 0.1 == 0.5 == the sideways regime's ideal input -> VolatilityFit == 1.0.
 	if result.VolatilityFit < 0.99 {
 		t.Errorf("expected VolatilityFit ≈ 1.0 for the daily divisor's own reference point, got %f", result.VolatilityFit)
+	}
+}
+
+// TestVolatilityFromSeries_PR080_AllTimeframesScaleBySqrtOfTime is the CR
+// follow-up for PR-080: the two tests above only exercised 15m and 1d,
+// leaving 1m/5m/1h/4h uncovered — a sign or exponent slip in
+// volatilityDivisorForTimeframe for any of those would have gone
+// undetected. This computes each timeframe's expected divisor
+// independently (dailyDivisor * sqrt(minutes/1440), duplicating the
+// production formula deliberately — volatilityDivisorForTimeframe is
+// unexported, so this is the only way to pin it from the external
+// setups_test package) and feeds a range set to exactly that divisor's
+// ideal midpoint, so every timeframe must land at VolatilityFit ≈ 1.0 for
+// the fix to be correct across the board, not just at the two points
+// already tested above.
+func TestVolatilityFromSeries_PR080_AllTimeframesScaleBySqrtOfTime(t *testing.T) {
+	const dailyDivisor = 0.1 // must match dailyVolatilityDivisor in service.go
+	dailyMinutes := 24.0 * 60.0
+
+	for _, tfStr := range []string{"1m", "5m", "15m", "1h", "4h", "1d"} {
+		t.Run(tfStr, func(t *testing.T) {
+			tf, err := domain.NewTimeframe(tfStr)
+			if err != nil {
+				t.Fatalf("NewTimeframe(%q): %v", tfStr, err)
+			}
+			expectedDivisor := dailyDivisor * math.Sqrt(tf.Duration().Minutes()/dailyMinutes)
+			rangeFrac := expectedDivisor * 0.5 // the sideways regime's ideal VolatilityFit input
+
+			series := makeSeriesWithTimeframeAndRange(t, 50, tfStr, rangeFrac)
+			repo := &fakeCandleRepo{series: series}
+			scorer := &fakeScorer{stats: sidewaysFallbackStats()}
+			svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+			result, err := svc.Evaluate(context.Background(), "BTCUSDT", tfStr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Regime != "sideways" {
+				t.Fatalf("test fixture must classify as sideways, got %q", result.Regime)
+			}
+			if result.VolatilityFit < 0.99 {
+				t.Errorf("expected VolatilityFit ≈ 1.0 at %s's own ideal range, got %f — possible sign/exponent slip in volatilityDivisorForTimeframe", tfStr, result.VolatilityFit)
+			}
+		})
 	}
 }
