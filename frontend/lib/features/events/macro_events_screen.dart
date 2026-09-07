@@ -111,6 +111,14 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
     // futureIdx == 0 → already at top, nothing to scroll.
   }
 
+  /// Maximum number of coarse-jump attempts _scrollToIndex will make before
+  /// giving up on a target it still can't find a built context for.
+  static const int _maxScrollAttempts = 5;
+
+  /// How much _scrollToIndex widens its per-tile extent estimate on each
+  /// retry that still didn't land the target within the built/cached range.
+  static const double _scrollRetryGrowth = 1.6;
+
   /// Scrolls so the event at [index] (id [eventId]) is visible, aligned per
   /// [alignment] (0.0 = top edge, 0.5 = centered, 1.0 = bottom edge).
   ///
@@ -121,8 +129,35 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   /// within the built/cached range), then fine-tune with ensureVisible once
   /// its context actually exists.
   void _scrollToIndex(int index, String eventId, {required double alignment}) {
-    if (!_scrollController.hasClients) return;
-    final estimated = (index * _estimatedTileExtent)
+    _attemptScrollToIndex(index, eventId,
+        alignment: alignment, extentMultiplier: 1.0, attemptsLeft: _maxScrollAttempts);
+  }
+
+  /// One coarse-jump attempt for _scrollToIndex, widening the per-tile
+  /// extent estimate and retrying (up to [_maxScrollAttempts] total) when
+  /// the target still isn't built after landing.
+  ///
+  /// _estimatedTileExtent alone can badly undershoot the real offset when
+  /// enough preceding titles wrap to more lines than the estimate assumes
+  /// — e.g. a distant target following a run of long, wrapped titles could
+  /// land the coarse jump well short of where the target actually is,
+  /// leaving it outside the built/cached range and Scrollable.ensureVisible
+  /// silently no-op'ing on it (a single-attempt jump never recovers from
+  /// this, and since _hasScrolled is already set by the time this runs,
+  /// nothing else retries it either — see PR-077 CR follow-up, "Variable-
+  /// height deep links fail"). Retrying with a growing multiplier here
+  /// self-corrects for that without needing to measure real tile heights:
+  /// each retry assumes tiles are taller than the last guess, converging
+  /// within a handful of attempts for any realistic amount of wrapping.
+  void _attemptScrollToIndex(
+    int index,
+    String eventId, {
+    required double alignment,
+    required double extentMultiplier,
+    required int attemptsLeft,
+  }) {
+    if (!mounted || !_scrollController.hasClients) return;
+    final estimated = (index * _estimatedTileExtent * extentMultiplier)
         .clamp(0.0, _scrollController.position.maxScrollExtent);
     _scrollController.jumpTo(estimated);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -134,7 +169,16 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
           alignment: alignment,
           duration: const Duration(milliseconds: 300),
         );
+        return;
       }
+      if (attemptsLeft <= 1) return;
+      _attemptScrollToIndex(
+        index,
+        eventId,
+        alignment: alignment,
+        extentMultiplier: extentMultiplier * _scrollRetryGrowth,
+        attemptsLeft: attemptsLeft - 1,
+      );
     });
   }
 

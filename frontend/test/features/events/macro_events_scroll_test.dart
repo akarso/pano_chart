@@ -17,6 +17,20 @@ class _FakeGetEvents implements GetEvents {
 Event _ev(String id, EventImpact imp, DateTime ts) =>
     Event(id: id, country: 'United States', title: 'Evt_$id', impact: imp, timestamp: ts);
 
+/// A long, wrapping title — real _EventTile height for these is well above
+/// _estimatedTileExtent's fixed 72px guess, used to reproduce the PR-077 CR
+/// follow-up ("Variable-height deep links fail"): enough of these ahead of
+/// a distant scroll target defeats a single fixed-estimate coarse jump.
+Event _evLongTitle(String id, EventImpact imp, DateTime ts) => Event(
+      id: id,
+      country: 'United States',
+      title: 'Evt_$id: a deliberately long macroeconomic event headline '
+          'written to wrap across several lines in the event tile so its '
+          'real rendered height is well beyond the fixed per-tile estimate',
+      impact: imp,
+      timestamp: ts,
+    );
+
 // ---- helpers ----
 
 /// Builds a [MacroEventsScreen] in a constrained 400px-tall viewport.
@@ -117,6 +131,33 @@ void main() {
 
       // 'f12' should be visible (ListView built it because we scrolled)
       expect(find.text('Evt_f12'), findsOneWidget);
+    });
+
+    testWidgets(
+        'scrollToEventId reaches a distant event past many wrapped-title tiles',
+        (tester) async {
+      // Regression test for PR-077 CR follow-up ("Variable-height deep
+      // links fail"): 25 long-titled (multi-line, real height >>
+      // _estimatedTileExtent's 72px guess) past events followed by a
+      // handful of future ones. A single fixed-estimate coarse jump would
+      // land far short of 'f3' — this only reaches it if the retry/widen
+      // logic in _scrollToIndex actually kicks in.
+      final now = DateTime.now().toUtc();
+      final events = <Event>[
+        for (var i = 25; i >= 1; i--)
+          _evLongTitle('p$i', EventImpact.medium, now.subtract(Duration(hours: i))),
+        for (var i = 1; i <= 5; i++)
+          _ev('f$i', EventImpact.high, now.add(Duration(hours: i))),
+      ];
+      final fake = _FakeGetEvents()
+        ..countryEvents = {'United States': events};
+      final vm = EventsViewModel(fake);
+
+      await tester.pumpWidget(
+          _app(vm, scrollToEventId: 'f3', isProUser: true));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Evt_f3'), findsOneWidget);
     });
 
     testWidgets('default scroll positions closest future event visible',
