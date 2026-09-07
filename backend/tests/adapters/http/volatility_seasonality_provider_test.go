@@ -139,7 +139,14 @@ func TestVolatilitySeasonalityProvider_IgnoresTimeframeParam_AlwaysUses1m(t *tes
 	}
 }
 
-func TestVolatilitySeasonalityProvider_NoBucketForCurrentMinute_ReturnsError(t *testing.T) {
+// TestVolatilitySeasonalityProvider_NearbyMinuteWithinRadius_UsedInsteadOfFailing
+// is the CR follow-up regression test: a sparse-but-otherwise-healthy
+// profile missing a bucket for the exact current minute (a thin market, a
+// brief data hole during aggregation — hasUsable1mBuckets only checks that
+// *some* 1m buckets exist, not that this specific minute is one of them)
+// must not fail outright and silently degrade SeasonalityFit to neutral.
+// A nearby minute within maxMinuteSearchRadius is used instead.
+func TestVolatilitySeasonalityProvider_NearbyMinuteWithinRadius_UsedInsteadOfFailing(t *testing.T) {
 	source := &fakeVolatilityResultSource{result: &vol.FullResult{
 		Intraday: []vol.TimeframeResult{
 			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: (fixedMinuteOfDay + 1) % 1440, SpikeProb: 0.5}}},
@@ -147,9 +154,50 @@ func TestVolatilitySeasonalityProvider_NoBucketForCurrentMinute_ReturnsError(t *
 	}}
 	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(source, fixedNow)
 
+	got, err := p.CurrentSpikeProbability(context.Background(), "15m")
+	if err != nil {
+		t.Fatalf("expected the nearby minute (1 away) to be used instead of failing, got error: %v", err)
+	}
+	if got != 0.5 {
+		t.Errorf("expected the nearby bucket's 0.5, got %v", got)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_NoBucketWithinRadius_ReturnsError(t *testing.T) {
+	source := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			// well outside maxMinuteSearchRadius (15) in both directions
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: (fixedMinuteOfDay + 100) % 1440, SpikeProb: 0.5}}},
+		},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(source, fixedNow)
+
 	_, err := p.CurrentSpikeProbability(context.Background(), "15m")
 	if err == nil {
-		t.Fatal("expected an error when no bucket matches the current minute")
+		t.Fatal("expected an error when no bucket exists within the search radius")
+	}
+}
+
+func TestVolatilitySeasonalityProvider_NearbyMinute_WrapsAroundDayBoundary(t *testing.T) {
+	// fixedMinuteOfDay is 184 (03:04 UTC) — far from midnight, so use an
+	// explicit near-midnight case instead of the shared fixture: minute 5,
+	// with data only at minute 1439 (== -1, i.e. 6 minutes away across the
+	// day boundary) must still resolve via the cyclic search.
+	source := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: 1439, SpikeProb: 0.6}}},
+		},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(source, func() time.Time {
+		return time.Date(2026, 1, 5, 0, 5, 0, 0, time.UTC) // minute-of-day 5
+	})
+
+	got, err := p.CurrentSpikeProbability(context.Background(), "15m")
+	if err != nil {
+		t.Fatalf("expected the wrap-around neighbor to be used, got error: %v", err)
+	}
+	if got != 0.6 {
+		t.Errorf("expected the wrapped-around bucket's 0.6, got %v", got)
 	}
 }
 

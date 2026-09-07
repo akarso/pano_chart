@@ -100,34 +100,76 @@ func (p *VolatilitySeasonalityProvider) CurrentSpikeProbability(_ context.Contex
 	return spikeProb, nil
 }
 
-// lookupBucketSpikeProb finds the intraday bucket for minuteOfDay.
-// Aggregate builds a full 1440-slot array pre-indexed by MinuteOfDay before
-// filtering out empty minutes, so a dense/gapless result (the common case)
-// resolves via direct index in O(1); the MinuteOfDay equality check guards
-// against a data gap having shifted that alignment, falling back to a full
-// scan only then.
+// maxMinuteSearchRadius bounds how far lookupBucketSpikeProb/
+// lookupWeeklyBucketSpikeProb search outward for a nearby minute when the
+// exact one requested has no data. hasUsable1mBuckets (volatility_handler.go)
+// only checks that a profile has *some* 1m buckets, not that every minute
+// (in particular whatever minute happens to be "current" at some later,
+// unpredictable moment) is covered — a profile that's genuinely sparse in
+// a few scattered minutes (a thin market, a brief exchange data hole
+// during the aggregation window) is still a healthy, usable profile
+// overall. Failing outright on one unlucky exact-minute miss would throw
+// away all seasonal information for that request and fall back to a flat
+// neutral reading; a bounded nearby-minute substitute is a much closer
+// approximation of "what does this time of day usually look like" than
+// that — CR follow-up.
+const maxMinuteSearchRadius = 15
+
+// lookupBucketSpikeProb finds the intraday bucket for minuteOfDay, or the
+// nearest one within maxMinuteSearchRadius minutes (cyclic across the
+// 1440-minute day) if the exact minute has no data. Aggregate builds a
+// full 1440-slot array pre-indexed by MinuteOfDay before filtering out
+// empty minutes, so a dense/gapless result (the common case) resolves via
+// direct index in O(1); the MinuteOfDay equality check guards against a
+// data gap having shifted that alignment, falling back to a map lookup
+// (built once, reused for both the exact check and the radius search)
+// only then.
 func lookupBucketSpikeProb(buckets []vol.BucketResult, minuteOfDay int) (float64, bool) {
 	if minuteOfDay >= 0 && minuteOfDay < len(buckets) && buckets[minuteOfDay].MinuteOfDay == minuteOfDay {
 		return buckets[minuteOfDay].SpikeProb, true
 	}
+
+	byMinute := make(map[int]float64, len(buckets))
 	for _, b := range buckets {
-		if b.MinuteOfDay == minuteOfDay {
-			return b.SpikeProb, true
+		byMinute[b.MinuteOfDay] = b.SpikeProb
+	}
+	if v, ok := byMinute[minuteOfDay]; ok {
+		return v, true
+	}
+	for radius := 1; radius <= maxMinuteSearchRadius; radius++ {
+		for _, delta := range [2]int{radius, -radius} {
+			candidate := ((minuteOfDay+delta)%1440 + 1440) % 1440
+			if v, ok := byMinute[candidate]; ok {
+				return v, true
+			}
 		}
 	}
 	return 0, false
 }
 
 // lookupWeeklyBucketSpikeProb is lookupBucketSpikeProb's counterpart for
-// the (up to 10 080-slot) weekly buckets — same fast-path-then-scan
-// rationale.
+// the (up to 10 080-slot) weekly buckets — same fast-path/map/bounded-
+// radius rationale, cyclic across the 10080-minute week instead.
 func lookupWeeklyBucketSpikeProb(buckets []vol.WeeklyBucket, minuteOfWeek int) (float64, bool) {
+	const minutesPerWeek = 7 * 1440
+
 	if minuteOfWeek >= 0 && minuteOfWeek < len(buckets) && buckets[minuteOfWeek].MinuteOfWeek == minuteOfWeek {
 		return buckets[minuteOfWeek].SpikeProb, true
 	}
+
+	byMinute := make(map[int]float64, len(buckets))
 	for _, b := range buckets {
-		if b.MinuteOfWeek == minuteOfWeek {
-			return b.SpikeProb, true
+		byMinute[b.MinuteOfWeek] = b.SpikeProb
+	}
+	if v, ok := byMinute[minuteOfWeek]; ok {
+		return v, true
+	}
+	for radius := 1; radius <= maxMinuteSearchRadius; radius++ {
+		for _, delta := range [2]int{radius, -radius} {
+			candidate := ((minuteOfWeek+delta)%minutesPerWeek + minutesPerWeek) % minutesPerWeek
+			if v, ok := byMinute[candidate]; ok {
+				return v, true
+			}
 		}
 	}
 	return 0, false
