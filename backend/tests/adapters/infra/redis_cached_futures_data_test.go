@@ -1,0 +1,206 @@
+package infra_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	infra "pano_chart/backend/adapters/infra"
+	"pano_chart/backend/application/ports"
+)
+
+// --- Fakes ---
+
+type fakeFuturesRedis struct {
+	store map[string]string
+	fail  bool
+}
+
+func (f *fakeFuturesRedis) Get(_ context.Context, key string) (string, error) {
+	if f.fail {
+		return "", errors.New("redis fail")
+	}
+	return f.store[key], nil
+}
+
+func (f *fakeFuturesRedis) Set(_ context.Context, key string, value string, _ time.Duration) error {
+	if f.fail {
+		return errors.New("redis fail")
+	}
+	f.store[key] = value
+	return nil
+}
+
+type fakeFuturesDataPort struct {
+	funding       float64
+	oi            []float64
+	longRatio     float64
+	err           error
+	fundingCalls  int
+	oiCalls       int
+	longShortCall int
+}
+
+func (f *fakeFuturesDataPort) FundingRate(_ context.Context, _ string) (float64, error) {
+	f.fundingCalls++
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.funding, nil
+}
+
+func (f *fakeFuturesDataPort) OpenInterestHistory(_ context.Context, _ string) ([]float64, error) {
+	f.oiCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.oi, nil
+}
+
+func (f *fakeFuturesDataPort) LongShortRatio(_ context.Context, _ string) (float64, error) {
+	f.longShortCall++
+	if f.err != nil {
+		return 0, f.err
+	}
+	return f.longRatio, nil
+}
+
+func TestRedisCachedFuturesData_ImplementsPort(t *testing.T) {
+	var _ ports.FuturesDataPort = infra.NewRedisCachedFuturesData(&fakeFuturesDataPort{}, &fakeFuturesRedis{store: map[string]string{}}, time.Minute)
+}
+
+// --- FundingRate ---
+
+func TestRedisCachedFuturesData_FundingRate_CacheHitSkipsNext(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{"futures:funding:BTCUSDT": "0.0001"}}
+	next := &fakeFuturesDataPort{funding: 0.999}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	rate, err := cache.FundingRate(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rate != 0.0001 {
+		t.Errorf("expected cached rate 0.0001, got %v", rate)
+	}
+	if next.fundingCalls != 0 {
+		t.Errorf("next should not be called on cache hit")
+	}
+}
+
+func TestRedisCachedFuturesData_FundingRate_CacheMissCallsNextAndStores(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{funding: 0.0002}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	rate, err := cache.FundingRate(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if rate != 0.0002 {
+		t.Errorf("expected rate 0.0002, got %v", rate)
+	}
+	if next.fundingCalls != 1 {
+		t.Errorf("expected next to be called once, got %d", next.fundingCalls)
+	}
+	if fr.store["futures:funding:BTCUSDT"] == "" {
+		t.Errorf("expected value to be cached")
+	}
+}
+
+func TestRedisCachedFuturesData_FundingRate_NextErrorNotCached(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	_, err := cache.FundingRate(context.Background(), "NOTASYMBOL")
+	if err == nil {
+		t.Fatal("expected error from next")
+	}
+	if _, ok := fr.store["futures:funding:NOTASYMBOL"]; ok {
+		t.Errorf("should not cache on provider error")
+	}
+}
+
+// --- OpenInterestHistory ---
+
+func TestRedisCachedFuturesData_OpenInterestHistory_CacheHitSkipsNext(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{"futures:oi:BTCUSDT": "[1,2,3]"}}
+	next := &fakeFuturesDataPort{oi: []float64{9, 9, 9}}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	oi, err := cache.OpenInterestHistory(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []float64{1, 2, 3}
+	if len(oi) != len(want) {
+		t.Fatalf("expected %d entries, got %d", len(want), len(oi))
+	}
+	for i := range want {
+		if oi[i] != want[i] {
+			t.Errorf("entry %d: expected %v, got %v", i, want[i], oi[i])
+		}
+	}
+	if next.oiCalls != 0 {
+		t.Errorf("next should not be called on cache hit")
+	}
+}
+
+func TestRedisCachedFuturesData_OpenInterestHistory_CacheMissCallsNextAndStores(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{oi: []float64{10, 20, 30}}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	oi, err := cache.OpenInterestHistory(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(oi) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(oi))
+	}
+	if next.oiCalls != 1 {
+		t.Errorf("expected next to be called once, got %d", next.oiCalls)
+	}
+	if fr.store["futures:oi:BTCUSDT"] == "" {
+		t.Errorf("expected value to be cached")
+	}
+}
+
+// --- LongShortRatio ---
+
+func TestRedisCachedFuturesData_LongShortRatio_CacheHitSkipsNext(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{"futures:longshort:BTCUSDT": "0.65"}}
+	next := &fakeFuturesDataPort{longRatio: 0.01}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	ratio, err := cache.LongShortRatio(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ratio != 0.65 {
+		t.Errorf("expected cached ratio 0.65, got %v", ratio)
+	}
+	if next.longShortCall != 0 {
+		t.Errorf("next should not be called on cache hit")
+	}
+}
+
+// --- Shared behavior ---
+
+func TestRedisCachedFuturesData_FallsBackOnRedisFailure(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}, fail: true}
+	next := &fakeFuturesDataPort{funding: 0.001, oi: []float64{1, 2, 3}, longRatio: 0.5}
+	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+
+	if rate, err := cache.FundingRate(context.Background(), "BTCUSDT"); err != nil || rate != 0.001 {
+		t.Errorf("FundingRate: expected 0.001, nil error; got %v, %v", rate, err)
+	}
+	if oi, err := cache.OpenInterestHistory(context.Background(), "BTCUSDT"); err != nil || len(oi) != 3 {
+		t.Errorf("OpenInterestHistory: expected 3 entries, nil error; got %v, %v", oi, err)
+	}
+	if ratio, err := cache.LongShortRatio(context.Background(), "BTCUSDT"); err != nil || ratio != 0.5 {
+		t.Errorf("LongShortRatio: expected 0.5, nil error; got %v, %v", ratio, err)
+	}
+}
