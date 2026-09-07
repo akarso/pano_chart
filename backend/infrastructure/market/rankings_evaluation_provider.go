@@ -23,14 +23,19 @@ func NewRankingsEvaluationProvider(r usecases.RankingsUseCase) *RankingsEvaluati
 	return &RankingsEvaluationProvider{rankings: r}
 }
 
-// GetLatestEvaluations implements market.EvaluationProvider.
-func (p *RankingsEvaluationProvider) GetLatestEvaluations(timeframe string) ([]domain.EvaluationSnapshot, error) {
+// GetLatestEvaluations implements market.EvaluationProvider. Forwards ctx
+// into the rankings pipeline (already fully cancellation-aware end to
+// end — universe/volume fetch, per-symbol candle fetch, and the bounded
+// worker pool all take ctx) instead of the context.Background() this used
+// to hardcode, so a cancelled ctx actually aborts an in-flight rankings
+// run — see PR-076 CR follow-up.
+func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, timeframe string) ([]domain.EvaluationSnapshot, error) {
 	tf, err := domain.NewTimeframe(timeframe)
 	if err != nil {
 		return nil, err
 	}
 
-	results, err := p.rankings.Execute(context.Background(), usecases.GetRankingsRequest{
+	results, err := p.rankings.Execute(ctx, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})

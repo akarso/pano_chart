@@ -40,7 +40,8 @@ func (p *countingProvider) fetchCount(handle string) int {
 // slow real fetch (e.g. RSSProvider against an unresponsive Nitter bridge)
 // that never returns on its own.
 type blockingProvider struct {
-	fetchStarted chan struct{}
+	fetchStarted     chan struct{}
+	fetchStartedOnce sync.Once
 }
 
 func newBlockingProvider() *blockingProvider {
@@ -50,7 +51,15 @@ func newBlockingProvider() *blockingProvider {
 func (p *blockingProvider) Platform() string { return "twitter" }
 
 func (p *blockingProvider) Fetch(ctx context.Context, _ domain.Account) ([]domain.Post, error) {
-	close(p.fetchStarted) // pollNext calls Fetch synchronously, so this fires at most once
+	// pollNext calls Fetch synchronously (one at a time), but Run's select
+	// can still race a second call in after cancellation: once the first
+	// Fetch unblocks on ctx.Done() and returns, Run's loop re-enters
+	// select with BOTH ctx.Done() and (if the ticker also fired while
+	// Fetch was blocked) pollTicker.C ready — select picks between ready
+	// cases at random, so it's not guaranteed to see ctx.Done() first.
+	// Guard with sync.Once so a second invocation doesn't double-close
+	// fetchStarted and panic; the test only needs the signal once anyway.
+	p.fetchStartedOnce.Do(func() { close(p.fetchStarted) })
 	<-ctx.Done()
 	return nil, ctx.Err()
 }

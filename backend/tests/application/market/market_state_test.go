@@ -1,6 +1,7 @@
 package market_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,7 @@ type fakeEvalProvider struct {
 	err   error
 }
 
-func (f *fakeEvalProvider) GetLatestEvaluations(_ string) ([]domain.EvaluationSnapshot, error) {
+func (f *fakeEvalProvider) GetLatestEvaluations(_ context.Context, _ string) ([]domain.EvaluationSnapshot, error) {
 	return f.evals, f.err
 }
 
@@ -42,7 +43,7 @@ func TestClassify_BreakoutUp(t *testing.T) {
 			{BreakoutUpScore: 0.9, CompressionScore: 0.1, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestClassify_BreakoutDown(t *testing.T) {
 			{BreakoutDownScore: 0.75},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestClassify_Compression(t *testing.T) {
 			{CompressionScore: 0.8, TrendScore: 0.3},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestClassify_Trend(t *testing.T) {
 			{TrendScore: 0.70},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestClassify_DefaultSideways(t *testing.T) {
 			{SidewaysScore: 0.9, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestClassify_BreakoutTakesPriority(t *testing.T) {
 			{BreakoutUpScore: 0.9, CompressionScore: 0.9, TrendScore: 0.9},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestService_MajorityCompression(t *testing.T) {
 			{TrendScore: 0.8},
 		},
 	})
-	summary, err := svc.Calculate("4h")
+	summary, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestService_BreadthRatios(t *testing.T) {
 			{BreakoutUpScore: 0.9},                // breakout-dominated
 		},
 	})
-	summary, err := svc.Calculate("1h")
+	summary, err := svc.Calculate(context.Background(), "1h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestService_EmptyEvaluations(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		evals: []domain.EvaluationSnapshot{},
 	})
-	summary, err := svc.Calculate("4h")
+	summary, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestService_ProviderError(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		err: http.ErrServerClosed,
 	})
-	_, err := svc.Calculate("4h")
+	_, err := svc.Calculate(context.Background(), "4h")
 	if err == nil {
 		t.Fatal("expected error from provider")
 	}
@@ -216,7 +217,7 @@ func TestService_TimeframePassedThrough(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		evals: []domain.EvaluationSnapshot{{SidewaysScore: 0.5}},
 	})
-	summary, err := svc.Calculate("15m")
+	summary, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +322,7 @@ func TestClassify_Bias_Up(t *testing.T) {
 			{TrendScore: 0.3, Bias: "down"},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +339,7 @@ func TestClassify_Bias_Down(t *testing.T) {
 			{TrendScore: 0.2, Bias: "up"},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +355,7 @@ func TestClassify_Bias_Neutral_NoBias(t *testing.T) {
 			{TrendScore: 0.5},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestClassify_Indecisive_NoDominantRegime(t *testing.T) {
 			{SidewaysScore: 0.5, TrendScore: 0.4, CompressionScore: 0.3, BreakoutUpScore: 0.3},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestClassify_Indecisive_CloseGap(t *testing.T) {
 			{SidewaysScore: 0.55, TrendScore: 0.45},
 		},
 	})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +424,7 @@ func TestClassify_NotIndecisive_ClearDominance(t *testing.T) {
 			{TrendScore: 0.8, SidewaysScore: 0.2},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +448,7 @@ func TestClassify_Silent_FlatWithLowVolume(t *testing.T) {
 		}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +474,7 @@ func TestClassify_NotSilent_HighVolume(t *testing.T) {
 		}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +490,7 @@ func TestClassify_NotSilent_NoVolumeData(t *testing.T) {
 			{SidewaysScore: 0.9, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -506,7 +507,7 @@ func TestClassify_NotSilent_NoVolumeData(t *testing.T) {
 
 func TestMarketStateService_Calculate_EmptyEvaluations_ReturnsUnavailable(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: nil})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -524,7 +525,7 @@ func TestMarketStateService_Calculate_PartialFetchFailure_ReturnsDegraded(t *tes
 		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -539,7 +540,7 @@ func TestMarketStateService_Calculate_FullUniverse_ReturnsOK(t *testing.T) {
 		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -563,7 +564,7 @@ func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testin
 	}
 
 	svc75 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(75)})
-	s75, err := svc75.Calculate("4h")
+	s75, err := svc75.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -572,7 +573,7 @@ func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testin
 	}
 
 	svc74 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(74)})
-	s74, err := svc74.Calculate("4h")
+	s74, err := svc74.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

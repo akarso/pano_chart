@@ -65,8 +65,11 @@ func (s *Service) Unsubscribe(userID, handle string) error {
 }
 
 // Feed returns posts for a handle. Tries the cache first; on a miss it does
-// a live fetch through the provider.
-func (s *Service) Feed(handle string) ([]domain.Post, error) {
+// a live fetch through the provider. ctx is forwarded to the provider so a
+// client disconnecting mid-request (or, transitively, a caller with its own
+// deadline) aborts the live fetch instead of letting it run to completion
+// for no one — see PR-076 CR follow-up.
+func (s *Service) Feed(ctx context.Context, handle string) ([]domain.Post, error) {
 	accID := s.provider.Platform() + ":" + handle
 
 	// Try cache first.
@@ -85,12 +88,7 @@ func (s *Service) Feed(handle string) ([]domain.Post, error) {
 		acc = &tmp
 	}
 
-	// Feed has no request-scoped context of its own today (unrelated to the
-	// PR-076 shutdown-race fix that added ctx to Provider.Fetch) — a live
-	// cache-miss fetch here isn't part of any background-worker shutdown
-	// path, so context.Background() is correct as-is rather than plumbing
-	// a context through this call chain speculatively.
-	posts, err := s.provider.Fetch(context.Background(), *acc)
+	posts, err := s.provider.Fetch(ctx, *acc)
 	if err != nil {
 		return nil, err
 	}
@@ -115,8 +113,8 @@ func (s *Service) SetFilterConfig(userID, handle string, config FeedFilter) erro
 }
 
 // FilteredFeed fetches posts for a handle and applies the given filter.
-func (s *Service) FilteredFeed(handle string, filter FeedFilter) ([]domain.Post, error) {
-	posts, err := s.Feed(handle)
+func (s *Service) FilteredFeed(ctx context.Context, handle string, filter FeedFilter) ([]domain.Post, error) {
+	posts, err := s.Feed(ctx, handle)
 	if err != nil {
 		return nil, err
 	}

@@ -17,7 +17,7 @@ import (
 // actually looks (never uniformly one regime).
 type realisticEvalProvider struct{}
 
-func (realisticEvalProvider) GetLatestEvaluations(_ string) ([]domain.EvaluationSnapshot, error) {
+func (realisticEvalProvider) GetLatestEvaluations(_ context.Context, _ string) ([]domain.EvaluationSnapshot, error) {
 	rnd := rand.New(rand.NewSource(1))
 	var evals []domain.EvaluationSnapshot
 	add := func(n int, mk func() domain.EvaluationSnapshot) {
@@ -69,7 +69,7 @@ func (realisticEvalProvider) GetLatestEvaluations(_ string) ([]domain.Evaluation
 func TestScheduler_RealisticStrongTrendMarket_FiresUptrend(t *testing.T) {
 	market := appmarket.NewMarketStateService(realisticEvalProvider{})
 
-	summary, err := market.Calculate("1h")
+	summary, err := market.Calculate(context.Background(), "1h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -46,7 +46,7 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tf = "4h"
 	}
 
-	summary, err := h.service.Calculate(tf)
+	summary, err := h.service.Calculate(r.Context(), tf)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return

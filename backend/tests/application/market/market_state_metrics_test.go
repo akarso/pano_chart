@@ -66,7 +66,7 @@ func oneTrendEval() domain.EvaluationSnapshot {
 func TestMarketStateService_NoCandleProvider_DefaultsMetrics(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider(t *testi
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 	svc.SetCandleProvider(spy)
 
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestMarketStateService_NotifiesObserver(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 	svc.SetObserver(obs)
 
-	if _, err := svc.Calculate("4h"); err != nil {
+	if _, err := svc.Calculate(context.Background(), "4h"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(obs.calls) != 1 {

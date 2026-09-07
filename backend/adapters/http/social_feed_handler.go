@@ -72,7 +72,7 @@ func (h *SocialFeedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	posts, err := h.service.FilteredFeed(handle, filter)
+	posts, err := h.service.FilteredFeed(r.Context(), handle, filter)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return

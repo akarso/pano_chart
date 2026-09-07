@@ -1,6 +1,7 @@
 package market_test
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -130,7 +131,7 @@ func TestCalculate_HealthFieldsPopulated(t *testing.T) {
 		},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +150,7 @@ func TestCalculate_NoPriceData_StillWorks(t *testing.T) {
 		},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestCalculate_EmptyEvals_ZeroHealthFields(t *testing.T) {
 		evals: []domain.EvaluationSnapshot{},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +208,7 @@ func TestCalculate_BreakdownRate(t *testing.T) {
 		},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestBiasOverride_NegativeReturnWithUpBias(t *testing.T) {
 		},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +297,7 @@ func TestBiasOverride_PositiveReturnWithDownBias(t *testing.T) {
 		},
 	}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +327,7 @@ func TestCalculate_BreakingTrend_DeclassifiedFromTrend(t *testing.T) {
 	}
 	provider := &fakeEvalProvider{evals: evals}
 	svc := appmarket.NewMarketStateService(provider)
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}

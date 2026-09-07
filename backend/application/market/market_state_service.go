@@ -89,8 +89,8 @@ func (s *MarketStateService) SetObserver(o RegimeObserver) {
 // is penalised before state determination.  This prevents a broken market
 // from being classified as "Trend 94%" just because individual tokens have
 // moderate R² values that happen to exceed their other scores.
-func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
-	evaluations, err := s.provider.GetLatestEvaluations(timeframe)
+func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (mkt.Summary, error) {
+	evaluations, err := s.provider.GetLatestEvaluations(ctx, timeframe)
 	if err != nil {
 		return mkt.Summary{}, err
 	}
@@ -302,11 +302,10 @@ func (s *MarketStateService) Calculate(timeframe string) (mkt.Summary, error) {
 // computed from raw candle data across the whole symbol universe (bounded
 // concurrent fetch, candleMetricsFanoutLimit at a time). Meaningfully more
 // expensive than Calculate — use it only where these two fields are actually
-// consumed. ctx bounds the candle fan-out only; Calculate's own evaluation
-// fetch is unchanged (it never took a context, matching its pre-existing
-// EvaluationProvider interface).
+// consumed. ctx now bounds both the candle fan-out and Calculate's own
+// evaluation fetch (see PR-076 CR follow-up).
 func (s *MarketStateService) CalculateWithCandleMetrics(ctx context.Context, timeframe string) (mkt.Summary, error) {
-	summary, err := s.Calculate(timeframe)
+	summary, err := s.Calculate(ctx, timeframe)
 	if err != nil {
 		return summary, err
 	}

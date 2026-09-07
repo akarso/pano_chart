@@ -114,8 +114,10 @@ func TestRSSProvider_HandlesHTTPError(t *testing.T) {
 // finishes on its own) to prove cancellation — not the client's Timeout —
 // is what unblocks Fetch.
 func TestRSSProvider_AbortsOnContextCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done() // never responds on its own
+		close(requestStarted) // signals the request actually reached the handler
+		<-r.Context().Done()  // never responds on its own
 	}))
 	defer srv.Close()
 
@@ -130,10 +132,15 @@ func TestRSSProvider_AbortsOnContextCancellation(t *testing.T) {
 		fetchDone <- err
 	}()
 
-	// Give Fetch time to actually be in-flight before cancelling, so this
-	// exercises cancellation of a request already sent, not a pre-send
-	// short-circuit.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the handler to actually be invoked before cancelling, so
+	// this exercises cancellation of a request already sent, not a
+	// pre-send short-circuit — a fixed sleep here would be a race against
+	// real scheduling/network timing instead of a real guarantee.
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request never reached the test server")
+	}
 	cancel()
 
 	select {
