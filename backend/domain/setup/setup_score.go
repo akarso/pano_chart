@@ -25,7 +25,14 @@ type SetupScores struct {
 	// Market-level context.
 	MarketEffective float64 // 0–1; aggregate market trend strength
 
-	// Confidence inputs.
+	// Confidence inputs. These are read as-is by
+	// application/setups.ComputeConfidence — it does not default a zero/
+	// unset value to anything else, so a hand-built SetupScores that omits
+	// VolatilityFit or SeasonalityFit gets scored as if that reading were
+	// the worst possible (0.0), not neutral. Evaluate (application/setups/
+	// service.go) is the only caller that populates these correctly for
+	// real use, including explicitly setting SeasonalityFit to a neutral
+	// 0.5 itself when no seasonality data is available.
 	Crowding       float64 // 0–1; position crowding / fragility (high = dangerous)
 	VolatilityFit  float64 // 0–1; how suitable current (realized) volatility is for this regime
 	SeasonalityFit float64 // 0–1; how favorable the current time-of-day's historical spike-probability is (high = low forward-looking risk) — see PR-082

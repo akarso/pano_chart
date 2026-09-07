@@ -62,6 +62,24 @@ func SeasonalityFit(spikeProb float64) float64 {
 // weight distribution across trend/market/crowding/(volatility+seasonality)
 // is unchanged from before this split — only the volatility-related slice
 // is subdivided.
+//
+// Contract: every field this reads (TrendHealth, MarketEffective, Crowding,
+// VolatilityFit, SeasonalityFit) must already be populated by the caller —
+// this function does not apply defaults. Evaluate (service.go) is the
+// only correct way to get a well-formed SetupScores for real use; it sets
+// SeasonalityFit to a neutral 0.5 itself before this is ever called (when
+// no SeasonalityProvider is configured, or the provider errors), so 0.5
+// only shows up here as an already-resolved value, never as an implicit
+// default. A hand-built SetupScores that omits SeasonalityFit gets Go's
+// zero value, 0.0 — read literally as "confirmed maximum seasonality
+// risk", not defaulted to neutral (same pre-existing behavior VolatilityFit
+// already has for the same reason). Deliberately NOT special-cased here:
+// a plain float64 can't distinguish "the caller left this unset" from "the
+// provider genuinely reported 0.0 spike-probability fit" — silently
+// treating a literal 0.0 as neutral would just as silently understate a
+// real worst-case seasonality reading from Evaluate's own successful
+// provider call, which would be a worse bug than a hand-built caller's
+// score coming out a few hundredths lower than intended.
 func ComputeConfidence(s setup.SetupScores) float64 {
 	var weights map[string]float64
 

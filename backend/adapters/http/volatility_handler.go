@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -92,6 +93,18 @@ func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 // value, without touching h.cached — the caller decides whether/when to
 // commit it. Kept separate from load()/Reload() so neither has to inline
 // (and risk silently dropping) the legacy-format migration below.
+//
+// A successfully-decoded result still needs a usable 1m timeframe entry to
+// actually be useful: ServeHTTP's default response and
+// VolatilitySeasonalityProvider's lookup (adapters/http/
+// volatility_seasonality_provider.go) both depend on one specifically.
+// Without this check, a technically-valid-but-empty/misshapen profile
+// (e.g. vol_aggregate writes {"intraday":[],...} for some reason, or only
+// coarser timeframes) would count as a successful fetch and — via
+// Reload() — silently replace a last-good cache with one that can't
+// actually serve anything, turning /api/volatility into a 404 and setup
+// evaluations into a silent neutral-seasonality fallback until a later
+// successful reload — CR follow-up.
 func (h *VolatilityHandler) fetch() (*vol.FullResult, error) {
 	data, err := os.ReadFile(h.path)
 	if err != nil {
@@ -115,8 +128,24 @@ func (h *VolatilityHandler) fetch() (*vol.FullResult, error) {
 		}
 	}
 
+	if !hasUsable1mBuckets(&result) {
+		return nil, fmt.Errorf("volatility profile at %s has no usable 1m buckets", h.path)
+	}
+
 	log.Printf("[volatility] loaded %d timeframes from %s", len(result.Intraday), h.path)
 	return &result, nil
+}
+
+// hasUsable1mBuckets reports whether result has a 1-minute timeframe entry
+// with at least one bucket — the minimum both consumers mentioned in
+// fetch's doc actually need.
+func hasUsable1mBuckets(result *vol.FullResult) bool {
+	for _, entry := range result.Intraday {
+		if entry.Timeframe == vol.TF1m && len(entry.Buckets) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Reload forces a cache refresh from disk. Call this after vol_aggregate
