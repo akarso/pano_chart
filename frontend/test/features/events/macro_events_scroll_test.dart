@@ -20,13 +20,14 @@ Event _ev(String id, EventImpact imp, DateTime ts) =>
 // ---- helpers ----
 
 /// Builds a [MacroEventsScreen] in a constrained 400px-tall viewport.
-Widget _app(EventsViewModel vm, {String? scrollToEventId}) {
+Widget _app(EventsViewModel vm, {String? scrollToEventId, bool isProUser = false}) {
   return MaterialApp(
     home: SizedBox(
       height: 400,
       child: MacroEventsScreen(
         viewModel: vm,
         scrollToEventId: scrollToEventId,
+        isProUser: isProUser,
       ),
     ),
   );
@@ -102,12 +103,16 @@ void main() {
     testWidgets('scrollToEventId makes a distant event visible',
         (tester) async {
       // Many events so target (f12) would be off-screen without scrolling.
+      // isProUser: true — the free-tier filter (3 upcoming + 2 past) would
+      // otherwise strip f12 out of the list entirely before scrolling logic
+      // even runs, which is a different thing than what this test checks.
       final events = _manyEvents(pastCount: 15, futureCount: 15);
       final fake = _FakeGetEvents()
         ..countryEvents = {'United States': events};
       final vm = EventsViewModel(fake);
 
-      await tester.pumpWidget(_app(vm, scrollToEventId: 'f12'));
+      await tester.pumpWidget(
+          _app(vm, scrollToEventId: 'f12', isProUser: true));
       await tester.pumpAndSettle();
 
       // 'f12' should be visible (ListView built it because we scrolled)

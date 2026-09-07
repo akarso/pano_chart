@@ -8,7 +8,6 @@ import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/overview_banner.dart';
 import '../../core/polling_config.dart';
-// import '../../core/sequential_visual_executor.dart'; // PR-034: kept for potential future use
 import '../../core/sparkline_flash_dot.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
@@ -145,6 +144,12 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   // ---- lifecycle registration ----
   Pausable? _pausable;
+  // Cached from didChangeDependencies — dispose() must not call
+  // AppLifecycleScope.of(context) itself: by the time dispose() runs the
+  // element may already be deactivated, and looking up an InheritedWidget
+  // ancestor on a deactivated element throws ("Looking up a deactivated
+  // widget's ancestor is unsafe").
+  AppLifecycleManager? _lifecycleManager;
 
   PreferencesService? get _prefs => widget.prefs;
 
@@ -260,8 +265,9 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _lifecycleManager = AppLifecycleScope.of(context);
     if (_pausable == null) {
-      final mgr = AppLifecycleScope.of(context);
+      final mgr = _lifecycleManager;
       if (mgr != null) {
         _pausable = Pausable(
           onPause: () {
@@ -280,14 +286,12 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   @override
   void dispose() {
-    final mgr = AppLifecycleScope.of(context);
-    if (_pausable != null) mgr?.removePausable(_pausable!);
+    if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     vm.onChanged = null;
     _autoRefreshTimer?.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _stalenessTracker.stop();
-    _stopFpsMonitor();
     for (final ctrl in _flashControllers.values) {
       ctrl.dispose();
     }
@@ -310,12 +314,6 @@ class OverviewWidgetState extends State<OverviewWidget>
       }
     }
   }
-
-  // ---- FPS monitoring (kept for future use) ----
-
-  void _startFpsMonitor() {}
-
-  void _stopFpsMonitor() {}
 
   // ---- flash dot helpers ----
 
@@ -687,15 +685,6 @@ class OverviewWidgetState extends State<OverviewWidget>
                         ),
                       ),
                     ),
-                    // const Text(
-                    //   'your\nmissing\nelement',
-                    //   style: TextStyle(
-                    //     fontSize: 6,
-                    //     fontWeight: FontWeight.w700,
-                    //     color: Color(0xFF00E6C0),
-                    //     letterSpacing: 0.5,
-                    //   ),
-                    // ),
                   ],
                 ),
               ),
@@ -1505,9 +1494,17 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
 
     // Free tier: cap visible tokens to 15 (favourites view is unrestricted
-    // so users always see their picks).
+    // so users always see their picks). showUpgradeBanner drives a single
+    // unobtrusive tile at the cutoff point (not a modal/interstitial —
+    // matches the "no aggressive upselling" principle from PR-039) so the
+    // cap reads as a paywall, not a bug ("where are the rest of my
+    // tokens?").
+    var showUpgradeBanner = false;
+    int hiddenTokenCount = 0;
     if (!_showFavourites && !_capabilities.fullTokenList && visibleItems.length > 15) {
+      hiddenTokenCount = visibleItems.length - 15;
       visibleItems = visibleItems.sublist(0, 15);
+      showUpgradeBanner = true;
     }
 
     if (_showFavourites && visibleItems.isEmpty) {
@@ -1550,8 +1547,28 @@ class OverviewWidgetState extends State<OverviewWidget>
                 childAspectRatio: 2.5,
               ),
               itemCount: visibleItems.length +
-                  (!_showFavourites && state.hasMore ? 1 : 0),
+                  (showUpgradeBanner ? 1 : 0) +
+                  // Suppress the infinite-scroll loading tile once the free-tier
+                  // cap has already kicked in — there's nothing more to page in
+                  // for this view, and a spinner right after a hard cutoff would
+                  // read as "still loading" rather than "upgrade for more".
+                  (!_showFavourites && !showUpgradeBanner && state.hasMore ? 1 : 0),
               itemBuilder: (context, index) {
+                if (showUpgradeBanner && index == visibleItems.length) {
+                  return _UpgradeBannerTile(
+                    hiddenCount: hiddenTokenCount,
+                    columns: _columns,
+                    onTap: () {
+                      final billing = widget.billingManager;
+                      if (billing == null) return;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => UpgradeScreen(billingManager: billing),
+                        ),
+                      );
+                    },
+                  );
+                }
                 if (index >= visibleItems.length) {
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -1576,6 +1593,67 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         ),
       ],
+    );
+  }
+}
+
+// ---- free-tier upgrade banner tile ----
+
+/// A single grid cell shown at the free-tier 15-token cutoff, in place of
+/// silently truncating the list — see PR-077. Styled to sit naturally among
+/// the surrounding [_OverviewGridItem] cards (same [Card]/[AspectRatio]
+/// shape) rather than as a modal or interstitial.
+class _UpgradeBannerTile extends StatelessWidget {
+  final int hiddenCount;
+  final int columns;
+  final VoidCallback onTap;
+
+  const _UpgradeBannerTile({
+    required this.hiddenCount,
+    required this.columns,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderRadius = columns == 3 ? 6.0 : 12.0;
+    return GestureDetector(
+      onTap: onTap,
+      child: Card(
+        color: const Color(0xFF00E6C0).withAlpha((0.12 * 255).round()),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(borderRadius),
+          side: const BorderSide(color: Color(0xFF00E6C0), width: 1),
+        ),
+        child: AspectRatio(
+          aspectRatio: 2.5,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 16.0);
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.lock_outline,
+                        color: const Color(0xFF00E6C0), size: fontSize * 1.4),
+                    const SizedBox(height: 2),
+                    Text(
+                      '+$hiddenCount more tokens with Pro',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF00E6C0),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 }

@@ -33,6 +33,13 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   bool _hasScrolled = false;
   String? _highlightedEventId;
   final Map<String, GlobalKey> _eventKeys = {};
+  final ScrollController _scrollController = ScrollController();
+
+  // Rough average _EventTile height (padding + ~2 lines of text) + divider,
+  // used only to pick a starting scroll offset before the fine-tuned
+  // Scrollable.ensureVisible correction below — see _scrollToIndex. Doesn't
+  // need to be exact: actual tile height varies with title wrapping.
+  static const double _estimatedTileExtent = 72.0;
 
   @override
   void initState() {
@@ -54,6 +61,7 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   @override
   void dispose() {
     widget.viewModel.onChanged = null;
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -83,14 +91,9 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
 
   void _scrollToEvent(
       String eventId, List<Event> sorted, {bool center = false}) {
-    final key = _eventKeys[eventId];
-    if (key?.currentContext != null) {
-      Scrollable.ensureVisible(
-        key!.currentContext!,
-        alignment: center ? 0.5 : 0.0,
-        duration: const Duration(milliseconds: 300),
-      );
-    }
+    final index = sorted.indexWhere((e) => e.id == eventId);
+    if (index < 0) return;
+    _scrollToIndex(index, eventId, alignment: center ? 0.5 : 0.0);
   }
 
   void _scrollToClosestFuture(List<Event> sorted) {
@@ -99,27 +102,40 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
 
     if (futureIdx < 0) {
       // All events are past — scroll to end
-      final key = _eventKeys[sorted.last.id];
-      if (key?.currentContext != null) {
-        Scrollable.ensureVisible(
-          key!.currentContext!,
-          alignment: 1.0,
-          duration: const Duration(milliseconds: 300),
-        );
-      }
+      _scrollToIndex(sorted.length - 1, sorted.last.id, alignment: 1.0);
     } else if (futureIdx > 0) {
       // Show the last past event at the top edge → closest future
       // event appears one row below.
-      final key = _eventKeys[sorted[futureIdx - 1].id];
+      _scrollToIndex(futureIdx - 1, sorted[futureIdx - 1].id, alignment: 0.0);
+    }
+    // futureIdx == 0 → already at top, nothing to scroll.
+  }
+
+  /// Scrolls so the event at [index] (id [eventId]) is visible, aligned per
+  /// [alignment] (0.0 = top edge, 0.5 = centered, 1.0 = bottom edge).
+  ///
+  /// The list is now lazily built (ListView.separated — see PR-077), so a
+  /// target far outside the current viewport + cache extent may not have a
+  /// mounted GlobalKey yet, and Scrollable.ensureVisible would silently
+  /// no-op on it. Jump to an estimated offset first (bringing the target
+  /// within the built/cached range), then fine-tune with ensureVisible once
+  /// its context actually exists.
+  void _scrollToIndex(int index, String eventId, {required double alignment}) {
+    if (!_scrollController.hasClients) return;
+    final estimated = (index * _estimatedTileExtent)
+        .clamp(0.0, _scrollController.position.maxScrollExtent);
+    _scrollController.jumpTo(estimated);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final key = _eventKeys[eventId];
       if (key?.currentContext != null) {
         Scrollable.ensureVisible(
           key!.currentContext!,
-          alignment: 0.0,
+          alignment: alignment,
           duration: const Duration(milliseconds: 300),
         );
       }
-    }
-    // futureIdx == 0 → already at top, nothing to scroll.
+    });
   }
 
   void _loadEvents() {
@@ -154,6 +170,15 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
         ...past.length > 2 ? past.sublist(past.length - 2) : past,
         ...upcoming.length > 3 ? upcoming.sublist(0, 3) : upcoming,
       ];
+    }
+
+    // Prune keys for events no longer in the current filtered set — a
+    // filter/country change or reload can otherwise let this map grow
+    // unbounded across the screen's lifetime instead of tracking only
+    // what's actually rendered.
+    if (_eventKeys.isNotEmpty) {
+      final liveIds = filtered.map((e) => e.id).toSet();
+      _eventKeys.removeWhere((id, _) => !liveIds.contains(id));
     }
 
     return Scaffold(
@@ -294,30 +319,24 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
 
     return RefreshIndicator(
       onRefresh: () async => _loadEvents(),
-      child: SingleChildScrollView(
+      child: ListView.separated(
+        controller: _scrollController,
         physics: const AlwaysScrollableScrollPhysics(),
         padding: EdgeInsets.only(
           left: 16, right: 16, top: 8,
           bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
         ),
-        child: Column(
-          children: [
-            for (var i = 0; i < filtered.length; i++) ...[
-              Builder(builder: (_) {
-                final event = filtered[i];
-                final key =
-                    _eventKeys.putIfAbsent(event.id, () => GlobalKey());
-                return _EventTile(
-                  key: key,
-                  event: event,
-                  isHighlighted: event.id == _highlightedEventId,
-                );
-              }),
-              if (i < filtered.length - 1)
-                Divider(color: Colors.white.withAlpha(25), height: 1),
-            ],
-          ],
-        ),
+        itemCount: filtered.length,
+        separatorBuilder: (_, __) => Divider(color: Colors.white.withAlpha(25), height: 1),
+        itemBuilder: (context, i) {
+          final event = filtered[i];
+          final key = _eventKeys.putIfAbsent(event.id, () => GlobalKey());
+          return _EventTile(
+            key: key,
+            event: event,
+            isHighlighted: event.id == _highlightedEventId,
+          );
+        },
       ),
     );
   }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/features/billing/api/subscription_api.dart';
+import 'package:pano_chart_frontend/features/billing/billing_manager.dart';
 import 'package:pano_chart_frontend/features/candles/application/get_candle_series.dart';
 import 'package:pano_chart_frontend/features/candles/application/get_candle_series_input.dart';
 import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
@@ -7,6 +9,31 @@ import 'package:pano_chart_frontend/features/overview/overview_widget.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
 import 'package:pano_chart_frontend/features/overview/overview_state.dart';
+
+/// Minimal SubscriptionApi fake — nothing in these tests actually calls it,
+/// BillingManager just requires one to construct.
+class _FakeSubscriptionApi implements SubscriptionApi {
+  @override
+  Future<void> verifyPurchase({
+    required String provider,
+    required String purchaseToken,
+    required String userId,
+  }) async {}
+
+  @override
+  Future<SubscriptionStatus> getStatus(String userId) async =>
+      SubscriptionStatus.inactive();
+}
+
+/// BillingManager that skips IAP connection entirely — tests drive access
+/// level directly via debugSetAccess instead of a real purchase/trial flow.
+class _TestBillingManager extends BillingManager {
+  _TestBillingManager()
+      : super(api: _FakeSubscriptionApi(), userId: 'test_user');
+
+  @override
+  Future<void> init() async {}
+}
 
 class _FakeGetOverview extends GetOverview {
   final Duration delay;
@@ -228,6 +255,84 @@ void main() {
           reason: 'banner should be hidden for sort=$sort',
         );
       }
+    });
+  });
+
+  group('free-tier upgrade banner', () {
+    List<OverviewItem> manyItems(int n) => List.generate(
+          n,
+          (i) => OverviewItem(
+            symbol: 'SYM${i}USDT',
+            totalScore: 1.0,
+            sparkline: const [100.0, 101.0],
+          ),
+        );
+
+    testWidgets('free-tier user with >15 tokens sees the upgrade banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // The banner tile is the 16th grid cell (15 capped items + 1) — below
+      // the fold in the default test viewport, so the lazily-built
+      // GridView.builder won't have built it yet without scrolling there.
+      await tester.scrollUntilVisible(
+        find.textContaining('more tokens with Pro'),
+        300.0,
+        scrollable: find.byType(Scrollable),
+      );
+
+      expect(find.textContaining('more tokens with Pro'), findsOneWidget);
+      expect(find.text('+5 more tokens with Pro'), findsOneWidget);
+    });
+
+    testWidgets('pro user with >15 tokens does not see the upgrade banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('more tokens with Pro'), findsNothing);
+    });
+
+    testWidgets('free-tier user with <=15 tokens does not see the banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(10), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('more tokens with Pro'), findsNothing);
     });
   });
 }

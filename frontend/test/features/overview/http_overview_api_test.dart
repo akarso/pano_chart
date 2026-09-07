@@ -1,8 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:pano_chart_frontend/features/overview/http_overview_api.dart';
+
+/// A client whose requests never complete on their own — used to prove the
+/// 15s timeout (not a real response) is what unblocks fetchOverview.
+class _NeverRespondingClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    return Completer<http.StreamedResponse>().future;
+  }
+}
 
 class _FakeClient extends http.BaseClient {
   http.Request? lastRequest;
@@ -117,5 +128,34 @@ void main() {
       expect(e.statusCode, 404);
       expect(e.message, contains('404'));
     }
+  });
+
+  test('HttpOverviewApi_throwsHttpOverviewApiExceptionOnTimeout', () {
+    FakeAsync().run((async) {
+      final api = HttpOverviewApi(
+        baseUrl: 'https://api.example',
+        client: _NeverRespondingClient(),
+      );
+
+      Object? caught;
+      unawaited(() async {
+        try {
+          await api.fetchOverview(timeframe: '1h', limit: 30);
+        } catch (e) {
+          caught = e;
+        }
+      }());
+
+      // Past the client's 15s .timeout() — the request itself never
+      // responds, so only the timeout can unblock this.
+      async.elapse(const Duration(seconds: 16));
+
+      // Callers should only ever see this adapter's own exception type,
+      // never the raw TimeoutException the timeout() call produces.
+      expect(caught, isA<HttpOverviewApiException>());
+      final err = caught as HttpOverviewApiException;
+      expect(err.statusCode, 0);
+      expect(err.message, contains('timed out'));
+    });
   });
 }

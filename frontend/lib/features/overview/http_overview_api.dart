@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -25,7 +26,18 @@ class HttpOverviewApi implements OverviewApi {
       '$baseUrl/api/overview?timeframe=$timeframe&limit=$limit',
     );
 
-    final response = await client.get(uri);
+    late final http.Response response;
+    try {
+      response = await client.get(uri).timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      // Wrap into the class's own exception type, matching how a non-200
+      // status is already reported below — callers shouldn't need to know
+      // this adapter uses package:http under the hood.
+      throw const HttpOverviewApiException(
+        statusCode: 0,
+        message: 'Overview API request timed out',
+      );
+    }
 
     if (response.statusCode != 200) {
       throw HttpOverviewApiException(
