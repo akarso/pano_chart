@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	infra "pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/risk"
 	"pano_chart/backend/domain"
 )
@@ -327,5 +328,104 @@ func TestBinanceFuturesDataProvider_InsufficientCandleData(t *testing.T) {
 	_, err := p.Get(context.Background(), "BTCUSDT", "4h")
 	if err == nil {
 		t.Fatal("expected error for insufficient candle data")
+	}
+}
+
+// --- CR follow-up: cache poisoning by sibling cancellation ---
+
+// blockingThenSucceedingFuturesPort's FundingRate blocks on its ctx (while
+// fundingBlocks is true) instead of returning immediately — used to
+// simulate a real in-flight Binance HTTP call that gets aborted by
+// errgroup's shared-context cancellation when a sibling call fails, the
+// same way the real BinanceFuturesClient's http.Client would behave.
+type blockingThenSucceedingFuturesPort struct {
+	mu            sync.Mutex
+	fundingBlocks bool
+	funding       float64
+	oi            []float64
+	longRatio     float64
+}
+
+func (f *blockingThenSucceedingFuturesPort) FundingRate(ctx context.Context, _ string) (float64, error) {
+	f.mu.Lock()
+	blocks := f.fundingBlocks
+	f.mu.Unlock()
+	if blocks {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return f.funding, nil
+}
+
+func (f *blockingThenSucceedingFuturesPort) OpenInterestHistory(_ context.Context, _ string) ([]float64, error) {
+	return f.oi, nil
+}
+
+func (f *blockingThenSucceedingFuturesPort) LongShortRatio(_ context.Context, _ string) (float64, error) {
+	return f.longRatio, nil
+}
+
+// fakeRiskCacheRedis is a minimal in-memory Get/Set fake satisfying
+// infra.RedisCachedFuturesData's (unexported) redis-client interface
+// structurally — the same pattern already used in
+// tests/adapters/infra/redis_cached_futures_data_test.go.
+type fakeRiskCacheRedis struct {
+	mu    sync.Mutex
+	store map[string]string
+}
+
+func (f *fakeRiskCacheRedis) Get(_ context.Context, key string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.store[key], nil
+}
+
+func (f *fakeRiskCacheRedis) Set(_ context.Context, key string, value string, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.store[key] = value
+	return nil
+}
+
+// TestBinanceFuturesDataProvider_CandleFailureDuringConcurrentFetch_DoesNotPoisonFuturesCache
+// is the CR follow-up regression test for the cache-poisoning blocker: with
+// the REAL RedisCachedFuturesData wired underneath (not the bare fake used
+// by the other tests in this file), a candle-fetch failure cancels the
+// shared errgroup context while FundingRate is still in flight. Before the
+// fix, that in-flight call's context.Canceled error got cached as a
+// "Binance says no" failure for failureTTL — poisoning every subsequent
+// FundingRate lookup for this symbol, not just the one racing request.
+func TestBinanceFuturesDataProvider_CandleFailureDuringConcurrentFetch_DoesNotPoisonFuturesCache(t *testing.T) {
+	next := &blockingThenSucceedingFuturesPort{
+		fundingBlocks: true, // blocks until Get's internal gctx is cancelled by the candle-fetch failure
+		funding:       0.0002,
+		oi:            []float64{1, 2, 3},
+		longRatio:     0.5,
+	}
+	redis := &fakeRiskCacheRedis{store: map[string]string{}}
+	cachedFutures := infra.NewRedisCachedFuturesData(next, redis, time.Minute, 45*time.Second)
+	repo := &fakeCandleRepo{err: errors.New("candle backend hiccup — unrelated to Binance")}
+	p := risk.NewBinanceFuturesDataProvider(cachedFutures, repo)
+
+	_, err := p.Get(context.Background(), "BTCUSDT", "4h")
+	if err == nil {
+		t.Fatal("expected an error from the failing candle fetch")
+	}
+
+	// Call FundingRate again, directly through the cache decorator, now
+	// that it can answer immediately. If the sibling cancellation poisoned
+	// the cache, this returns a cached-failure error without calling next
+	// again. If the fix holds, it's a genuine cache miss: next is called
+	// and the real value comes back.
+	next.mu.Lock()
+	next.fundingBlocks = false
+	next.mu.Unlock()
+
+	rate, err2 := cachedFutures.FundingRate(context.Background(), "BTCUSDT")
+	if err2 != nil {
+		t.Fatalf("FundingRate cache appears poisoned by the sibling's cancellation: %v", err2)
+	}
+	if rate != 0.0002 {
+		t.Errorf("expected the real funding rate 0.0002, got %v", rate)
 	}
 }

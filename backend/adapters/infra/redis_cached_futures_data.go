@@ -12,6 +12,13 @@ import (
 	"pano_chart/backend/application/ports"
 )
 
+// maxCachedErrorBytes bounds how much of a fetch error's message gets
+// written into the cached failure marker — matches BinanceFuturesClient's
+// own cap on raw response bodies (maxErrorBodyBytes), so a future change
+// there (or an unusually verbose wrapped error) can't grow the cached value
+// unbounded.
+const maxCachedErrorBytes = 512
+
 // futuresDataRedisClient is the minimal Get/Set surface this decorator
 // needs — matches symbol_universe.RedisClient's shape so the same
 // *symbol_universe.GoRedisClient instance wired elsewhere in main.go can be
@@ -124,6 +131,18 @@ func (r *RedisCachedFuturesData) LongShortRatio(ctx context.Context, symbol stri
 // again; a cache miss calls fetch, caching the result either way (success
 // under ttl, failure under the shorter failureTTL) so a known-bad symbol
 // isn't re-fetched on every single request.
+//
+// A fetch error caused by ctx itself being done (context.Canceled or
+// context.DeadlineExceeded) is NOT cached as a failure — CR follow-up,
+// PR-081: BinanceFuturesDataProvider.Get runs its three futures calls
+// concurrently via errgroup.WithContext, which cancels the shared context
+// the instant ANY sibling call (including the unrelated candle fetch)
+// errors. An otherwise-healthy in-flight call aborted that way returns
+// context.Canceled, not a real "Binance rejected/lacks this symbol"
+// signal — caching that would poison this symbol's cache with a bogus
+// "unavailable" failure for failureTTL, entirely unrelated to whether
+// Binance actually has data for it, on every future request during that
+// window, not just the one racing call.
 func (r *RedisCachedFuturesData) cachedFetch(ctx context.Context, key string, fetch func() (string, error)) (string, error) {
 	if cached, err := r.redis.Get(ctx, key); err == nil && cached != "" {
 		if reason, isFailure := strings.CutPrefix(cached, failureMarkerPrefix); isFailure {
@@ -134,7 +153,16 @@ func (r *RedisCachedFuturesData) cachedFetch(ctx context.Context, key string, fe
 
 	value, err := fetch()
 	if err != nil {
-		r.setCached(ctx, key, failureMarkerPrefix+err.Error(), r.failureTTL)
+		if ctx.Err() != nil {
+			// Aborted because our own ctx is done, not because the fetch
+			// itself was confirmed to fail — propagate without caching.
+			return "", err
+		}
+		msg := err.Error()
+		if len(msg) > maxCachedErrorBytes {
+			msg = msg[:maxCachedErrorBytes]
+		}
+		r.setCached(ctx, key, failureMarkerPrefix+msg, r.failureTTL)
 		return "", err
 	}
 	r.setCached(ctx, key, value, r.ttl)
