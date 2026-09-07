@@ -33,7 +33,7 @@ func NewFreeTierCandleRepository(base string, client *http.Client, rl *ratelimit
 
 // GetSeries implements CandleRepositoryPort. It performs a single request to the external API
 // and translates the response into domain.CandleSeries.
-func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (r *FreeTierCandleRepository) GetSeries(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	if r.baseURL == nil {
 		return domain.CandleSeries{}, fmt.Errorf("invalid base URL")
 	}
@@ -49,7 +49,11 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 		q.Set("to", to.Format(time.RFC3339))
 		u.RawQuery = q.Encode()
 		fmt.Printf("[freetier] Test/mock URL: %s\n", u.String())
-		resp, err := r.client.Get(u.String())
+		req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
+		if err != nil {
+			return domain.CandleSeries{}, err
+		}
+		resp, err := r.client.Do(req)
 		if err != nil {
 			return domain.CandleSeries{}, err
 		}
@@ -99,10 +103,12 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if r.rateLimiter != nil {
-			r.rateLimiter.Acquire()
+			if err := r.rateLimiter.Acquire(ctx); err != nil {
+				return domain.CandleSeries{}, err
+			}
 			defer r.rateLimiter.Release()
 		}
-		req, err := http.NewRequestWithContext(context.Background(), "GET", binanceURL, nil)
+		req, err := http.NewRequestWithContext(ctx, "GET", binanceURL, nil)
 		if err != nil {
 			return domain.CandleSeries{}, err
 		}
@@ -117,7 +123,11 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 			atomic.AddInt64(&metrics.GlobalMetrics.Fetch429s, 1)
 			if attempt < maxRetries {
 				fmt.Printf("[freetier] 429 on %s, backing off %v (attempt %d/%d)\n", symbol.String(), backoff, attempt+1, maxRetries)
-				time.Sleep(backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return domain.CandleSeries{}, ctx.Err()
+				}
 				backoff *= 2
 				continue
 			}
@@ -166,7 +176,7 @@ func (r *FreeTierCandleRepository) GetSeries(symbol domain.Symbol, timeframe dom
 // 2. Fetch series for that range
 // 3. Exclude the last (in-progress) candle if present
 // 4. Return last N candles
-func (r *FreeTierCandleRepository) GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (r *FreeTierCandleRepository) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if n <= 0 {
 		return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
 	}
@@ -183,7 +193,7 @@ func (r *FreeTierCandleRepository) GetLastNCandles(symbol domain.Symbol, timefra
 	fmt.Printf("[freetier] GetLastNCandles: symbol=%s, tf=%s, n=%d, fetching from %s to %s\n", symbol.String(), timeframe.String(), n, from.Format(time.RFC3339), to.Format(time.RFC3339))
 
 	// Fetch the series
-	series, err := r.GetSeries(symbol, timeframe, from, to)
+	series, err := r.GetSeries(ctx, symbol, timeframe, from, to)
 	if err != nil {
 		return domain.CandleSeries{}, err
 	}

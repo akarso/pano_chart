@@ -8,6 +8,10 @@ import (
 )
 
 // TrendPredictabilityScoreCalculator scores based on linear trend and fit.
+// Must stay stateless: application/setups keeps a single package-level
+// instance shared across concurrent Evaluate calls. Adding a field here
+// without also making it safe for concurrent reuse would introduce a data
+// race in that caller.
 type TrendPredictabilityScoreCalculator struct{}
 
 func (c *TrendPredictabilityScoreCalculator) Name() string {
@@ -15,9 +19,27 @@ func (c *TrendPredictabilityScoreCalculator) Name() string {
 }
 
 func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (float64, error) {
+	score, _, err := c.ScoreWithDirection(series)
+	return score, err
+}
+
+// ScoreWithDirection is Score plus the trend's direction, derived from the
+// same linear-regression slope that already determines the score's
+// magnitude — it's the sign Score() computed and then discarded via
+// math.Abs. bias is "up", "down", or "neutral" (flat/no-trend cases: too
+// few candles, zero-variance series, or a clustered/bimodal series that
+// isn't a real trend at all).
+//
+// This is the canonical direction source for anything that needs to know
+// which way *this specific* trend score points (setup classification,
+// trend-health computation) — see PR-072 for why this is kept separate
+// from the market-wide aggregate-return bias used elsewhere
+// (mkt.RegimeSummary.Bias / domain.EvaluationSnapshot.Bias): different
+// signal, different purpose, not a substitute for each other.
+func (c *TrendPredictabilityScoreCalculator) ScoreWithDirection(series domain.CandleSeries) (score float64, bias string, err error) {
 	n := series.Len()
 	if n < 2 {
-		return 0, fmt.Errorf("at least 2 candles required")
+		return 0, "neutral", fmt.Errorf("at least 2 candles required")
 	}
 	closes := make([]float64, n)
 	for i := 0; i < n; i++ {
@@ -40,7 +62,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 		den += (float64(i) - meanX) * (float64(i) - meanX)
 	}
 	if den == 0 {
-		return 0, fmt.Errorf("zero denominator in regression")
+		return 0, "neutral", fmt.Errorf("zero denominator in regression")
 	}
 	b := num / den // slope
 	// R^2 goodness of fit
@@ -51,7 +73,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 		ssRes += (closes[i] - fit) * (closes[i] - fit)
 	}
 	if ssTot == 0 {
-		return 0, nil // flat line
+		return 0, "neutral", nil // flat line
 	}
 	R2 := 1 - ssRes/ssTot
 	// Normalize slope by price range
@@ -66,9 +88,17 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	}
 	rangeClose := maxClose - minClose
 	if rangeClose == 0 {
-		return 0, nil // flat line
+		return 0, "neutral", nil // flat line
 	}
 	slopeNorm := b / rangeClose
+
+	bias = "neutral"
+	switch {
+	case slopeNorm > 0:
+		bias = "up"
+	case slopeNorm < 0:
+		bias = "down"
+	}
 
 	// Cluster gate: if close prices form two distinct price levels —
 	// like a step function (-|_) — the movement is a regime shift, not
@@ -77,7 +107,7 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	// candles, ensuring we catch real bimodal distributions (plateaus)
 	// rather than false-positiving on evenly-spaced linear data.
 	if closePricesClustered(closes) {
-		return 0, nil
+		return 0, "neutral", nil
 	}
 
 	// Shape validation: penalize trends whose visual shape contradicts
@@ -102,7 +132,21 @@ func (c *TrendPredictabilityScoreCalculator) Score(series domain.CandleSeries) (
 	if normalised > 1 {
 		normalised = 1
 	}
-	return normalised, nil
+
+	// Couple "no trend" and "no direction" by construction, not by
+	// coincidence: bias was set from the raw slope sign before
+	// shapePenalty/dirAgreement could crush the score toward zero. Every
+	// penalty path today happens to zero the score outright when it
+	// disqualifies a trend, so this is currently a no-op — but a future
+	// tweak to those penalties that leaves normalised tiny-but-nonzero
+	// would otherwise let a score this calculator itself considers
+	// "not a real trend" still report a confident up/down bias.
+	const negligible = 1e-9
+	if normalised < negligible {
+		bias = "neutral"
+	}
+
+	return normalised, bias, nil
 }
 
 // trendShapePenalty inspects the visual shape of the chart to penalize
@@ -216,6 +260,25 @@ func trendShapePenalty(closes []float64, slope, minClose, maxClose float64) floa
 // functions / regime shifts).  It sorts the closes and looks for a gap
 // > 10% of the total range that splits the series into two groups, each
 // containing at least 25% of the candles.
+//
+// A flat 10%-of-range threshold isn't enough on its own: for a short,
+// evenly-spaced monotonic trend (e.g. n=8-10), every sorted-adjacent gap
+// is ~range/(n-1), which routinely exceeds 10% purely from having few
+// candles — not from any plateau structure. To tell a real regime-shift
+// jump apart from normal spacing, the candidate gap must also dwarf the
+// typical size of the *other* adjacent gaps — a genuine plateau split
+// leaves tiny within-cluster gaps and one outsized between-cluster gap,
+// while a smooth trend has every gap roughly equal.
+//
+// The "other gaps" average deliberately excludes the candidate gap itself
+// rather than using, say, the median of all gaps: tick-rounded closes
+// routinely produce a monotonic staircase (e.g. 100,100,101,101,102,102,...)
+// where at least half the sorted-adjacent gaps are exactly 0 — that pulls
+// the median to 0 for a perfectly ordinary trend, which would (and
+// previously did) disable the outlier check entirely and fall back to the
+// bare 10%-of-range rule, false-positiving on every step. Averaging only
+// the non-candidate gaps stays representative of "typical spacing" even
+// when duplicates dominate, since sum(gaps) == valRange always holds.
 func closePricesClustered(vals []float64) bool {
 	n := len(vals)
 	if n < 8 {
@@ -237,12 +300,31 @@ func closePricesClustered(vals []float64) bool {
 	if valRange == 0 {
 		return false
 	}
-	minGroupSize := n / 4 // each plateau must hold ≥ 25% of candles
+
+	// jumpMultiplier is a heuristic tuned against synthetic monotonic-trend
+	// and step-function cases, not measured against production candle data —
+	// revisit if real-world false positives/negatives show up (e.g. a
+	// legitimate trend with one outsized single-candle move, which this
+	// gap-only heuristic cannot distinguish from a true two-plateau shift).
+	const jumpMultiplier = 3.0 // candidate gap must be this many times the typical gap
+
+	otherGapsCount := float64(n - 2) // (n-1) adjacent gaps minus the candidate
+	minGroupSize := n / 4            // each plateau must hold ≥ 25% of candles
 	for i := 1; i < n; i++ {
 		gap := sorted[i] - sorted[i-1]
-		if i >= minGroupSize && (n-i) >= minGroupSize && gap > 0.10*valRange {
-			return true
+		if i < minGroupSize || (n-i) < minGroupSize {
+			continue
 		}
+		if gap <= 0.10*valRange {
+			continue
+		}
+		// sum of all sorted-adjacent gaps == valRange, so the sum of every
+		// gap except this one is valRange-gap without re-scanning.
+		avgOtherGap := (valRange - gap) / otherGapsCount
+		if avgOtherGap > 0 && gap < jumpMultiplier*avgOtherGap {
+			continue // gap is in line with normal spacing, not an outlier jump
+		}
+		return true
 	}
 	return false
 }

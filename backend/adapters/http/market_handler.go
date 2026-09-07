@@ -29,6 +29,7 @@ type marketStateResponse struct {
 	EffectiveTrend float64          `json:"effectiveTrend"`
 	BreakdownRate  float64          `json:"breakdownRate"`
 	Label          string           `json:"label"`
+	DataQuality    string           `json:"dataQuality"`
 }
 
 type marketBreadthDTO struct {
@@ -45,7 +46,7 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tf = "4h"
 	}
 
-	summary, err := h.service.Calculate(tf)
+	summary, err := h.service.Calculate(r.Context(), tf)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return
@@ -60,6 +61,7 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		EffectiveTrend: roundTo(summary.EffectiveTrend, 4),
 		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
 		Label:          summary.Label,
+		DataQuality:    string(summary.DataQuality),
 		Breadth: marketBreadthDTO{
 			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 			Compression: roundTo(summary.Breadth.Compression, 4),

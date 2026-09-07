@@ -25,6 +25,14 @@ Map<String, String> authHeaders(
 /// re-claim a device credential and persist it so the next call to
 /// [getSecret] returns the new value — if it's null, or the retry still
 /// gets a 401, the 401 response is simply returned to the caller.
+///
+/// [reclaim] MUST be single-flighted by the caller (see
+/// `core/async/single_flight.dart`) if it can be shared across multiple
+/// concurrent [sendAuthenticated] calls, which is the normal case (one
+/// `reclaim` closure wired into every API client). Without that, a burst of
+/// requests failing with 401 around the same moment each start their own
+/// claim; only one can win (the backend's first-claim-wins rule), and the
+/// losing callers retry with a secret that was never updated for them.
 Future<http.Response> sendAuthenticated(
   Future<http.Response> Function(Map<String, String> headers) send,
   String? Function()? getSecret,

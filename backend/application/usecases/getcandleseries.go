@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"context"
 	"time"
 
 	"pano_chart/backend/application/ports"
@@ -9,7 +10,7 @@ import (
 
 // GetCandleSeries defines the use case interface.
 type GetCandleSeries interface {
-	Execute(symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error)
+	Execute(ctx context.Context, symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error)
 }
 
 // getCandleSeries is the concrete implementation of the use case.
@@ -23,6 +24,6 @@ func NewGetCandleSeries(repo ports.CandleRepositoryPort) GetCandleSeries {
 }
 
 // Execute delegates retrieval to the CandleRepositoryPort and returns the result unchanged.
-func (g *getCandleSeries) Execute(symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
-	return g.repo.GetSeries(symbol, tf, from, to)
+func (g *getCandleSeries) Execute(ctx context.Context, symbol domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+	return g.repo.GetSeries(ctx, symbol, tf, from, to)
 }

@@ -1,6 +1,7 @@
 package ports_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ type FakeCandleRepository struct {
 
 // GetSeries implements CandleRepositoryPort.
 func (f *FakeCandleRepository) GetSeries(
+	ctx context.Context,
 	symbol domain.Symbol,
 	timeframe domain.Timeframe,
 	from time.Time,
@@ -30,6 +32,7 @@ func (f *FakeCandleRepository) GetSeries(
 
 // GetLastNCandles implements CandleRepositoryPort.
 func (f *FakeCandleRepository) GetLastNCandles(
+	ctx context.Context,
 	symbol domain.Symbol,
 	timeframe domain.Timeframe,
 	n int,
@@ -62,7 +65,7 @@ func TestCandleRepositoryPort_GetSeriesReturnsCandleSeries(t *testing.T) {
 
 	repo := &FakeCandleRepository{series: series}
 
-	result, err := repo.GetSeries(sym, tf, ts, ts.Add(5*time.Minute))
+	result, err := repo.GetSeries(context.Background(), sym, tf, ts, ts.Add(5*time.Minute))
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -86,7 +89,7 @@ func TestCandleRepositoryPort_GetSeriesAllowsEmptyResult(t *testing.T) {
 
 	repo := &FakeCandleRepository{series: series}
 
-	result, err := repo.GetSeries(sym, tf, ts, ts.Add(5*time.Minute))
+	result, err := repo.GetSeries(context.Background(), sym, tf, ts, ts.Add(5*time.Minute))
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -104,7 +107,7 @@ func TestCandleRepositoryPort_ReturnsErrorOnFailure(t *testing.T) {
 
 	repo := &FakeCandleRepository{shouldErr: true}
 
-	_, err := repo.GetSeries(sym, tf, ts, ts.Add(5*time.Minute))
+	_, err := repo.GetSeries(context.Background(), sym, tf, ts, ts.Add(5*time.Minute))
 
 	if err == nil {
 		t.Error("expected error, got nil")
@@ -125,6 +128,7 @@ func TestCandleRepositoryPort_AcceptsTimeRange(t *testing.T) {
 
 	// Port should accept time range parameters
 	result, err := repo.GetSeries(
+		context.Background(),
 		sym,
 		tf,
 		ts,

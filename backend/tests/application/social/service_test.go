@@ -1,6 +1,7 @@
 package social_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ type stubProvider struct {
 
 func (s *stubProvider) Platform() string { return s.platform }
 
-func (s *stubProvider) Fetch(_ domain.Account) ([]domain.Post, error) {
+func (s *stubProvider) Fetch(_ context.Context, _ domain.Account) ([]domain.Post, error) {
 	return s.posts, s.err
 }
 
@@ -89,7 +90,7 @@ func TestService_FeedUsesCache(t *testing.T) {
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
 	// First call: cache miss → live fetch.
-	posts, err := svc.Feed("alice")
+	posts, err := svc.Feed(context.Background(), "alice")
 	if err != nil {
 		t.Fatalf("feed: %v", err)
 	}
@@ -101,7 +102,7 @@ func TestService_FeedUsesCache(t *testing.T) {
 	provider.posts = []domain.Post{{ID: "p2", Title: "world"}}
 
 	// Second call: should hit cache (still seeing p1).
-	posts, err = svc.Feed("alice")
+	posts, err = svc.Feed(context.Background(), "alice")
 	if err != nil {
 		t.Fatalf("feed (cached): %v", err)
 	}
@@ -145,7 +146,7 @@ func TestService_FilteredFeed_OmitRetweets(t *testing.T) {
 
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
-	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{OmitRetweets: true})
+	posts, err := svc.FilteredFeed(context.Background(), "alice", appsocial.FeedFilter{OmitRetweets: true})
 	if err != nil {
 		t.Fatalf("filtered feed: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestService_FilteredFeed_MinLength(t *testing.T) {
 
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
-	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{MinLength: 10})
+	posts, err := svc.FilteredFeed(context.Background(), "alice", appsocial.FeedFilter{MinLength: 10})
 	if err != nil {
 		t.Fatalf("filtered feed: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestService_FilteredFeed_Keywords(t *testing.T) {
 
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
-	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{Keywords: []string{"bitcoin", "eth"}})
+	posts, err := svc.FilteredFeed(context.Background(), "alice", appsocial.FeedFilter{Keywords: []string{"bitcoin", "eth"}})
 	if err != nil {
 		t.Fatalf("filtered feed: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestService_FilteredFeed_NoFilter(t *testing.T) {
 
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
-	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{})
+	posts, err := svc.FilteredFeed(context.Background(), "alice", appsocial.FeedFilter{})
 	if err != nil {
 		t.Fatalf("filtered feed: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestService_FilteredFeed_CombinedFilters(t *testing.T) {
 	svc := appsocial.NewService(provider, accStore, subStore, cache)
 
 	// Require: no retweets, min 10 chars, must mention "bitcoin" or "btc"
-	posts, err := svc.FilteredFeed("alice", appsocial.FeedFilter{
+	posts, err := svc.FilteredFeed(context.Background(), "alice", appsocial.FeedFilter{
 		OmitRetweets: true,
 		MinLength:    10,
 		Keywords:     []string{"bitcoin", "btc"},

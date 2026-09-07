@@ -71,3 +71,43 @@ func TestDedup_DifferentKeys(t *testing.T) {
 		t.Fatal("different key should not be seen")
 	}
 }
+
+func TestDedup_TryReserve_SecondCallerBlocked(t *testing.T) {
+	d := notifications.NewDeduplicator()
+
+	if !d.TryReserve("key1", time.Hour) {
+		t.Fatal("expected first reservation to succeed")
+	}
+	if d.TryReserve("key1", time.Hour) {
+		t.Fatal("expected second concurrent reservation for the same key to be blocked")
+	}
+}
+
+func TestDedup_TryReserve_ExpiredKeyReservable(t *testing.T) {
+	d := notifications.NewDeduplicator()
+
+	now := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	d.SetClock(func() time.Time { return now })
+
+	if !d.TryReserve("key1", 10*time.Minute) {
+		t.Fatal("expected first reservation to succeed")
+	}
+
+	d.SetClock(func() time.Time { return now.Add(11 * time.Minute) })
+	if !d.TryReserve("key1", 10*time.Minute) {
+		t.Fatal("expected reservation to succeed again after TTL expiry")
+	}
+}
+
+func TestDedup_Release_AllowsImmediateRetry(t *testing.T) {
+	d := notifications.NewDeduplicator()
+
+	if !d.TryReserve("key1", time.Hour) {
+		t.Fatal("expected first reservation to succeed")
+	}
+	d.Release("key1")
+
+	if !d.TryReserve("key1", time.Hour) {
+		t.Fatal("expected reservation to succeed immediately after release")
+	}
+}

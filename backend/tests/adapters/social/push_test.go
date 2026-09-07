@@ -601,6 +601,45 @@ func TestDeviceRegisterHandler_WrongMethod(t *testing.T) {
 	}
 }
 
+func TestDeviceRegisterHandler_LogOnlyMigrationFallback_UsesLegacyBodyUserID(t *testing.T) {
+	store := newMemDeviceStore()
+	handler := adhttp.NewDeviceRegisterHandler(store)
+
+	// No auth context (as RequireAuth would leave it in log-only mode for
+	// a pre-PR-070 client), but the old client still sends user_id in the
+	// body — must be trusted only because there's no verified identity yet.
+	body := `{"user_id":"legacy-user","device_id":"d1","fcm_token":"tok-123","platform":"android"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/device/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	tokens, _ := store.TokensForUsers([]string{"legacy-user"})
+	if len(tokens) != 1 {
+		t.Fatalf("expected device bound to legacy-user, got %d tokens", len(tokens))
+	}
+}
+
+func TestDeviceRegisterHandler_NoAuthContext_NoLegacyUserID_401(t *testing.T) {
+	store := newMemDeviceStore()
+	handler := adhttp.NewDeviceRegisterHandler(store)
+
+	body := `{"device_id":"d1","fcm_token":"tok-123","platform":"android"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/device/register", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestDeviceRegisterHandler_CrossUserDeviceIDReuse_409(t *testing.T) {
 	store := newMemDeviceStore()
 	_ = store.Register("u1", "d1", "tok-aaa", "android")
@@ -641,6 +680,31 @@ func TestDeviceUnregisterHandler_Success(t *testing.T) {
 	tokens, _ := store.TokensForUsers([]string{"u1"})
 	if len(tokens) != 0 {
 		t.Fatalf("expected device to be unregistered, got %d tokens", len(tokens))
+	}
+}
+
+func TestDeviceUnregisterHandler_NoAuthContext_401(t *testing.T) {
+	store := newMemDeviceStore()
+	_ = store.Register("u1", "d1", "tok-123", "android")
+
+	handler := adhttp.NewDeviceUnregisterHandler(store)
+
+	// Unlike Register, Unregister has no legacy identity field to fall
+	// back to — an unauthenticated request must be rejected even while
+	// RequireAuth is running in log-only mode.
+	body := `{"device_id":"d1"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/device/unregister", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+	tokens, _ := store.TokensForUsers([]string{"u1"})
+	if len(tokens) != 1 {
+		t.Fatalf("expected device to survive an unauthenticated unregister attempt, got %d tokens", len(tokens))
 	}
 }
 

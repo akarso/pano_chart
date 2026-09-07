@@ -27,10 +27,11 @@ func NewRateLimiter(tokensPerMinute int) *RateLimiter {
 	}
 }
 
-// Acquire blocks until the rate limiter allows the next request.
-func (r *RateLimiter) Acquire() {
+// Acquire blocks until the rate limiter allows the next request, or ctx is
+// done — whichever comes first.
+func (r *RateLimiter) Acquire(ctx context.Context) error {
 	atomic.AddInt64(&infra.GlobalMetrics.TokenAcquires, 1)
-	_ = r.limiter.Wait(context.Background())
+	return r.limiter.Wait(ctx)
 }
 
 // Release is a no-op retained for backward compatibility.

@@ -1,6 +1,7 @@
 package market_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,7 @@ type fakeEvalProvider struct {
 	err   error
 }
 
-func (f *fakeEvalProvider) GetLatestEvaluations(_ string) ([]domain.EvaluationSnapshot, error) {
+func (f *fakeEvalProvider) GetLatestEvaluations(_ context.Context, _ string) ([]domain.EvaluationSnapshot, error) {
 	return f.evals, f.err
 }
 
@@ -42,7 +43,7 @@ func TestClassify_BreakoutUp(t *testing.T) {
 			{BreakoutUpScore: 0.9, CompressionScore: 0.1, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +58,7 @@ func TestClassify_BreakoutDown(t *testing.T) {
 			{BreakoutDownScore: 0.75},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func TestClassify_Compression(t *testing.T) {
 			{CompressionScore: 0.8, TrendScore: 0.3},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestClassify_Trend(t *testing.T) {
 			{TrendScore: 0.70},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,7 @@ func TestClassify_DefaultSideways(t *testing.T) {
 			{SidewaysScore: 0.9, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func TestClassify_BreakoutTakesPriority(t *testing.T) {
 			{BreakoutUpScore: 0.9, CompressionScore: 0.9, TrendScore: 0.9},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestService_MajorityCompression(t *testing.T) {
 			{TrendScore: 0.8},
 		},
 	})
-	summary, err := svc.Calculate("4h")
+	summary, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestService_BreadthRatios(t *testing.T) {
 			{BreakoutUpScore: 0.9},                // breakout-dominated
 		},
 	})
-	summary, err := svc.Calculate("1h")
+	summary, err := svc.Calculate(context.Background(), "1h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestService_EmptyEvaluations(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		evals: []domain.EvaluationSnapshot{},
 	})
-	summary, err := svc.Calculate("4h")
+	summary, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestService_ProviderError(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		err: http.ErrServerClosed,
 	})
-	_, err := svc.Calculate("4h")
+	_, err := svc.Calculate(context.Background(), "4h")
 	if err == nil {
 		t.Fatal("expected error from provider")
 	}
@@ -216,7 +217,7 @@ func TestService_TimeframePassedThrough(t *testing.T) {
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
 		evals: []domain.EvaluationSnapshot{{SidewaysScore: 0.5}},
 	})
-	summary, err := svc.Calculate("15m")
+	summary, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +322,7 @@ func TestClassify_Bias_Up(t *testing.T) {
 			{TrendScore: 0.3, Bias: "down"},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +339,7 @@ func TestClassify_Bias_Down(t *testing.T) {
 			{TrendScore: 0.2, Bias: "up"},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +355,7 @@ func TestClassify_Bias_Neutral_NoBias(t *testing.T) {
 			{TrendScore: 0.5},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestClassify_Indecisive_NoDominantRegime(t *testing.T) {
 			{SidewaysScore: 0.5, TrendScore: 0.4, CompressionScore: 0.3, BreakoutUpScore: 0.3},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestClassify_Indecisive_CloseGap(t *testing.T) {
 			{SidewaysScore: 0.55, TrendScore: 0.45},
 		},
 	})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -423,7 +424,7 @@ func TestClassify_NotIndecisive_ClearDominance(t *testing.T) {
 			{TrendScore: 0.8, SidewaysScore: 0.2},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +448,7 @@ func TestClassify_Silent_FlatWithLowVolume(t *testing.T) {
 		}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +474,7 @@ func TestClassify_NotSilent_HighVolume(t *testing.T) {
 		}
 	}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
-	s, err := svc.Calculate("15m")
+	s, err := svc.Calculate(context.Background(), "15m")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,11 +490,94 @@ func TestClassify_NotSilent_NoVolumeData(t *testing.T) {
 			{SidewaysScore: 0.9, TrendScore: 0.1},
 		},
 	})
-	s, err := svc.Calculate("4h")
+	s, err := svc.Calculate(context.Background(), "4h")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if s.State == mkt.StateSilent {
 		t.Errorf("should not be silent without volume data, got %s", s.State)
+	}
+}
+
+// --- DataQuality (PR-074) ---
+//
+// Without this flag, a full evaluation-source outage (zero or a struggling
+// fraction of the usual symbol universe) is indistinguishable from a
+// genuinely quiet market — both read as State=sideways, Confidence≈0.
+
+func TestMarketStateService_Calculate_EmptyEvaluations_ReturnsUnavailable(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: nil})
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityUnavailable {
+		t.Errorf("expected DataQuality unavailable for zero evaluations, got %q", s.DataQuality)
+	}
+}
+
+func TestMarketStateService_Calculate_PartialFetchFailure_ReturnsDegraded(t *testing.T) {
+	// Far fewer evaluations than the expected symbol-universe size —
+	// simulates most fetches failing rather than the market genuinely
+	// having little going on.
+	evals := make([]domain.EvaluationSnapshot, 10)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityDegraded {
+		t.Errorf("expected DataQuality degraded for a small fraction of the usual universe, got %q", s.DataQuality)
+	}
+}
+
+func TestMarketStateService_Calculate_FullUniverse_ReturnsOK(t *testing.T) {
+	evals := make([]domain.EvaluationSnapshot, 150)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s.DataQuality != mkt.DataQualityOK {
+		t.Errorf("expected DataQuality ok for a full universe, got %q", s.DataQuality)
+	}
+}
+
+// TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary pins
+// down the 2*n < expected boundary at n == expectedSymbolCount/2 exactly
+// (150/2 == 75), and one below it — the exact case the "2*n, not n <
+// expected/2" comment in market_state_service.go argues about but wasn't
+// previously exercised by a test.
+func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testing.T) {
+	mkEvals := func(n int) []domain.EvaluationSnapshot {
+		evals := make([]domain.EvaluationSnapshot, n)
+		for i := range evals {
+			evals[i] = domain.EvaluationSnapshot{SidewaysScore: 0.5, TrendScore: 0.2}
+		}
+		return evals
+	}
+
+	svc75 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(75)})
+	s75, err := svc75.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s75.DataQuality != mkt.DataQualityOK {
+		t.Errorf("expected DataQuality ok at exactly half (75/150), got %q", s75.DataQuality)
+	}
+
+	svc74 := appmarket.NewMarketStateService(&fakeEvalProvider{evals: mkEvals(74)})
+	s74, err := svc74.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s74.DataQuality != mkt.DataQualityDegraded {
+		t.Errorf("expected DataQuality degraded one below half (74/150), got %q", s74.DataQuality)
 	}
 }

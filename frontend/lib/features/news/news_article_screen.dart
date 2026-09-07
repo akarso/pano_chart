@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../domain/news_article.dart';
@@ -32,6 +32,14 @@ class _NewsArticleScreenState extends State<NewsArticleScreen> {
 
   @override
   void dispose() {
+    // Clear the callback before triggering any further state changes —
+    // clearSelectedArticle() below synchronously invokes onChanged, which
+    // otherwise calls setState() on an element mid-unmount ("mounted" is
+    // still true at this point in the lifecycle; the framework still
+    // rejects the setState call). Found while adding test coverage for
+    // the flutter_markdown_plus migration (PR-078) — this screen had no
+    // widget test before, so nothing previously exercised dispose().
+    widget.viewModel.onChanged = null;
     widget.viewModel.clearSelectedArticle();
     super.dispose();
   }

@@ -104,7 +104,11 @@ func (h *NotificationConfigHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 }
 
 func (h *NotificationConfigHandler) handleGet(w http.ResponseWriter, r *http.Request) {
-	userID := middleware.UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDOrLegacyFallback(r.Context(), r.URL.Query().Get("user_id"))
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
 
 	cfg, err := h.store.Get(userID)
 	if err != nil {
@@ -123,9 +127,12 @@ func (h *NotificationConfigHandler) handlePut(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Ignore whatever the client sent — the authenticated user ID is the
-	// only source of truth for whose config this is.
-	dto.UserID = middleware.UserIDFromContext(r.Context())
+	userID, ok := middleware.UserIDOrLegacyFallback(r.Context(), dto.UserID)
+	if !ok {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	dto.UserID = userID // authenticated case: overrides whatever the client sent
 
 	if err := h.store.Save(fromDTO(dto)); err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)

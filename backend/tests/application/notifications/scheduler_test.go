@@ -12,13 +12,13 @@ import (
 )
 
 type fakeMarketProvider struct {
-	summaries map[string]mkt.RegimeSummary // keyed by timeframe
+	summaries map[string]mkt.Summary // keyed by timeframe
 	err       error
 }
 
-func (f *fakeMarketProvider) CalculateRegime(_ context.Context, tf string) (mkt.RegimeSummary, error) {
+func (f *fakeMarketProvider) Calculate(_ context.Context, tf string) (mkt.Summary, error) {
 	if f.err != nil {
-		return mkt.RegimeSummary{}, f.err
+		return mkt.Summary{}, f.err
 	}
 	if s, ok := f.summaries[tf]; ok {
 		return s, nil
@@ -27,13 +27,30 @@ func (f *fakeMarketProvider) CalculateRegime(_ context.Context, tf string) (mkt.
 	for _, s := range f.summaries {
 		return s, nil
 	}
-	return mkt.RegimeSummary{}, nil
+	return mkt.Summary{}, nil
 }
 
 // singleMarket is a helper that builds a fakeMarketProvider for one timeframe.
-func singleMarket(tf string, s mkt.RegimeSummary) *fakeMarketProvider {
+func singleMarket(tf string, s mkt.Summary) *fakeMarketProvider {
 	s.Timeframe = tf
-	return &fakeMarketProvider{summaries: map[string]mkt.RegimeSummary{tf: s}}
+	return &fakeMarketProvider{summaries: map[string]mkt.Summary{tf: s}}
+}
+
+// blockingMarketProvider's Calculate blocks until ctx is cancelled — a
+// stand-in for a slow real calculation (e.g. a cold-cache rankings run
+// across the whole symbol universe) that never returns on its own.
+type blockingMarketProvider struct {
+	calculateStarted chan struct{}
+}
+
+func newBlockingMarketProvider() *blockingMarketProvider {
+	return &blockingMarketProvider{calculateStarted: make(chan struct{})}
+}
+
+func (p *blockingMarketProvider) Calculate(ctx context.Context, _ string) (mkt.Summary, error) {
+	close(p.calculateStarted) // checkMarketState calls Calculate synchronously, so this fires at most once
+	<-ctx.Done()
+	return mkt.Summary{}, ctx.Err()
 }
 
 type fakeSetupProvider struct {
@@ -60,9 +77,9 @@ func TestScheduler_MarketState_HighConfidence(t *testing.T) {
 	eng := notifications.NewEngine(spy, cfg)
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime:     mkt.RegimeTrend,
-		Prevalence: 0.82,
+	market := singleMarket("1h", mkt.Summary{
+		State:      mkt.StateTrend,
+		Confidence: 0.82,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -83,9 +100,9 @@ func TestScheduler_MarketState_LowConfidence_Suppressed(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime:     mkt.RegimeSideways,
-		Prevalence: 0.50,
+	market := singleMarket("1h", mkt.Summary{
+		State:      mkt.StateSideways,
+		Confidence: 0.20,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -100,8 +117,8 @@ func TestScheduler_MarketState_OncePerDay(t *testing.T) {
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Regime: mkt.RegimeTrend, Prevalence: 0.9,
+	market := singleMarket("1h", mkt.Summary{
+		State: mkt.StateTrend, Confidence: 0.9,
 	})
 	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
 	sched.SetClock(func() time.Time { return now })
@@ -226,8 +243,9 @@ func TestScheduler_SubscriptionGating_MarketSuppressedForFreeUser(t *testing.T) 
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -257,8 +275,9 @@ func TestScheduler_SubscriptionGating_MarketSentToProUser(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -319,8 +338,9 @@ func TestScheduler_SubscriptionGating_MixedUsers(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -353,8 +373,9 @@ func TestScheduler_SubscriptionGating_NilChecker_AllowsAll(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -433,5 +454,51 @@ func TestScheduler_SetupOfDay_ConfidenceGate_AppliesToAllRegimes(t *testing.T) {
 	sched.CheckSetupOfDay(context.Background())
 	if spy.count() != 0 {
 		t.Fatal("expected no notification for non-trend setup with low confidence")
+	}
+}
+
+// TestScheduler_RunReturnsPromptlyWhenCalculateBlocksOnCancelledContext is
+// the regression test for PR-076 CR follow-up ("Scheduler Outlives
+// Repository"): before MarketProvider.Calculate took a context, a slow/hung
+// calculation could keep checkMarketState (and therefore Run, and therefore
+// graceful shutdown's bounded wait for this goroutine) blocked well past
+// shutdown's own deadline, letting it proceed to close regimeHistoryRepo
+// (reachable via Calculate's regime observer) while a resumed call was still
+// about to write to it. With ctx threaded through, cancelling ctx while
+// Calculate is in flight must unblock Calculate (and therefore Run) promptly
+// instead of leaving it to hang.
+func TestScheduler_RunReturnsPromptlyWhenCalculateBlocksOnCancelledContext(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	market := newBlockingMarketProvider()
+
+	cfg := notifications.DefaultSchedulerConfig()
+	cfg.MarketCheckInterval = 5 * time.Millisecond
+	cfg.MacroCheckInterval = time.Hour
+	cfg.SetupCheckInterval = time.Hour
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		sched.Run(ctx)
+		close(runDone)
+	}()
+
+	select {
+	case <-market.calculateStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Calculate was never invoked")
+	}
+
+	cancel()
+
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return promptly after context cancellation while Calculate was in flight — " +
+			"a graceful shutdown's bounded wait for this goroutine would expire and proceed to close " +
+			"regimeHistoryRepo while a resumed Calculate is still about to write to it")
 	}
 }

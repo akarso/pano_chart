@@ -1,15 +1,16 @@
 package http_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-	"encoding/json"
 
 	adhttp "pano_chart/backend/adapters/http"
-		"pano_chart/backend/domain"
+	"pano_chart/backend/domain"
 )
 
 // fakeUseCase implements usecases.GetCandleSeries for testing.
@@ -23,7 +24,7 @@ type fakeUseCase struct {
 	err      error
 }
 
-func (f *fakeUseCase) Execute(sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (f *fakeUseCase) Execute(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	f.called = true
 	f.lastSym = sym
 	f.lastTf = tf

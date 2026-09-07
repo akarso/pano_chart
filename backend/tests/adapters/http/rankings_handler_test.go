@@ -1,6 +1,7 @@
 package http_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,7 @@ type stubRanker struct {
 	Result []usecases.RankedSymbol
 }
 
-func (s *stubRanker) Rank(_ map[domain.Symbol]domain.CandleSeries) ([]usecases.RankedSymbol, error) {
+func (s *stubRanker) Rank(_ context.Context, _ map[domain.Symbol]domain.CandleSeries) ([]usecases.RankedSymbol, error) {
 	return s.Result, nil
 }
 

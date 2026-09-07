@@ -196,14 +196,14 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 		grp.Go(func() error {
 			defer sem.Release(1)
 
-			cs, err := g.candleRepo.GetLastNCandles(sym, req.Timeframe, g.precision)
+			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.precision)
 			if err != nil {
 				return nil // skip symbols with fetch errors (partial failure tolerance)
 			}
 
 			// Score inline — avoids building a full map and re-iterating.
 			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
-			ranked, err := ranker.Rank(singleSeries)
+			ranked, err := ranker.Rank(gCtx, singleSeries)
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}

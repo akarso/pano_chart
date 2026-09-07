@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestRankSymbols_ReturnsRawWeightedScores(t *testing.T) {
 		eth: stubSeries(eth),
 	}
 
-	result, err := ranker.Rank(series)
+	result, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +107,7 @@ func TestRankSymbols_RawScoresPreserved(t *testing.T) {
 		sol: stubSeries(sol),
 	}
 
-	result, err := ranker.Rank(series)
+	result, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestRankSymbols_PreservesRelativeOrderByTotalScore(t *testing.T) {
 		sol: stubSeries(sol),
 	}
 
-	result, err := ranker.Rank(series)
+	result, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestRankSymbols_EmptySeriesReturnsNil(t *testing.T) {
 	weights := []usecases.ScoreWeight{{Calculator: calc, Weight: 1.0}}
 	ranker := usecases.NewDefaultRankSymbols(weights)
 
-	result, err := ranker.Rank(map[domain.Symbol]domain.CandleSeries{})
+	result, err := ranker.Rank(context.Background(), map[domain.Symbol]domain.CandleSeries{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestRankSymbols_WeightsAppliedToRawScores(t *testing.T) {
 		eth: stubSeries(eth),
 	}
 
-	result, err := ranker.Rank(series)
+	result, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

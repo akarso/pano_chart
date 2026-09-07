@@ -8,7 +8,6 @@ import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/overview_banner.dart';
 import '../../core/polling_config.dart';
-// import '../../core/sequential_visual_executor.dart'; // PR-034: kept for potential future use
 import '../../core/sparkline_flash_dot.dart';
 import '../../domain/symbol.dart';
 import '../../domain/timeframe.dart';
@@ -114,6 +113,11 @@ class OverviewWidgetState extends State<OverviewWidget>
   bool _hiResSparklines = true;
   bool _excludeStablecoins = true;
   bool _showFavourites = false;
+
+  // True while build() is showing the free-tier upgrade banner (i.e. the
+  // list is capped at 15 items) — set at the end of every build so
+  // _checkAndLoadMore can skip paginating for data the cap won't show.
+  bool _freeTierCapActive = false;
   Set<String> _favourites = {};
 
   /// Which overlay panel is open (none by default).
@@ -145,6 +149,12 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   // ---- lifecycle registration ----
   Pausable? _pausable;
+  // Cached from didChangeDependencies — dispose() must not call
+  // AppLifecycleScope.of(context) itself: by the time dispose() runs the
+  // element may already be deactivated, and looking up an InheritedWidget
+  // ancestor on a deactivated element throws ("Looking up a deactivated
+  // widget's ancestor is unsafe").
+  AppLifecycleManager? _lifecycleManager;
 
   PreferencesService? get _prefs => widget.prefs;
 
@@ -260,34 +270,43 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_pausable == null) {
-      final mgr = AppLifecycleScope.of(context);
-      if (mgr != null) {
-        _pausable = Pausable(
-          onPause: () {
-            _autoRefreshTimer?.stop();
-            _stalenessTracker.stop();
-          },
-          onResume: () {
-            _autoRefreshTimer?.start();
-            _stalenessTracker.start();
-          },
-        );
-        mgr.addPausable(_pausable!);
-      }
+    final newManager = AppLifecycleScope.of(context);
+    if (identical(newManager, _lifecycleManager)) return;
+
+    // The manager instance changed — e.g. this widget was reparented under
+    // a different AppLifecycleScope. Move the registration instead of
+    // relying on the old "only ever register once" guard, which left
+    // _pausable registered on the OLD manager forever (never removed —
+    // dispose() only ever unregisters from whatever _lifecycleManager
+    // currently points to) while _lifecycleManager itself had already
+    // moved on to the new one.
+    if (_pausable != null) {
+      _lifecycleManager?.removePausable(_pausable!);
+    }
+    _lifecycleManager = newManager;
+    if (newManager != null) {
+      _pausable ??= Pausable(
+        onPause: () {
+          _autoRefreshTimer?.stop();
+          _stalenessTracker.stop();
+        },
+        onResume: () {
+          _autoRefreshTimer?.start();
+          _stalenessTracker.start();
+        },
+      );
+      newManager.addPausable(_pausable!);
     }
   }
 
   @override
   void dispose() {
-    final mgr = AppLifecycleScope.of(context);
-    if (_pausable != null) mgr?.removePausable(_pausable!);
+    if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     vm.onChanged = null;
     _autoRefreshTimer?.dispose();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _stalenessTracker.stop();
-    _stopFpsMonitor();
     for (final ctrl in _flashControllers.values) {
       ctrl.dispose();
     }
@@ -305,17 +324,15 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
     if (pos.pixels >= pos.maxScrollExtent - _scrollThreshold) {
-      if (!vm.state.isLoading && vm.state.hasMore) {
+      // Skip while the free-tier cap is showing — the grid's
+      // maxScrollExtent is tiny (15 items + banner), so "bottom" is
+      // reached almost immediately, and there's no point fetching more
+      // data the cap won't display anyway — see PR-077 CR follow-up.
+      if (!vm.state.isLoading && vm.state.hasMore && !_freeTierCapActive) {
         vm.loadNext(_timeframe);
       }
     }
   }
-
-  // ---- FPS monitoring (kept for future use) ----
-
-  void _startFpsMonitor() {}
-
-  void _stopFpsMonitor() {}
 
   // ---- flash dot helpers ----
 
@@ -484,11 +501,16 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   /// Returns `true` if the user has full access (subscription or trial).
   /// When access is denied, navigates to the [UpgradeScreen] and
-  /// returns `false`.
+  /// returns `false`. Fails closed: no billing manager means no access,
+  /// not unconditional access — see PR-078. A null billing manager still
+  /// can't be pushed through to [UpgradeScreen] (it requires one), so
+  /// that case just blocks navigation with nothing to show the user —
+  /// same tradeoff already accepted for the free-tier upgrade banner's
+  /// tap handler.
   bool _requireAccess() {
     final billing = widget.billingManager;
-    // No billing manager → no gating (non-Android / tests).
-    if (billing == null || billing.hasFullAccess) return true;
+    if (billing != null && billing.hasFullAccess) return true;
+    if (billing == null) return false;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => UpgradeScreen(billingManager: billing),
@@ -687,15 +709,6 @@ class OverviewWidgetState extends State<OverviewWidget>
                         ),
                       ),
                     ),
-                    // const Text(
-                    //   'your\nmissing\nelement',
-                    //   style: TextStyle(
-                    //     fontSize: 6,
-                    //     fontWeight: FontWeight.w700,
-                    //     color: Color(0xFF00E6C0),
-                    //     letterSpacing: 0.5,
-                    //   ),
-                    // ),
                   ],
                 ),
               ),
@@ -734,6 +747,7 @@ class OverviewWidgetState extends State<OverviewWidget>
           const SizedBox(width: 8),
           // Menu icon
           _NavBarIcon(
+            key: const ValueKey('overview-menu-nav-icon'),
             isActive: _overlay == _OverlayKind.menu,
             svgAsset: 'assets/menu.svg',
             onTap: () => _toggleOverlay(_OverlayKind.menu),
@@ -1505,10 +1519,22 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
 
     // Free tier: cap visible tokens to 15 (favourites view is unrestricted
-    // so users always see their picks).
+    // so users always see their picks). showUpgradeBanner drives a single
+    // unobtrusive tile at the cutoff point (not a modal/interstitial —
+    // matches the "no aggressive upselling" principle from PR-039) so the
+    // cap reads as a paywall, not a bug ("where are the rest of my
+    // tokens?").
+    var showUpgradeBanner = false;
+    int hiddenTokenCount = 0;
     if (!_showFavourites && !_capabilities.fullTokenList && visibleItems.length > 15) {
+      hiddenTokenCount = visibleItems.length - 15;
       visibleItems = visibleItems.sublist(0, 15);
+      showUpgradeBanner = true;
     }
+    // Mirrored into a field so _checkAndLoadMore (outside build) can skip
+    // paginating for data the free-tier cap won't show anyway — see PR-077
+    // CR follow-up.
+    _freeTierCapActive = showUpgradeBanner;
 
     if (_showFavourites && visibleItems.isEmpty) {
       return const Center(
@@ -1550,8 +1576,36 @@ class OverviewWidgetState extends State<OverviewWidget>
                 childAspectRatio: 2.5,
               ),
               itemCount: visibleItems.length +
-                  (!_showFavourites && state.hasMore ? 1 : 0),
+                  (showUpgradeBanner ? 1 : 0) +
+                  // Suppress the infinite-scroll loading tile once the free-tier
+                  // cap has already kicked in — there's nothing more to page in
+                  // for this view, and a spinner right after a hard cutoff would
+                  // read as "still loading" rather than "upgrade for more".
+                  (!_showFavourites && !showUpgradeBanner && state.hasMore ? 1 : 0),
               itemBuilder: (context, index) {
+                if (showUpgradeBanner && index == visibleItems.length) {
+                  return _UpgradeBannerTile(
+                    hiddenCount: hiddenTokenCount,
+                    columns: _columns,
+                    onTap: () {
+                      // billingManager can legitimately be null here as of
+                      // PR-078: Capabilities.fromBilling(null) now fails
+                      // closed to .free() (was .pro()), so this tile can
+                      // show even without a billing manager to launch a
+                      // purchase flow through (billing unavailable, e.g. a
+                      // future iOS build before billing lands there, or a
+                      // test). Nothing to do in that case — there's no
+                      // UpgradeScreen to navigate to without one.
+                      final billing = widget.billingManager;
+                      if (billing == null) return;
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => UpgradeScreen(billingManager: billing),
+                        ),
+                      );
+                    },
+                  );
+                }
                 if (index >= visibleItems.length) {
                   return const Center(child: CircularProgressIndicator());
                 }
@@ -1580,6 +1634,67 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 }
 
+// ---- free-tier upgrade banner tile ----
+
+/// A single grid cell shown at the free-tier 15-token cutoff, in place of
+/// silently truncating the list — see PR-077. Styled to sit naturally among
+/// the surrounding [_OverviewGridItem] cards (same [Card]/[AspectRatio]
+/// shape) rather than as a modal or interstitial.
+class _UpgradeBannerTile extends StatelessWidget {
+  final int hiddenCount;
+  final int columns;
+  final VoidCallback onTap;
+
+  const _UpgradeBannerTile({
+    required this.hiddenCount,
+    required this.columns,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final borderRadius = columns == 3 ? 6.0 : 12.0;
+    return GestureDetector(
+      onTap: onTap,
+      child: Card(
+        color: const Color(0xFF00E6C0).withAlpha((0.12 * 255).round()),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(borderRadius),
+          side: const BorderSide(color: Color(0xFF00E6C0), width: 1),
+        ),
+        child: AspectRatio(
+          aspectRatio: 2.5,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 16.0);
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.lock_outline,
+                        color: const Color(0xFF00E6C0), size: fontSize * 1.4),
+                    const SizedBox(height: 2),
+                    Text(
+                      '+$hiddenCount more tokens with Pro',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF00E6C0),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ---- nav bar icon widget ----
 
 class _NavBarIcon extends StatelessWidget {
@@ -1588,6 +1703,7 @@ class _NavBarIcon extends StatelessWidget {
   final VoidCallback onTap;
 
   const _NavBarIcon({
+    super.key,
     required this.isActive,
     required this.svgAsset,
     required this.onTap,

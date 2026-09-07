@@ -55,14 +55,64 @@ func TestNotificationConfigHandler_Get_UsesAuthenticatedUserID(t *testing.T) {
 	assert.Equal(t, "user1", resp["user_id"])
 }
 
-func TestNotificationConfigHandler_Get_NoAuthContext_Panics(t *testing.T) {
+func TestNotificationConfigHandler_Get_NoAuthContext_NoLegacyParam_401(t *testing.T) {
 	store := &fakeNotificationConfigStore{}
 	handler := adhttp.NewNotificationConfigHandler(store)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/notification/config", nil)
 	w := httptest.NewRecorder()
 
-	assert.Panics(t, func() { handler.ServeHTTP(w, req) })
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+}
+
+func TestNotificationConfigHandler_Get_LogOnlyMigrationFallback_UsesLegacyQueryParam(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	// No auth context (as RequireAuth would leave it in log-only mode for
+	// a pre-PR-070 client), but the client still sends the old ?user_id=.
+	req := httptest.NewRequest(http.MethodGet, "/api/notification/config?user_id=legacy-user", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	var resp map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	assert.Equal(t, "legacy-user", resp["user_id"])
+}
+
+func TestNotificationConfigHandler_Put_NoAuthContext_NoLegacyBody_401(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	body, _ := json.Marshal(map[string]interface{}{"uptrend": true})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Result().StatusCode)
+}
+
+func TestNotificationConfigHandler_Put_LogOnlyMigrationFallback_UsesLegacyBodyUserID(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	// No auth context, but the pre-PR-070 client still sends user_id in
+	// the body — must be trusted only because there's no verified identity
+	// available yet (log-only migration window).
+	body, _ := json.Marshal(map[string]interface{}{
+		"user_id": "legacy-user",
+		"uptrend": true,
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, "legacy-user", store.saved.UserID)
 }
 
 func TestNotificationConfigHandler_Put_IgnoresClientSuppliedUserID(t *testing.T) {

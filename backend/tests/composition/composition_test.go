@@ -1,6 +1,7 @@
 package composition_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +18,7 @@ type fakeRepo struct {
 	err    error
 }
 
-func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetSeries(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	f.called = true
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
@@ -25,7 +26,7 @@ func (f *fakeRepo) GetSeries(sym domain.Symbol, tf domain.Timeframe, from time.T
 	return f.series, nil
 }
 
-func (f *fakeRepo) GetLastNCandles(sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeRepo) GetLastNCandles(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, n int) (domain.CandleSeries, error) {
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
@@ -41,7 +42,7 @@ type fakeRedis struct {
 	lastTTL time.Duration
 }
 
-func (f *fakeRedis) Get(key string) ([]byte, error) {
+func (f *fakeRedis) Get(ctx context.Context, key string) ([]byte, error) {
 	if f.getErr != nil {
 		return nil, f.getErr
 	}
@@ -51,7 +52,7 @@ func (f *fakeRedis) Get(key string) ([]byte, error) {
 	}
 	return b, nil
 }
-func (f *fakeRedis) Set(key string, value []byte, ttl time.Duration) error {
+func (f *fakeRedis) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
 	if f.setErr != nil {
 		return f.setErr
 	}

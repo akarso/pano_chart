@@ -199,6 +199,64 @@ func TestSidewaysV5_HighVolatilityChaosRejected(t *testing.T) {
 	}
 }
 
+// TestDetectSidewaysV5_NonParallelChannel is a secondary, aggregate-level
+// regression test for PR-074: DetectSidewaysV5 used to fit both channel
+// boundaries through the same combined highs+lows point set, making
+// upperSlope == lowerSlope always and CCS's parallelScore component a
+// guaranteed 1.0 regardless of the real channel shape. A visibly widening
+// channel (upper boundary trending up, lower boundary flat) must now score
+// CCS meaningfully below a genuinely parallel channel's. This compares the
+// aggregate CCS score, which also mixes in deviationScore/widthStabilityScore
+// — it does NOT mean CCS was identical for both channels before the fix,
+// only that parallelScore specifically was pinned to 1.0 either way; see
+// TestDetectSidewaysV5_UpperLowerSlopesFitIndependently (internal package
+// test, sideways_v5_internal_test.go) for a direct assertion on the two
+// fitted slopes themselves, isolated from the rest of the CCS composite.
+func TestDetectSidewaysV5_NonParallelChannel(t *testing.T) {
+	buildChannel := func(upperDriftPerCandle float64) []domain.Candle {
+		candles := make([]domain.Candle, 110)
+		base := 100.0
+		sym, _ := domain.NewSymbol("TEST")
+		tf := domain.Timeframe1h
+		cycles := 5.0
+		for i := range candles {
+			phase := 2 * math.Pi * cycles * float64(i) / 110.0
+			drift := upperDriftPerCandle * float64(i)
+			candles[i] = domain.NewCandleUnsafe(
+				sym,
+				tf,
+				time.Unix(int64(i)*3600, 0).UTC(),
+				base,
+				base+1.0+drift+0.5*math.Sin(phase), // upper boundary: drifts up over time
+				base-1.0+0.5*math.Sin(phase),       // lower boundary: flat
+				base+0.2*math.Sin(phase),
+				1000,
+			)
+		}
+		return candles
+	}
+
+	cfg := scoring.SidewaysV5Config{N: 6, CandleCount: 110, IdealATRRange: 3.0, RangeTolerance: 1.5, ATRMultiplier: 3.0, W1: 1.3, W2: 1.2, W3: 1.0, W4: 1.0}
+
+	parallel := scoring.DetectSidewaysV5(buildChannel(0), cfg)
+	widening := scoring.DetectSidewaysV5(buildChannel(0.015), cfg)
+
+	parallelCCS, ok := parallel.Components["CCS"]
+	if !ok {
+		t.Fatal("expected CCS component in parallel-channel result")
+	}
+	wideningCCS, ok := widening.Components["CCS"]
+	if !ok {
+		t.Fatal("expected CCS component in widening-channel result")
+	}
+
+	if wideningCCS >= parallelCCS {
+		t.Errorf("expected widening channel's CCS (%v) to score below the parallel channel's (%v) — "+
+			"before the fix both boundaries were fit through the same point set, pinning parallelScore to 1.0 either way",
+			wideningCCS, parallelCCS)
+	}
+}
+
 func TestSidewaysV5_ComponentsNormalizedAndOutput(t *testing.T) {
 	// Arrange: create generic sideways structure
 	candles := make([]domain.Candle, 110)

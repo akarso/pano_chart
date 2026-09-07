@@ -42,8 +42,8 @@ func TestConfigStore_GetReturnsDefaultsForUnknownUser(t *testing.T) {
 	if !cfg.Uptrend || !cfg.Downtrend || !cfg.Sideways {
 		t.Fatal("expected all market toggles enabled by default")
 	}
-	if cfg.UptrendMinDominance != 0.75 {
-		t.Fatalf("expected 0.75 default, got %f", cfg.UptrendMinDominance)
+	if cfg.UptrendMinDominance != 0.35 {
+		t.Fatalf("expected 0.35 default, got %f", cfg.UptrendMinDominance)
 	}
 	if cfg.SetupMinScore != 0.75 {
 		t.Fatalf("expected 0.75 setup score, got %f", cfg.SetupMinScore)
@@ -154,14 +154,197 @@ func (m *memConfigStore) All() ([]notifications.NotificationConfig, error) {
 	return out, nil
 }
 
+// TestCheckMarketForUser_RegimeChangeSameDay_SendsSecondNotification is the
+// regression test for PR-075: the per-user market dedup key used to be
+// market_<timeframe>_<dateKey> — no regime component — so a genuine
+// intraday regime flip (e.g. Uptrend to Downtrend) produced no further
+// notification until the next calendar day. The key now includes the
+// winning candidate's label (Uptrend/Downtrend/Sideways/Silent), so a
+// label change re-arms the notification even on the same day, while a
+// steady regime still only fires once (Engine's 24h per-key dedup). The
+// regime change here happens well past MarketRegimeHoldDuration after the
+// first notification — a genuine, well-separated change, not a flap — see
+// TestCheckMarketForUser_FlappingRegime_StaysBoundedWithinHoldWindow for
+// the rapid-flip case this must NOT let through.
+func TestCheckMarketForUser_RegimeChangeSameDay_SendsSecondNotification(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Timeframe: "1h",
+		Breadth:   mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:      "up",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		Downtrend:             true,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		UptrendTimeframe:      "1h",
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 notification after the initial uptrend check, got %d", spy.userCount())
+	}
+
+	// Re-checking with no change must stay deduped (same day, same label).
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 1 {
+		t.Fatalf("expected the steady regime to stay deduped, got %d", spy.userCount())
+	}
+
+	// Regime flips intraday: uptrend -> downtrend, same calendar day, well
+	// past the regime-hold window since the last (only) change.
+	now = now.Add(notifications.DefaultSchedulerConfig().MarketRegimeHoldDuration + time.Minute)
+	market.summaries["1h"] = mkt.Summary{
+		Timeframe: "1h",
+		Breadth:   mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:      "down",
+	}
+
+	sched.CheckMarketState(context.Background())
+	if spy.userCount() != 2 {
+		t.Fatalf("expected a second notification after the same-day regime change, got %d", spy.userCount())
+	}
+}
+
+// TestCheckMarketForUser_FlappingRegime_StaysBoundedWithinHoldWindow is the
+// regression test for the PR-075 CR blocker: including best.label in the
+// dedup key means two candidates sitting close to each other near a
+// threshold can flip the "strongest" label every single check — and
+// without a hold, that produces a new key, and a new notification, on
+// every one-minute scheduler tick. Oscillates the winning candidate
+// between Uptrend and Downtrend on every check, all within the same
+// MarketRegimeHoldDuration window, and asserts only the first check's
+// notification goes out.
+func TestCheckMarketForUser_FlappingRegime_StaysBoundedWithinHoldWindow(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Timeframe: "1h",
+		Breadth:   mkt.Breadth{Trend: 0.36, Sideways: 0.10},
+		Bias:      "up",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		Downtrend:             true,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		UptrendTimeframe:      "1h",
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+
+	// 10 checks, one simulated minute apart, oscillating the winning
+	// candidate's bias (and therefore label) every tick — well within the
+	// 15-minute default hold window throughout.
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			market.summaries["1h"] = mkt.Summary{
+				Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "up",
+			}
+		} else {
+			market.summaries["1h"] = mkt.Summary{
+				Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "down",
+			}
+		}
+		sched.CheckMarketState(context.Background())
+		now = now.Add(time.Minute)
+	}
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected exactly 1 notification across 10 flapping ticks within the hold window, got %d", spy.userCount())
+	}
+}
+
+// TestCheckMarketForUser_FlappingAcrossTimeframes_StaysBoundedWithinHoldWindow
+// is the regression test for the second-round CR follow-up: the hold used
+// to be keyed on "userID|winningTimeframe". A user with different regimes
+// on different timeframes (Uptrend on 15m, Downtrend on 1h —
+// UptrendTimeframe/DowntrendTimeframe are independently configurable) whose
+// winning *timeframe* flips tick to tick landed each flip under a different
+// per-timeframe key, so neither key ever accumulated enough history to
+// trigger the hold — the exact bug the hold was added to close, reopened
+// via a different axis (timeframe instead of label). The hold is now keyed
+// on userID alone.
+func TestCheckMarketForUser_FlappingAcrossTimeframes_StaysBoundedWithinHoldWindow(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := &fakeMarketProvider{
+		summaries: map[string]mkt.Summary{
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "down"},
+		},
+	}
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		Downtrend:             true,
+		UptrendMinDominance:   0.35,
+		DowntrendMinDominance: 0.35,
+		UptrendTimeframe:      "15m",
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+
+	// 10 checks, one simulated minute apart, alternating which timeframe's
+	// candidate has the higher prevalence — the winning (label, timeframe)
+	// flips between Uptrend/15m and Downtrend/1h every tick, well within
+	// the 15-minute default hold window throughout.
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			market.summaries["15m"] = mkt.Summary{Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "up"}
+			market.summaries["1h"] = mkt.Summary{Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "down"}
+		} else {
+			market.summaries["15m"] = mkt.Summary{Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.36, Sideways: 0.10}, Bias: "up"}
+			market.summaries["1h"] = mkt.Summary{Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.10}, Bias: "down"}
+		}
+		sched.CheckMarketState(context.Background())
+		now = now.Add(time.Minute)
+	}
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected exactly 1 notification across 10 cross-timeframe flapping ticks within the hold window, got %d", spy.userCount())
+	}
+}
+
 func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	spy := &spySender{}
 	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.82, Sideways: 0.10},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:    "up",
 	})
 
 	cfgStore := newMemConfigStore()
@@ -192,6 +375,144 @@ func TestScheduler_PerUser_MarketUptrend(t *testing.T) {
 	if rec.n.Type != notifications.TypeMarket {
 		t.Fatalf("expected TypeMarket, got %s", rec.n.Type)
 	}
+	if rec.n.Body != "Market is Uptrend (82%, 1h)" {
+		t.Fatalf("unexpected body: %s", rec.n.Body)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_FiresOnBearishRegime(t *testing.T) {
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.82, Sideways: 0.10},
+		Bias:    "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 per-user downtrend notification, got %d", spy.userCount())
+	}
+	rec := spy.lastUserSend()
+	if rec.userID != "u1" {
+		t.Fatalf("expected user u1, got %s", rec.userID)
+	}
+	if rec.n.Body != "Market is Downtrend (82%, 1h)" {
+		t.Fatalf("unexpected body: %s", rec.n.Body)
+	}
+}
+
+func TestScheduler_PerUser_MarketDowntrend_DoesNotFireOnExpansion(t *testing.T) {
+	// Regression test for the PR-072 bug: Downtrend used to read
+	// Scores.Expansion (breakout activity) with no direction check at
+	// all — a high-Expansion, bullish (or even neutral) regime must NOT
+	// trigger a "Downtrend" alert.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Expansion: 0.90, Trend: 0.10},
+		Bias:    "up", // strong breakout, but to the upside
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Downtrend:             true,
+		DowntrendMinDominance: 0.75,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no downtrend notification for a bullish expansion regime, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_PerUser_MarketUptrend_DoesNotFireOnBearishRegime(t *testing.T) {
+	// Symmetric regression test: a strong trend score with a bearish bias
+	// must not satisfy an Uptrend subscription.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.90, Sideways: 0.05},
+		Bias:    "down",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:              "u1",
+		Uptrend:             true,
+		UptrendMinDominance: 0.75,
+		UptrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no uptrend notification during a confirmed decline, got %d", spy.userCount())
+	}
+}
+
+func TestScheduler_PerUser_NeutralBias_NeitherUptrendNorDowntrendFires(t *testing.T) {
+	// Regression test: a regime with no real direction (Bias == "neutral")
+	// must satisfy neither an Uptrend nor a Downtrend subscription, even
+	// with both configured and their dominance thresholds at 0.
+	spy := &spySender{}
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return now })
+
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.90, Sideways: 0.05},
+		Bias:    "neutral",
+	})
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:                "u1",
+		Uptrend:               true,
+		UptrendMinDominance:   0,
+		UptrendTimeframe:      "1h",
+		Downtrend:             true,
+		DowntrendMinDominance: 0,
+		DowntrendTimeframe:    "1h",
+	})
+
+	sched := notifications.NewScheduler(eng, market, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetConfigStore(cfgStore)
+	sched.SetClock(func() time.Time { return now })
+	sched.CheckMarketState(context.Background())
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no notification for a neutral-bias regime, got %d", spy.userCount())
+	}
 }
 
 func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
@@ -200,8 +521,8 @@ func TestScheduler_PerUser_BelowThreshold_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.60, Sideways: 0.30},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.60, Sideways: 0.30},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -231,8 +552,8 @@ func TestScheduler_PerUser_DisabledRegime_Suppressed(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.85},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.85},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -259,8 +580,8 @@ func TestScheduler_PerUser_StrongestRegimeWins(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	eng.SetClock(func() time.Time { return now })
 
-	market := singleMarket("1h", mkt.RegimeSummary{
-		Scores: mkt.RegimeScores{Trend: 0.40, Sideways: 0.45, Compression: 0.10},
+	market := singleMarket("1h", mkt.Summary{
+		Breadth: mkt.Breadth{Trend: 0.40, Sideways: 0.45, Compression: 0.10},
 	})
 
 	cfgStore := newMemConfigStore()
@@ -382,9 +703,9 @@ func TestScheduler_PerUser_DifferentTimeframesPerRegime(t *testing.T) {
 
 	// 15m shows uptrend at 80%, 1h shows uptrend at 50%.
 	market := &fakeMarketProvider{
-		summaries: map[string]mkt.RegimeSummary{
-			"15m": {Timeframe: "15m", Scores: mkt.RegimeScores{Trend: 0.80, Sideways: 0.10, Compression: 0.05}},
-			"1h":  {Timeframe: "1h", Scores: mkt.RegimeScores{Trend: 0.50, Sideways: 0.30, Compression: 0.10}},
+		summaries: map[string]mkt.Summary{
+			"15m": {Timeframe: "15m", Breadth: mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05}, Bias: "up"},
+			"1h":  {Timeframe: "1h", Breadth: mkt.Breadth{Trend: 0.50, Sideways: 0.30, Compression: 0.10}, Bias: "up"},
 		},
 	}
 
@@ -487,6 +808,54 @@ func TestConfigStore_TimeframeRoundtrip(t *testing.T) {
 	}
 	if got.SetupTimeframe != "5m" {
 		t.Fatalf("expected 5m, got %s", got.SetupTimeframe)
+	}
+}
+
+func TestConfigStore_ResetsMinDominanceFieldsForPreMigrationConfigs(t *testing.T) {
+	// Regression test covering two successive semantic changes to the
+	// *MinDominance fields:
+	//   - PR-072: DowntrendMinDominance moved from thresholding
+	//     Scores.Expansion to Scores.Trend.
+	//   - PR-073: all three fields moved from thresholding the softmax
+	//     pipeline's output to MarketStateService's proportional Breadth,
+	//     a structurally flatter scale (see DefaultNotificationConfig's doc).
+	// A config stored before either change (config_version 0) must not
+	// silently reuse thresholds tuned for a metric that no longer exists —
+	// Get should reset all three to the current defaults.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := infranotify.NewSQLiteConfigStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const legacyJSON = `{"downtrend":true,"downtrend_min_dominance":0.40,"uptrend_min_dominance":0.60,"sideways_min_dominance":0.60}`
+	_, err = db.Exec(`INSERT INTO notification_config (user_id, config, updated_at)
+		VALUES (?, ?, datetime('now'))`, "u-pre-migration", legacyJSON)
+	if err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+
+	got, err := store.Get("u-pre-migration")
+	if err != nil {
+		t.Fatalf("get error: %v", err)
+	}
+	const wantDefault = 0.35
+	if got.DowntrendMinDominance != wantDefault {
+		t.Fatalf("expected DowntrendMinDominance reset to default %v, got %f", wantDefault, got.DowntrendMinDominance)
+	}
+	if got.UptrendMinDominance != wantDefault {
+		t.Fatalf("expected UptrendMinDominance reset to default %v, got %f", wantDefault, got.UptrendMinDominance)
+	}
+	if got.SidewaysMinDominance != wantDefault {
+		t.Fatalf("expected SidewaysMinDominance reset to default %v, got %f", wantDefault, got.SidewaysMinDominance)
+	}
+	// Genuinely unrelated fields must survive untouched.
+	if !got.Downtrend {
+		t.Fatal("expected Downtrend toggle to remain true")
 	}
 }
 

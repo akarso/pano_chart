@@ -103,12 +103,22 @@ func (s *SQLiteDeviceStore) Register(userID, deviceID, fcmToken, platform string
 		// The conflict branch's WHERE guard rejected the write — the row
 		// exists and belongs to someone else. Confirm before reporting
 		// (defensive; this read isn't what makes the check race-free, the
-		// WHERE guard above already is).
+		// WHERE guard above already is) — but a failure here must not be
+		// swallowed into a false "success", since we then don't actually
+		// know whether the registration went through.
 		var existingUser string
-		lookupErr := s.db.QueryRow(`SELECT user_id FROM device_tokens WHERE device_id = ?`, deviceID).Scan(&existingUser)
-		if lookupErr == nil && existingUser != userID {
+		err := s.db.QueryRow(`SELECT user_id FROM device_tokens WHERE device_id = ?`, deviceID).Scan(&existingUser)
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("register device: conflict reported but no row found for device_id=%s", deviceID)
+		}
+		if err != nil {
+			return fmt.Errorf("confirming device ownership: %w", err)
+		}
+		if existingUser != userID {
 			return appsocial.ErrDeviceOwnedByAnotherUser
 		}
+		// existingUser == userID: a concurrent identical registration from
+		// the same user landed between our Exec and this check — benign.
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package usecases
 
 import (
+	"context"
 	"pano_chart/backend/domain"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestRankSymbols_SingleCalculatorUniformWeight(t *testing.T) {
 		makeSymbol("A"): makeSeries(),
 		makeSymbol("B"): makeSeries(),
 	}
-	res, err := ranker.Rank(series)
+	res, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +58,7 @@ func TestRankSymbols_MultipleCalculatorsDifferentWeights(t *testing.T) {
 	series := map[domain.Symbol]domain.CandleSeries{
 		makeSymbol("A"): makeSeries(),
 	}
-	res, err := ranker.Rank(series)
+	res, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestRankSymbols_ConflictingScores(t *testing.T) {
 	series := map[domain.Symbol]domain.CandleSeries{
 		makeSymbol("A"): makeSeries(),
 	}
-	res, _ := ranker.Rank(series)
+	res, _ := ranker.Rank(context.Background(), series)
 	// Total = 1.0*1.0 + (-1.0)*1.0 = 0.0
 	if res[0].TotalScore != 0.0 {
 		t.Errorf("expected 0.0, got %v", res[0].TotalScore)
@@ -94,7 +95,7 @@ func TestRankSymbols_DeterministicOrderingWithEqualScores(t *testing.T) {
 		makeSymbol("B"): makeSeries(),
 		makeSymbol("A"): makeSeries(),
 	}
-	res, _ := ranker.Rank(series)
+	res, _ := ranker.Rank(context.Background(), series)
 	if res[0].Symbol.String() != "A" {
 		t.Errorf("expected A first, got %s", res[0].Symbol.String())
 	}
@@ -107,7 +108,7 @@ func TestRankSymbols_IgnoreZeroWeightCalculators(t *testing.T) {
 	series := map[domain.Symbol]domain.CandleSeries{
 		makeSymbol("A"): makeSeries(),
 	}
-	res, _ := ranker.Rank(series)
+	res, _ := ranker.Rank(context.Background(), series)
 	if res[0].TotalScore != 0 {
 		t.Errorf("expected 0, got %v", res[0].TotalScore)
 	}
@@ -118,7 +119,7 @@ func TestRankSymbols_EmptyInput(t *testing.T) {
 	weights := []ScoreWeight{{Calculator: calc, Weight: 1.0}}
 	ranker := NewDefaultRankSymbols(weights)
 	series := map[domain.Symbol]domain.CandleSeries{}
-	res, err := ranker.Rank(series)
+	res, err := ranker.Rank(context.Background(), series)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

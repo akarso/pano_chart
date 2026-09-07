@@ -13,9 +13,14 @@ import (
 
 // ---------- provider ports ----------
 
-// MarketProvider returns the current regime summary for a timeframe.
+// MarketProvider returns the current market summary for a timeframe. Must
+// honor ctx cancellation — see PR-076 CR follow-up: this is called from
+// Scheduler.Run's background goroutine, and a Calculate that can't be
+// aborted keeps Run blocked past graceful shutdown's bounded wait for
+// that goroutine, risking a write to regimeHistoryRepo (via the regime
+// observer inside Calculate) after it's been closed.
 type MarketProvider interface {
-	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
+	Calculate(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // SetupProvider returns the best setup for a timeframe.
@@ -39,18 +44,39 @@ type SchedulerConfig struct {
 	SetupCheckInterval  time.Duration // how often to check best setup
 	SetupMinScore       float64       // minimum score to notify (legacy)
 	Timeframe           string        // fallback timeframe for legacy broadcast
+
+	// MarketRegimeHoldDuration is the minimum time between two per-user
+	// market notifications, period — not per timeframe — see PR-075 CR
+	// follow-up. The dedup key change that let a genuine intraday regime
+	// flip re-arm the same day (PR-075) also means the winning candidate
+	// (label and/or timeframe) can flip every single MarketCheckInterval
+	// tick when two candidates sit close to each other near a threshold,
+	// producing a new key — and therefore a new notification — every tick.
+	// This hold duration is checked BEFORE the per-key dedup, independent
+	// of it: no second notification for a user fires within this window no
+	// matter how many times the winning candidate changes inside it, only
+	// once it has elapsed does the next check's candidate (whatever it is
+	// by then) get a real chance to notify.
+	MarketRegimeHoldDuration time.Duration
 }
 
 // DefaultSchedulerConfig returns production defaults.
+//
+// MarketMinConfidence is 0.35, not 0.75 — see
+// notifications.DefaultNotificationConfig's doc and PR-073.md: it gates on
+// MarketStateService's proportional Confidence, which rarely exceeds ~0.4
+// even in a strongly trending market (measured), so 0.75 was practically
+// unreachable after PR-073.
 func DefaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
-		MacroCheckInterval:  1 * time.Minute,
-		MacroLeadTime:       30 * time.Minute,
-		MarketCheckInterval: 1 * time.Minute,
-		MarketMinConfidence: 0.75,
-		SetupCheckInterval:  1 * time.Minute,
-		SetupMinScore:       0.75,
-		Timeframe:           "1h",
+		MacroCheckInterval:       1 * time.Minute,
+		MacroLeadTime:            30 * time.Minute,
+		MarketCheckInterval:      1 * time.Minute,
+		MarketMinConfidence:      0.35,
+		SetupCheckInterval:       1 * time.Minute,
+		SetupMinScore:            0.75,
+		Timeframe:                "1h",
+		MarketRegimeHoldDuration: 15 * time.Minute,
 	}
 }
 
@@ -67,6 +93,10 @@ type Scheduler struct {
 	subscriptions SubscriptionChecker     // optional — gates pro-only notifications
 	cfg           SchedulerConfig
 	now           func() time.Time
+
+	// marketHold decides suppression for the regime-hold check in
+	// checkMarketForUser — see market_regime_hold.go.
+	marketHold *marketRegimeHold
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -78,12 +108,13 @@ func NewScheduler(
 	cfg SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		engine: engine,
-		market: market,
-		setups: setups,
-		events: events,
-		cfg:    cfg,
-		now:    time.Now,
+		engine:     engine,
+		market:     market,
+		setups:     setups,
+		events:     events,
+		cfg:        cfg,
+		now:        time.Now,
+		marketHold: newMarketRegimeHold(cfg.MarketRegimeHoldDuration),
 	}
 }
 
@@ -274,17 +305,17 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		}
 
 		tfs := collectTimeframes(configs)
-		summaries := make(map[string]mkt.RegimeSummary, len(tfs))
+		summaries := make(map[string]mkt.Summary, len(tfs))
 		for tf := range tfs {
-			summary, err := s.market.CalculateRegime(ctx, tf)
+			summary, err := s.market.Calculate(ctx, tf)
 			if err != nil {
 				log.Printf("[notify-scheduler] market calc %s error: %v", tf, err)
 				continue
 			}
-			log.Printf("[notify-scheduler] market %s: regime=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
-				tf, summary.Regime, summary.Prevalence,
-				summary.Scores.Trend, summary.Scores.Sideways,
-				summary.Scores.Compression, summary.Scores.Expansion)
+			log.Printf("[notify-scheduler] market %s: regime=%s bias=%s prevalence=%.2f scores={trend=%.2f sideways=%.2f compression=%.2f expansion=%.2f}",
+				tf, summary.State, summary.Bias, summary.Confidence,
+				summary.Breadth.Trend, summary.Breadth.Sideways,
+				summary.Breadth.Compression, summary.Breadth.Expansion)
 			summaries[tf] = summary
 		}
 
@@ -295,37 +326,42 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 	}
 
 	// Legacy broadcast path (no config store).
-	summary, err := s.market.CalculateRegime(ctx, s.cfg.Timeframe)
+	summary, err := s.market.Calculate(ctx, s.cfg.Timeframe)
 	if err != nil {
 		log.Printf("[notify-scheduler] market state error: %v", err)
 		return
 	}
 
-	if summary.Prevalence < s.cfg.MarketMinConfidence {
+	if summary.Confidence < s.cfg.MarketMinConfidence {
 		return
 	}
 
 	var msg string
-	switch summary.Regime {
-	case mkt.RegimeSideways:
+	switch summary.State {
+	case mkt.StateSideways:
 		msg = "Market mostly sideways today"
-	case mkt.RegimeTrend:
-		if summary.Label != "" {
+	case mkt.StateTrend:
+		switch {
+		case summary.Label != "":
 			msg = summary.Label
-		} else {
+		case summary.Bias == "up":
+			msg = "Market trending up today"
+		case summary.Bias == "down":
+			msg = "Market trending down today"
+		default:
 			msg = "Market trending today"
 		}
-	case mkt.RegimeCompression:
+	case mkt.StateCompression:
 		msg = "Market in compression — expansion likely"
-	case mkt.RegimeExpansion:
+	case mkt.StateExpansion:
 		msg = "Market expansion in progress"
-	case mkt.RegimeSilent:
+	case mkt.StateSilent:
 		msg = "Market is quiet — low activity"
-	case mkt.RegimeIndecisive:
+	case mkt.StateIndecisive:
 		// Do not push for indecisive — nothing actionable.
 		return
 	default:
-		msg = "Market regime: " + string(summary.Regime)
+		msg = "Market regime: " + string(summary.State)
 	}
 
 	_ = s.engine.Send(ctx, Notification{
@@ -333,14 +369,14 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		Title: "Market Update",
 		Body:  msg,
 		Data:  map[string]string{"type": string(TypeMarket)},
-		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.Regime),
+		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
 	})
 }
 
-// checkMarketForUser evaluates the regime scores against a single user's
+// checkMarketForUser evaluates the market breadth against a single user's
 // enabled regimes and thresholds. Each regime may reference a different
 // timeframe. The strongest qualifying regime wins.
-func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.RegimeSummary) {
+func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConfig, summaries map[string]mkt.Summary) {
 	if !s.userHasProAccess(ctx, cfg.UserID) {
 		log.Printf("[notify-scheduler] market: user=%s blocked by subscription check", cfg.UserID)
 		return
@@ -354,37 +390,63 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 
 	var candidates []candidate
 
-	// Uptrend — maps to Scores.Trend.
-	// Skip if the regime is indecisive — nothing actionable.
+	// Uptrend — maps to Breadth.Trend, gated on the regime's actual
+	// direction (sum.Bias, an aggregate-return-based signal computed by
+	// MarketStateService.Calculate — see PR-072).
+	//
+	// Deliberately NOT gated on sum.State != mkt.StateIndecisive (PR-073):
+	// State is a market-wide "which single regime dominates everything"
+	// classification, averaged across the whole symbol universe — under the
+	// proportional pipeline that bar is rarely cleared even in a genuinely
+	// strong trend (measured ~0.4 Breadth.Trend, see PR-073.md), so requiring
+	// a clean State on top of it would leave this notification almost never
+	// firing. Bias + a UptrendMinDominance-cleared Breadth.Trend is already
+	// a sufficient, more targeted signal for "is there real, directional
+	// trend strength on this timeframe" — it doesn't need the market's other
+	// three regimes to also lose to trend.
 	if cfg.Uptrend {
-		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
-			p := sum.Scores.Trend
+		if sum, ok := summaries[cfg.UptrendTimeframe]; ok && sum.Bias == "up" {
+			p := sum.Breadth.Trend
 			if p >= cfg.UptrendMinDominance {
-				lbl := "Uptrend"
-				if sum.Label != "" {
-					lbl = sum.Label
-				}
-				candidates = append(candidates, candidate{lbl, p, cfg.UptrendTimeframe})
+				// Always "Uptrend", never sum.Label (e.g. "Strong trend") —
+				// BuildMarketLabel's labels are direction-agnostic and would
+				// obscure the very bullish/bearish distinction this
+				// notification exists to convey.
+				candidates = append(candidates, candidate{"Uptrend", p, cfg.UptrendTimeframe})
 			}
 		}
 	}
-	// Downtrend — maps to Scores.Expansion (breakout/expansion activity).
+	// Downtrend — maps to Breadth.Trend gated on sum.Bias == "down". This
+	// used to read Breadth.Expansion (breakout/expansion activity, nothing
+	// to do with direction) — a "Downtrend" subscriber was getting
+	// breakout alerts and never anything about actual declines. Fixed in
+	// PR-072.
+	//
+	// Side effect: existing users' DowntrendMinDominance values were tuned
+	// against Expansion score magnitudes, which have a different
+	// distribution than Trend scores. SQLiteConfigStore.fromJSON resets this
+	// field to the default for any config stored before this change
+	// (config_version < 1) rather than silently reusing a threshold tuned
+	// for a different metric — see infrastructure/notifications/sqlite_config_store.go.
+	// Also not gated on State != Indecisive — see the Uptrend branch above.
 	if cfg.Downtrend {
-		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
-			p := sum.Scores.Expansion
+		if sum, ok := summaries[cfg.DowntrendTimeframe]; ok && sum.Bias == "down" {
+			p := sum.Breadth.Trend
 			if p >= cfg.DowntrendMinDominance {
-				candidates = append(candidates, candidate{"Expansion", p, cfg.DowntrendTimeframe})
+				// Always "Downtrend" — see the Uptrend branch above for why
+				// sum.Label must not be used here.
+				candidates = append(candidates, candidate{"Downtrend", p, cfg.DowntrendTimeframe})
 			}
 		}
 	}
-	// Sideways — maps to Scores.Sideways.
+	// Sideways — maps to Breadth.Sideways.
 	if cfg.Sideways {
-		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok && sum.Regime != mkt.RegimeIndecisive {
+		if sum, ok := summaries[cfg.SidewaysTimeframe]; ok && sum.State != mkt.StateIndecisive {
 			lbl := "Sideways"
-			if sum.Regime == mkt.RegimeSilent {
+			if sum.State == mkt.StateSilent {
 				lbl = "Silent"
 			}
-			p := sum.Scores.Sideways
+			p := sum.Breadth.Sideways
 			if p >= cfg.SidewaysMinDominance {
 				candidates = append(candidates, candidate{lbl, p, cfg.SidewaysTimeframe})
 			}
@@ -408,16 +470,61 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 		}
 	}
 
-	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
-	dateKey := s.now().Format("2006-01-02")
+	// Regime-hold check — see market_regime_hold.go for why this exists
+	// (two candidates near a threshold can otherwise flip the "strongest"
+	// one, and therefore the dedup key below, every single check) and why
+	// it's a separate type rather than inline state here.
+	//
+	// reserve() does not yet commit the new anchor — see PR-075 CR
+	// follow-up (Issue 2): committing before SendToUser is known to have
+	// succeeded would consume the hold window (and block a concurrent
+	// duplicate call) even for a change that never actually reached the
+	// user. The anchor is only committed below once SendToUser returns
+	// successfully; on failure the reservation is released so the next
+	// check can retry without waiting out the full hold.
+	now := s.now()
+	proceed, prev, changed := s.marketHold.reserve(cfg.UserID, best.label, best.timeframe, now)
+	if !proceed {
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s suppressed (regime hold or send already in flight, %s since last change to %q on %q)",
+			cfg.UserID, best.timeframe, best.label, now.Sub(prev.at), prev.label, prev.timeframe)
+		return
+	}
 
-	_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
+	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
+	dateKey := now.Format("2006-01-02")
+
+	err := s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
 		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
-		Key:   fmt.Sprintf("market_%s_%s", best.timeframe, dateKey),
+		// best.label (Uptrend/Downtrend/Sideways/Silent) is included, not
+		// just the date — PR-075. Without it, one notification per
+		// (timeframe, day) meant a genuine intraday regime flip (e.g.
+		// Uptrend to Downtrend) produced no further notification until
+		// tomorrow. The date component stays: a steady regime should still
+		// only fire once per day, not on every scheduler tick. The regime
+		// hold check above is what actually prevents rapid flapping near a
+		// threshold from bypassing this via a new key every tick — this key
+		// alone doesn't achieve that.
+		Key: fmt.Sprintf("market_%s_%s_%s", best.timeframe, best.label, dateKey),
 	})
+
+	if !changed {
+		// A repeat of the current anchor never reserved anything — see
+		// reserve's doc comment — so there is nothing to commit or release.
+		if err != nil {
+			log.Printf("[notify-scheduler] market: user=%s send failed: %v", cfg.UserID, err)
+		}
+		return
+	}
+	if err != nil {
+		s.marketHold.release(cfg.UserID)
+		log.Printf("[notify-scheduler] market: user=%s timeframe=%s label=%s send failed, hold not consumed: %v",
+			cfg.UserID, best.timeframe, best.label, err)
+		return
+	}
+	s.marketHold.commit(cfg.UserID, best.label, best.timeframe, now)
 }
 
 func (s *Scheduler) checkSetupOfDay(ctx context.Context) {

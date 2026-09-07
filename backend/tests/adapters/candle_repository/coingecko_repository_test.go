@@ -1,13 +1,15 @@
 package candle_repository_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"testing"
-	"time"
 	cr "pano_chart/backend/adapters/candle_repository"
 	"pano_chart/backend/domain"
+	"testing"
+	"time"
 )
 
 func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
@@ -26,7 +28,7 @@ func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
 	defer server.Close()
 	repo := cr.NewCoinGeckoCandleRepository(server.Client())
 	repo.BaseURL = server.URL
-	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
+	series, err := repo.GetSeries(context.Background(), sym, tf, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,10 +41,67 @@ func TestCoinGeckoCandleRepository_GetSeries_MapsResponse(t *testing.T) {
 	}
 }
 
+// TestCoinGeckoCandleRepository_GetSeries_AbortsOnContextCancellation proves
+// the propagated ctx reaches the underlying HTTP request: the handler
+// blocks until the client has connected, then the test cancels ctx and
+// asserts GetSeries returns promptly with an error wrapping
+// context.Canceled, rather than waiting for the handler to ever respond.
+func TestCoinGeckoCandleRepository_GetSeries_AbortsOnContextCancellation(t *testing.T) {
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf := domain.Timeframe1h
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := cr.NewCoinGeckoCandleRepository(server.Client())
+	repo.BaseURL = server.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	type callResult struct {
+		err error
+	}
+	resultCh := make(chan callResult, 1)
+	start := time.Now()
+	go func() {
+		_, err := repo.GetSeries(ctx, sym, tf, time.Time{}, time.Time{})
+		resultCh <- callResult{err: err}
+	}()
+
+	var res callResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetSeries did not return within the test timeout — cancellation is not propagating")
+	}
+	elapsed := time.Since(start)
+
+	if res.err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", res.err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetSeries to abort promptly on cancellation, took %v", elapsed)
+	}
+}
+
 func TestCoinGeckoCandleRepository_UnsupportedTimeframe(t *testing.T) {
 	sym, _ := domain.NewSymbol("BTCUSDT")
 	repo := cr.NewCoinGeckoCandleRepository(nil)
-	_, err := repo.GetSeries(sym, domain.Timeframe5m, time.Time{}, time.Time{})
+	_, err := repo.GetSeries(context.Background(), sym, domain.Timeframe5m, time.Time{}, time.Time{})
 	if err == nil {
 		t.Fatalf("expected error for unsupported timeframe")
 	}

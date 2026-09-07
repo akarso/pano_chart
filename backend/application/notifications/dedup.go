@@ -49,6 +49,29 @@ func (d *Deduplicator) Mark(key string, ttl time.Duration) {
 	d.seen[key] = entry{expiresAt: d.now().Add(ttl)}
 }
 
+// TryReserve atomically checks whether key is unseen and, if so, marks it
+// with the given TTL. It returns true if the reservation was acquired
+// (i.e. the caller should proceed with delivery) and false if the key was
+// already seen and not yet expired.
+func (d *Deduplicator) TryReserve(key string, ttl time.Duration) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if e, ok := d.seen[key]; ok && !d.now().After(e.expiresAt) {
+		return false
+	}
+	d.seen[key] = entry{expiresAt: d.now().Add(ttl)}
+	return true
+}
+
+// Release removes a key's reservation, allowing an immediate retry.
+// Call this when delivery fails after a successful TryReserve.
+func (d *Deduplicator) Release(key string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.seen, key)
+}
+
 // Len returns the number of non-expired tracked keys (for diagnostics).
 func (d *Deduplicator) Len() int {
 	d.mu.Lock()

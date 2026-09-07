@@ -1,16 +1,51 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/core/app_lifecycle_manager.dart';
+import 'package:pano_chart_frontend/features/billing/api/subscription_api.dart';
+import 'package:pano_chart_frontend/features/billing/billing_manager.dart';
+import 'package:pano_chart_frontend/features/billing/upgrade_screen.dart';
 import 'package:pano_chart_frontend/features/candles/application/get_candle_series.dart';
 import 'package:pano_chart_frontend/features/candles/application/get_candle_series_input.dart';
 import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
+import 'package:pano_chart_frontend/features/market_state/composite_index_data.dart';
+import 'package:pano_chart_frontend/features/market_state/http_composite_index_api.dart';
+import 'package:pano_chart_frontend/features/market_state/http_market_state_api.dart';
+import 'package:pano_chart_frontend/features/market_state/market_pulse_screen.dart';
+import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/overview/overview_widget.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
 import 'package:pano_chart_frontend/features/overview/overview_state.dart';
 
+/// Minimal SubscriptionApi fake — nothing in these tests actually calls it,
+/// BillingManager just requires one to construct.
+class _FakeSubscriptionApi implements SubscriptionApi {
+  @override
+  Future<void> verifyPurchase({
+    required String provider,
+    required String purchaseToken,
+    required String userId,
+  }) async {}
+
+  @override
+  Future<SubscriptionStatus> getStatus(String userId) async =>
+      SubscriptionStatus.inactive();
+}
+
+/// BillingManager that skips IAP connection entirely — tests drive access
+/// level directly via debugSetAccess instead of a real purchase/trial flow.
+class _TestBillingManager extends BillingManager {
+  _TestBillingManager()
+      : super(api: _FakeSubscriptionApi(), userId: 'test_user');
+
+  @override
+  Future<void> init() async {}
+}
+
 class _FakeGetOverview extends GetOverview {
   final Duration delay;
   final OverviewResult result;
+  final List<int> pageCalls = [];
 
   _FakeGetOverview({this.delay = Duration.zero, required this.result});
 
@@ -23,6 +58,7 @@ class _FakeGetOverview extends GetOverview {
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
   }) async {
+    pageCalls.add(page);
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;
   }
@@ -230,4 +266,233 @@ void main() {
       }
     });
   });
+
+  group('free-tier upgrade banner', () {
+    List<OverviewItem> manyItems(int n) => List.generate(
+          n,
+          (i) => OverviewItem(
+            symbol: 'SYM${i}USDT',
+            totalScore: 1.0,
+            sparkline: const [100.0, 101.0],
+          ),
+        );
+
+    testWidgets('free-tier user with >15 tokens sees the upgrade banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // The banner tile is the 16th grid cell (15 capped items + 1) — below
+      // the fold in the default test viewport, so the lazily-built
+      // GridView.builder won't have built it yet without scrolling there.
+      await tester.scrollUntilVisible(
+        find.textContaining('more tokens with Pro'),
+        300.0,
+        scrollable: find.byType(Scrollable),
+      );
+
+      expect(find.textContaining('more tokens with Pro'), findsOneWidget);
+      expect(find.text('+5 more tokens with Pro'), findsOneWidget);
+    });
+
+    testWidgets('pro user with >15 tokens does not see the upgrade banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      // Scroll all the way down first — otherwise a wrongly-inserted
+      // banner tile near the end of a 20-item grid would sit below the
+      // fold, unbuilt by the lazy GridView, and findsNothing would pass
+      // for the wrong reason (never looked) rather than because the
+      // banner is genuinely absent. Confirmed this catches a real
+      // regression: temporarily dropping the entitlement check from the
+      // cap condition still passed the assertion without this scroll.
+      await tester.scrollUntilVisible(
+        find.text('SYM19'),
+        300.0,
+        scrollable: find.byType(Scrollable),
+      );
+
+      expect(find.textContaining('more tokens with Pro'), findsNothing);
+    });
+
+    testWidgets('free-tier user with <=15 tokens does not see the banner',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: OverviewResult(items: manyItems(10), hasMore: false),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('more tokens with Pro'), findsNothing);
+    });
+
+    testWidgets(
+        'free-tier user scrolling to the cap does not trigger pagination',
+        (WidgetTester tester) async {
+      final getOverview = _FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: true),
+      );
+      final vm = OverviewViewModel(getOverview);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(getOverview.pageCalls, [1]);
+
+      // Scroll all the way to the bottom of the (small, capped) grid.
+      await tester.fling(
+          find.byType(GridView), const Offset(0, -3000), 3000);
+      await tester.pumpAndSettle();
+
+      // hasMore is true on the underlying result, but the free-tier cap
+      // is showing — loadNext must not fire for data the cap won't
+      // display anyway.
+      expect(getOverview.pageCalls, [1]);
+    });
+  });
+
+  group('lifecycle manager reparenting', () {
+    testWidgets(
+        're-registers with the new AppLifecycleManager when reparented under a different AppLifecycleScope',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(items: [], hasMore: false),
+      ));
+      final managerA = AppLifecycleManager();
+      final managerB = AppLifecycleManager();
+
+      Widget buildUnder(AppLifecycleManager manager) {
+        return MaterialApp(
+          home: Scaffold(
+            body: AppLifecycleScope(
+              manager: manager,
+              child: OverviewWidget(
+                key: const ValueKey('overview'),
+                viewModel: vm,
+                getCandleSeries: _FakeGetCandleSeries(),
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildUnder(managerA));
+      await tester.pumpAndSettle();
+
+      expect(managerA.pausableCount, 1,
+          reason: 'expected the widget to register with its initial manager');
+      expect(managerB.pausableCount, 0);
+
+      // Reparent the SAME widget (stable key, so its State persists) under
+      // a different AppLifecycleScope — didChangeDependencies fires again
+      // with a different manager instance.
+      await tester.pumpWidget(buildUnder(managerB));
+      await tester.pumpAndSettle();
+
+      expect(managerA.pausableCount, 0,
+          reason: 'expected the old manager\'s registration to be removed, not leaked');
+      expect(managerB.pausableCount, 1,
+          reason: 'expected the registration to move to the new manager, not be skipped');
+    });
+  });
+
+  group('_requireAccess() fail-closed gating', () {
+    testWidgets(
+        'tapping a gated menu row with no billingManager does not unlock the screen',
+        (WidgetTester tester) async {
+      // Regression test for PR-078 CR follow-up (blocker): _requireAccess()
+      // used to fail OPEN on a null billingManager
+      // (`billing == null || billing.hasFullAccess` → true), so a gated
+      // screen like Market Pulse would be reachable with no purchase
+      // prompt at all whenever billing is unavailable — exactly the
+      // fail-open leak this PR's Capabilities.fromBilling fix was
+      // otherwise closing.
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(items: [], hasMore: false),
+      ));
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: null,
+          marketStateApi: _NeverCalledMarketStateApi(),
+          compositeIndexApi: _NeverCalledCompositeIndexApi(),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('overview-menu-nav-icon')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Market Pulse'), findsOneWidget,
+          reason: 'the gated menu row itself should still be offered');
+
+      await tester.tap(find.text('Market Pulse'));
+      await tester.pumpAndSettle();
+
+      // Neither the gated screen nor an upgrade prompt should have
+      // opened — a null billingManager means there's nothing to gate
+      // against or launch a purchase flow through, so the tap must be a
+      // no-op, not an unlock. (The menu itself closes on tap regardless
+      // of access — that's by design, so "Market Pulse" no longer being
+      // found here just reflects the menu closing, not navigation.)
+      expect(find.byType(MarketPulseScreen), findsNothing);
+      expect(find.byType(UpgradeScreen), findsNothing);
+      // Still on the overview screen, not pushed anywhere else.
+      expect(find.byKey(const ValueKey('overview-menu-nav-icon')), findsOneWidget);
+    });
+  });
+}
+
+class _NeverCalledMarketStateApi implements MarketStateApi {
+  @override
+  Future<MarketStateData> fetch({String timeframe = '4h'}) {
+    fail('MarketStateApi.fetch should never be called — access was not granted');
+  }
+}
+
+class _NeverCalledCompositeIndexApi implements CompositeIndexApi {
+  @override
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 100}) {
+    fail('CompositeIndexApi.fetch should never be called — access was not granted');
+  }
 }

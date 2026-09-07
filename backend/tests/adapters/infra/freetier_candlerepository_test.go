@@ -1,7 +1,9 @@
 package infra_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,7 +52,7 @@ func TestFreeTierCandleRepository_MapsValidResponseToCandleSeries(t *testing.T) 
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	series, err := repo.GetSeries(sym, tf, from, to)
+	series, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +82,7 @@ func TestFreeTierCandleRepository_ReturnsErrorOnHTTPFailure(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(sym, tf, from, to)
+	_, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for HTTP failure")
 	}
@@ -100,9 +102,121 @@ func TestFreeTierCandleRepository_ReturnsErrorOnInvalidPayload(t *testing.T) {
 	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	to := from.Add(1 * time.Minute)
 
-	_, err := repo.GetSeries(sym, tf, from, to)
+	_, err := repo.GetSeries(context.Background(), sym, tf, from, to)
 	if err == nil {
 		t.Fatal("expected error for invalid payload")
+	}
+}
+
+// TestFreeTierCandleRepository_GetSeries_AbortsOnContextCancellation proves
+// the propagated ctx actually reaches the underlying HTTP request: the
+// handler blocks until the client has connected, then the test cancels ctx
+// and asserts GetSeries returns promptly with an error wrapping
+// context.Canceled, rather than waiting for the handler to ever respond.
+func TestFreeTierCandleRepository_GetSeries_AbortsOnContextCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
+
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1m")
+	from := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	to := from.Add(1 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	type callResult struct {
+		err error
+	}
+	resultCh := make(chan callResult, 1)
+	start := time.Now()
+	go func() {
+		_, err := repo.GetSeries(ctx, sym, tf, from, to)
+		resultCh <- callResult{err: err}
+	}()
+
+	var res callResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetSeries did not return within the test timeout — cancellation is not propagating")
+	}
+	elapsed := time.Since(start)
+
+	if res.err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", res.err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetSeries to abort promptly on cancellation, took %v", elapsed)
+	}
+}
+
+// TestFreeTierCandleRepository_GetLastNCandles_AbortsOnContextCancellation
+// is the same proof at the GetLastNCandles entry point (the method the
+// original CR finding named) rather than GetSeries directly.
+func TestFreeTierCandleRepository_GetLastNCandles_AbortsOnContextCancellation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	defer close(release)
+
+	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
+
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1m")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+
+	type callResult struct {
+		err error
+	}
+	resultCh := make(chan callResult, 1)
+	start := time.Now()
+	go func() {
+		_, err := repo.GetLastNCandles(ctx, sym, tf, 10)
+		resultCh <- callResult{err: err}
+	}()
+
+	var res callResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetLastNCandles did not return within the test timeout — cancellation is not propagating")
+	}
+	elapsed := time.Since(start)
+
+	if res.err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("expected error wrapping context.Canceled, got %v", res.err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("expected GetLastNCandles to abort promptly on cancellation, took %v", elapsed)
 	}
 }
 
@@ -118,7 +232,7 @@ func TestFreeTierCandleRepository_GetSeries_MapsProviderResponse(t *testing.T) {
 	}))
 	defer server.Close()
 	repo := infra.NewFreeTierCandleRepository(server.URL, server.Client(), nil)
-	series, err := repo.GetSeries(sym, tf, time.Time{}, time.Time{})
+	series, err := repo.GetSeries(context.Background(), sym, tf, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

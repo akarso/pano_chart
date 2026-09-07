@@ -6,7 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/cors"
@@ -33,6 +36,7 @@ import (
 	"pano_chart/backend/infrastructure/overview"
 	"pano_chart/backend/infrastructure/payment"
 	"pano_chart/backend/infrastructure/rankings"
+	infrascoring "pano_chart/backend/infrastructure/scoring"
 	"pano_chart/backend/infrastructure/snapshot"
 	"pano_chart/backend/infrastructure/symbol_universe"
 
@@ -52,6 +56,10 @@ func main() {
 		binanceBase = symbol_universe.DefaultBinanceAPIBaseURL
 	}
 	exchangeInfoURL, tickerURL := symbol_universe.BuildBinanceURLs(binanceBase)
+	binanceFuturesBase := os.Getenv("PC_BINANCE_FUTURES_BASE_URL")
+	if binanceFuturesBase == "" {
+		binanceFuturesBase = infra.DefaultBinanceFuturesBaseURL
+	}
 	redisAddr := os.Getenv("PC_REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
@@ -115,6 +123,13 @@ func main() {
 	if sidewaysAlgo == "" {
 		sidewaysAlgo = usecases.SidewaysAlgoV5 // default
 	}
+	// PR-074: sample-logs SidewaysV5's score distribution in production —
+	// see infrastructure/scoring.LoggingScoreCalculator's doc for why this
+	// lives here rather than inside the domain calculation itself. There's
+	// no historical data available to measure the PR-074 CCS fix's impact
+	// on rankings ahead of shipping it; this is how that gets observed.
+	const sidewaysV5LogSampleRate = 0.05
+
 	var sidewaysCalc scoring.SymbolScoreCalculator
 	switch sidewaysAlgo {
 	case usecases.SidewaysAlgoV2:
@@ -126,14 +141,14 @@ func main() {
 	case usecases.SidewaysAlgoV4:
 		sidewaysCalc = &scoring.SidewaysV4ScoreCalculator{}
 	case usecases.SidewaysAlgoV5:
-		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
 			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}
+		}, sidewaysV5LogSampleRate)
 	default:
 		sidewaysAlgo = usecases.SidewaysAlgoV5
-		sidewaysCalc = &scoring.SidewaysV5ScoreCalculator{
+		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
 			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}
+		}, sidewaysV5LogSampleRate)
 	}
 
 	// --- Use cases ---
@@ -154,46 +169,6 @@ func main() {
 		usecases.DefaultSymbolDetailLimit,
 		usecases.MaxSymbolDetailLimit,
 	)
-
-	// --- State snapshot before handler registration ---
-	ctx := context.Background()
-
-	// Test universe
-	univ, err := cachedUniverse.Symbols(ctx, exchangeInfoURL, tickerURL)
-	if err != nil {
-		fmt.Printf("[main] Universe error: %v\n", err)
-	} else {
-		fmt.Printf("[main] Universe size: %d\n", len(univ))
-		if len(univ) > 0 {
-			fmt.Printf("[main] Universe sample (first 5):\n")
-			for i := 0; i < 5 && i < len(univ); i++ {
-				fmt.Printf("[main]   [%d] %s\n", i, univ[i].String())
-			}
-		}
-	}
-
-	// Test volume provider
-	vols, err := cachedVolumeProvider.Volumes(ctx)
-	if err != nil {
-		fmt.Printf("[main] Volume provider error: %v\n", err)
-	} else {
-		fmt.Printf("[main] Volume map size: %d\n", len(vols))
-		if len(univ) > 0 && len(vols) > 0 {
-			// Check if sample universe symbols exist in volume map
-			foundCount := 0
-			for i := 0; i < 5 && i < len(univ); i++ {
-				if vol, ok := vols[univ[i].String()]; ok {
-					fmt.Printf("[main]   %s: volume=%.2f\n", univ[i].String(), vol)
-					foundCount++
-				}
-			}
-			if foundCount == 0 {
-				fmt.Printf("[main]   WARNING: First 5 universe symbols NOT found in volume map!\n")
-			}
-		}
-	}
-
-	// Test ranker
 
 	// --- Overview use case ---
 	getOverviewUC := usecases.NewGetOverview(rankUC, candleRepo, sparklinePrecision, 5)
@@ -222,7 +197,23 @@ func main() {
 				s.Symbol, s.Timeframe, s.SidewaysScore, s.TrendScore, s.Price, s.ATR, s.AlgoVersion)
 		}
 	})
-	defer snapshotLogger.Stop()
+	// Bounded, not a bare defer snapshotLogger.Stop(): Stop() blocks on its
+	// drain goroutine flushing whatever's buffered via the sink above, with
+	// no timeout of its own. That's fine today (the sink here only logs),
+	// but this whole path only became reachable once main() returns
+	// normally instead of via log.Fatal (see PR-076) — a future sink doing
+	// real I/O could hang shutdown indefinitely with no code here to catch
+	// it, so give it its own deadline rather than trusting callers to add
+	// one later.
+	defer func() {
+		stopped := make(chan struct{})
+		go func() { snapshotLogger.Stop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			log.Println("[main] snapshot logger didn't stop in time, abandoning it")
+		}
+	}()
 
 	// --- Rankings v2 use case ---
 	getRankingsUC := usecases.NewGetRankings(
@@ -289,7 +280,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] FATAL: payment DB init failed: %v", err)
 	}
-	defer func() { _ = paymentRepo.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// not deferred here.
 
 	providerRegistry := usecases.NewPaymentProviderRegistry()
 
@@ -331,7 +323,9 @@ func main() {
 	verifyPurchaseUC := usecases.NewVerifyPurchase(providerRegistry, subscriptionSvc)
 	log.Printf("[main] Payment infrastructure initialized (db=%s)\n", paymentDBPath)
 
-	// --- Market state service ---
+	// --- Market state service (canonical regime/breadth classification —
+	// see PR-073: this replaced a second, independently-evolved softmax
+	// pipeline that could disagree with this one about the same market) ---
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
@@ -347,8 +341,9 @@ func main() {
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 
-	// --- Market regime detector ---
-	metricsService := metrics.NewMetricsService(compositeService, candleProvider, evalProvider)
+	// Enables VolatilityExpansion/Dispersion on the market summary (used by
+	// the legacy /api/market/regime response and the transition engine).
+	marketService.SetCandleProvider(candleProvider)
 
 	// --- Regime history tracker (SQLite-backed) ---
 	regimeHistoryDBPath := os.Getenv("PC_REGIME_HISTORY_DB")
@@ -360,45 +355,65 @@ func main() {
 		log.Fatalf("Failed to open regime history DB: %v", err)
 	}
 	regimeTracker := regimehistory.NewTracker(regimeHistoryRepo)
-	metricsService.SetObserver(regimeTracker)
+	marketService.SetObserver(regimeTracker)
 	regimeHistoryService := regimehistory.NewService(regimeHistoryRepo)
 	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
 	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
 
-	// --- Regime history backfill (runs once when DB is empty) ---
-	backfiller := metrics.NewBackfiller(candleProvider, regimeTracker)
+	// PR-073 dropped the candle-based backfill (no equivalent exists for the
+	// proportional pipeline — see docs/v2/PR-073.md). A fresh DB now starts
+	// empty and only accumulates history from live Calculate() calls, which
+	// is invisible unless someone thinks to check — so surface it loudly
+	// once at startup instead.
 	for _, bfTF := range []string{"1h", "4h", "1d"} {
-		hist, histErr := regimeHistoryService.GetHistory(bfTF, 1)
-		if histErr != nil || len(hist.Periods) == 0 {
-			log.Printf("[main] Backfilling regime history for %s...", bfTF)
-			if bfErr := backfiller.Run(context.Background(), bfTF, 100); bfErr != nil {
-				log.Printf("[main] Backfill %s failed: %v", bfTF, bfErr)
-			} else {
-				log.Printf("[main] Backfill %s complete", bfTF)
-			}
+		if hist, histErr := regimeHistoryService.GetHistory(bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
+			log.Printf("[main] WARNING: regime history for %s is empty (db=%s) — no backfill runs anymore (PR-073); it will accumulate live from now on", bfTF, regimeHistoryDBPath)
 		}
 	}
 
-	regimeHandler := adhttp.NewMarketRegimeHandler(metricsService)
+	regimeHandler := adhttp.NewMarketRegimeHandler(marketService)
 	log.Println("[main] Market regime detector initialized")
 
 	// --- Market transition probability engine ---
 	transitionEngine := transition.NewTransitionEngine()
-	transitionService := transition.NewTransitionService(metricsService, transitionEngine)
+	transitionService := transition.NewTransitionService(marketService, transitionEngine)
 	transitionService.SetAgeProvider(regimeHistoryService)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
 
+	// --- Volatility profile (seasonality) ---
+	// Constructed here (rather than at its mux registration further below)
+	// so the same handler/cache can also back the setup engine's
+	// SeasonalityProvider — PR-082.
+	volPath := os.Getenv("VOL_OUTPUT")
+	if volPath == "" {
+		volPath = "volatility_1m.json"
+	}
+	volatilityHandler := adhttp.NewVolatilityHandler(volPath)
+
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
-	setupService.SetMarketProvider(metricsService)
+	setupService.SetMarketProvider(marketService)
+	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
 	// --- Fragility / risk engine ---
+	// PR-081: real Binance Futures funding/OI/long-short data, replacing the
+	// candle-derived proxies CandleBasedDataProvider used to compute.
+	// Dedicated client with a shorter timeout than binanceClient's 10s (that
+	// one's tuned for candle backfills; these are single lightweight JSON
+	// endpoints) — shares binanceTransport's connection pool, just a
+	// different per-Client Timeout — CR follow-up.
+	futuresHTTPClient := &http.Client{
+		Transport: binanceTransport,
+		Timeout:   5 * time.Second,
+	}
 	riskEngine := apprisk.NewEngine()
-	riskProvider := apprisk.NewCandleBasedDataProvider(candleRepo)
+	futuresClient := infra.NewBinanceFuturesClient(binanceFuturesBase, futuresHTTPClient)
+	cachedFuturesData := infra.NewRedisCachedFuturesData(futuresClient, redisClient, 5*time.Minute, 45*time.Second)
+	riskProvider := apprisk.NewBinanceFuturesDataProvider(cachedFuturesData, candleRepo)
 	riskService := apprisk.NewService(riskEngine, riskProvider)
 	fragilityHandler := adhttp.NewFragilityHandler(riskService)
 	setupService.SetFragilityProvider(riskService)
@@ -429,13 +444,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] social account store: %v", err)
 	}
-	defer func() { _ = socialAccountStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped.
 
 	socialSubStore, err := infrasocial.NewSQLiteSubscriptionStore(socialDBPath)
 	if err != nil {
 		log.Fatalf("[main] social subscription store: %v", err)
 	}
-	defer func() { _ = socialSubStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped.
 
 	socialCache := appsocial.NewPostCache(socialCacheTTL)
 	socialDispatcher := appsocial.NewDispatcher(256)
@@ -447,9 +464,38 @@ func main() {
 		socialDispatcher, appsocial.DefaultWatcherConfig(),
 	)
 	socialCtx, socialCancel := context.WithCancel(context.Background())
-	defer socialCancel()
-	go socialWatcher.Run(socialCtx)
+
+	// Tracks every background goroutine below (socialWatcher, pushConsumer,
+	// notifyScheduler, the volatility-profile reload loop) so graceful
+	// shutdown can wait for them to actually exit instead of just
+	// cancelling their context and racing to close the stores they use —
+	// see the shutdown sequence at the bottom of main().
+	var backgroundWG sync.WaitGroup
+
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		socialWatcher.Run(socialCtx)
+	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
+
+	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
+	// VolatilityHandler.Reload() existed before PR-082 ("call this after
+	// vol_aggregate runs") but nothing ever called it — harmless while this
+	// data only backed a display endpoint, but PR-082 now feeds the same
+	// cached snapshot into every setup's live Confidence score, so a
+	// restart-only refresh path is no longer good enough. cmd/vol_aggregate
+	// is documented (PR-059) as a manually-triggered one-time script with no
+	// fixed regeneration cadence, so there's no real interval to match —
+	// this ticker is a conservative, arbitrary bound (picks up an
+	// out-of-band re-run within at most an hour) rather than a value tied
+	// to any known schedule.
+	backgroundWG.Add(1)
+	go func() {
+		defer backgroundWG.Done()
+		volatilityReloadLoop(socialCtx, volatilityHandler, time.Hour)
+	}()
+	log.Println("[main] Volatility profile periodic reload started (interval=1h)")
 
 	// --- Push notifications (FCM) ---
 	deviceDBPath := os.Getenv("DEVICE_DB_PATH")
@@ -460,7 +506,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] device token store: %v", err)
 	}
-	defer func() { _ = deviceStore.Close() }()
+	// Closed explicitly in the shutdown sequence at the bottom of main(),
+	// after the background workers that use it have stopped. Also backs
+	// credentialStore and notifConfigStore below (they share its DB
+	// connection via deviceStore.DB()), so this one Close() covers all
+	// three.
 
 	// --- Device credential store (server-issued auth secrets) ---
 	// Shares deviceStore's DB connection — same convention as
@@ -470,7 +520,17 @@ func main() {
 		log.Fatalf("[main] device credential store: %v", err)
 	}
 	claimDeviceUC := usecases.NewClaimDevice(credentialStore)
-	authMW := middleware.RequireAuth(credentialStore)
+
+	// Log-only by default: a pre-PR-070 client has no claimed secret yet,
+	// so hard-enforcing on day one of this deploy would 401 every existing
+	// install's subscription/device/notification-config calls before
+	// they've had a chance to update and claim one. Flip AUTH_ENFORCE=true
+	// once logs show adoption is high enough (see PR-070.md rollout notes).
+	authEnforce := os.Getenv("AUTH_ENFORCE") == "true"
+	if !authEnforce {
+		log.Println("[main] AUTH_ENFORCE not set — device auth middleware running in LOG-ONLY mode (unauthenticated requests are allowed through and logged, not rejected)")
+	}
+	authMW := middleware.RequireAuth(credentialStore, authEnforce)
 
 	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	fcmProjectID := os.Getenv("FCM_PROJECT_ID")
@@ -482,7 +542,11 @@ func main() {
 			pushConsumer := appsocial.NewPushConsumer(
 				socialDispatcher.Events(), socialSubStore, deviceStore, fcmNotifier,
 			)
-			go pushConsumer.Run(socialCtx)
+			backgroundWG.Add(1)
+			go func() {
+				defer backgroundWG.Done()
+				pushConsumer.Run(socialCtx)
+			}()
 			log.Println("[main] Push notification consumer started")
 		}
 	} else {
@@ -515,14 +579,18 @@ func main() {
 
 			notifyScheduler := appnotify.NewScheduler(
 				notifyEngine,
-				metricsService,   // implements MarketProvider (CalculateRegime)
+				marketService,    // implements MarketProvider (Calculate)
 				setupScanAdapter, // scans top-ranked symbols for best setup
 				macroProvider,
 				appnotify.DefaultSchedulerConfig(),
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
 			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
-			go notifyScheduler.Run(socialCtx)
+			backgroundWG.Add(1)
+			go func() {
+				defer backgroundWG.Done()
+				notifyScheduler.Run(socialCtx)
+			}()
 			log.Println("[main] Notification engine + scheduler started")
 		}
 	}
@@ -546,11 +614,10 @@ func main() {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
 	}
-	// NOTE: /api/payments/verify still trusts the client-supplied userId in
-	// its body — that's fixed in the next PR (binding purchase verification
-	// to the authenticated caller). Left unauthenticated here deliberately
-	// rather than half-migrating it.
-	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseHandler(verifyPurchaseUC))
+	// Hard-enforced auth independent of AUTH_ENFORCE — see
+	// NewVerifyPurchaseRoute's doc for why this route doesn't get the same
+	// log-only migration grace period as the others.
+	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseRoute(verifyPurchaseUC, credentialStore))
 	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
@@ -588,24 +655,74 @@ func main() {
 	mux.Handle("/api/notification/config", authMW(adhttp.NewNotificationConfigHandler(notifConfigStore)))
 	log.Println("[main] /api/notification/config endpoint registered")
 
-	// Volatility profile endpoint
-	volPath := os.Getenv("VOL_OUTPUT")
-	if volPath == "" {
-		volPath = "volatility_1m.json"
-	}
-	mux.Handle("/api/volatility", adhttp.NewVolatilityHandler(volPath))
+	// Volatility profile endpoint (handler constructed earlier, alongside
+	// the setup engine's SeasonalityProvider wiring — PR-082)
+	mux.Handle("/api/volatility", volatilityHandler)
 	log.Println("[main] /api/volatility endpoint registered")
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		// Mobile clients don't send an Origin header for native HTTP calls,
+		// so this mainly matters for the webpage/ marketing site and any
+		// future web client — now that PR-070 adds real device auth
+		// headers, a wide-open "*" origin/header policy no longer matches
+		// the actual trust model. The "*.panocharts.com" wildcard (rs/cors
+		// supports one wildcard segment per pattern) covers www and any
+		// other subdomain (e.g. a future app./api. web client) without
+		// listing each one.
+		AllowedOrigins:   []string{"https://panocharts.com", "https://*.panocharts.com"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: false,
 	})
 	handler := c.Handler(mux)
 
-	fmt.Printf("Server starting on %s\n", addr)
-	log.Fatal(http.ListenAndServe(addr, handler))
+	srv := &http.Server{Addr: addr, Handler: handler}
+	go func() {
+		fmt.Printf("Server starting on %s\n", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[main] server error: %v", err)
+		}
+	}()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	log.Println("[main] shutting down...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[main] graceful HTTP shutdown failed, forcing close: %v", err)
+		_ = srv.Close() // deadline hit with requests still in flight — cut them off rather than hang
+	}
+
+	socialCancel() // signal socialWatcher/pushConsumer/notifyScheduler to stop
+
+	waitDone := make(chan struct{})
+	go func() { backgroundWG.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		log.Println("[main] background workers didn't exit in time, closing stores anyway")
+	}
+
+	// Only close what the background workers depend on AFTER they've
+	// stopped touching it — closing earlier risks a lost write (not a
+	// panic: these all wrap *sql.DB, whose Query/Exec return the ordinary
+	// sql.ErrConnDone after Close(), never panic) in a goroutine still
+	// mid-iteration. paymentRepo and regimeHistoryRepo aren't touched by
+	// the social/push background workers at all — they're written from
+	// HTTP handlers instead, which srv.Shutdown above has already
+	// drained (or, on the rarer srv.Close() fallback path, may not fully
+	// have — see PR-076 CR follow-up: a slow handler can in principle
+	// still be mid-flight there, degrading to a logged error for that one
+	// request rather than a crash).
+	_ = paymentRepo.Close()
+	_ = regimeHistoryRepo.Close()
+	_ = socialAccountStore.Close()
+	_ = socialSubStore.Close()
+	_ = deviceStore.Close()
+	log.Println("[main] shutdown complete")
 }
 
 // eventsAdapter adapts EventsUseCase to the notification scheduler's EventProvider.
@@ -619,4 +736,24 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 		DateTo:   to,
 		Country:  "United States",
 	})
+}
+
+// volatilityReloadLoop periodically calls h.Reload() until ctx is done, so
+// an out-of-band vol_aggregate re-run is eventually picked up without
+// requiring a server restart — see PR-082 CR follow-up. Reload errors
+// (e.g. the file briefly missing mid-write) are logged, not fatal: the
+// handler keeps serving its last-good cached snapshot either way.
+func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := h.Reload(); err != nil {
+				log.Printf("[main] volatility profile reload failed: %v", err)
+			}
+		}
+	}
 }

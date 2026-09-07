@@ -3,6 +3,7 @@ package setups
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 
 	"pano_chart/backend/application/market"
@@ -11,12 +12,13 @@ import (
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/risk"
+	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
 )
 
-// MarketProvider returns the current regime summary for a timeframe.
+// MarketProvider returns the current market summary for a timeframe.
 type MarketProvider interface {
-	CalculateRegime(ctx context.Context, timeframe string) (mkt.RegimeSummary, error)
+	Calculate(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
 // FragilityProvider returns the crowding / fragility assessment for a symbol.
@@ -24,14 +26,30 @@ type FragilityProvider interface {
 	Get(ctx context.Context, symbol, timeframe string) (risk.Fragility, error)
 }
 
+// SeasonalityProvider returns the current moment's historical spike
+// probability — a forward-looking risk read from time-of-day/day-of-week
+// seasonality, as opposed to VolatilityFit's backward-looking read of
+// realized volatility over the last N candles — see PR-082. timeframe is
+// accepted for symmetry with MarketProvider/FragilityProvider and future
+// use, but the current implementation (VolatilitySeasonalityProvider in
+// adapters/http) always answers from 1-minute-of-day granularity
+// regardless of it: infrastructure/volatility's coarser derived timeframes
+// (5m/15m/1h/4h) group 1-minute buckets by array position, not by an
+// explicit time range each bucket covers, so matching "the bucket
+// containing right now" is unambiguous only at 1-minute granularity.
+type SeasonalityProvider interface {
+	CurrentSpikeProbability(ctx context.Context, timeframe string) (float64, error)
+}
+
 // SetupService orchestrates candle retrieval, score computation, and setup
 // evaluation for a single symbol.
 type SetupService struct {
-	candleRepo        ports.CandleRepositoryPort
-	scorer            usecases.SymbolScorer
-	engine            *Engine
-	marketProvider    MarketProvider    // optional; nil means no market modifier
-	fragilityProvider FragilityProvider // optional; nil means crowding = 0
+	candleRepo          ports.CandleRepositoryPort
+	scorer              usecases.SymbolScorer
+	engine              *Engine
+	marketProvider      MarketProvider      // optional; nil means no market modifier
+	fragilityProvider   FragilityProvider   // optional; nil means crowding = 0
+	seasonalityProvider SeasonalityProvider // optional; nil means SeasonalityFit = neutral 0.5
 }
 
 const candleLimit = 200
@@ -55,9 +73,15 @@ func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
 	s.fragilityProvider = fp
 }
 
+// SetSeasonalityProvider injects the volatility-seasonality provider
+// (optional).
+func (s *SetupService) SetSeasonalityProvider(sp SeasonalityProvider) {
+	s.seasonalityProvider = sp
+}
+
 // Evaluate fetches candles, computes underlying scores, builds a SetupContext,
 // and runs the engine.
-func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (setup.SetupScores, error) {
+func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (setup.SetupScores, error) {
 	sym, err := domain.NewSymbol(symbol)
 	if err != nil {
 		return setup.SetupScores{}, fmt.Errorf("invalid symbol: %w", err)
@@ -67,7 +91,7 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 		return setup.SetupScores{}, fmt.Errorf("invalid timeframe: %w", err)
 	}
 
-	series, err := s.candleRepo.GetLastNCandles(sym, tf, candleLimit)
+	series, err := s.candleRepo.GetLastNCandles(ctx, sym, tf, candleLimit)
 	if err != nil {
 		return setup.SetupScores{}, fmt.Errorf("candle fetch: %w", err)
 	}
@@ -85,23 +109,49 @@ func (s *SetupService) Evaluate(_ context.Context, symbol, timeframe string) (se
 		return setup.SetupScores{}, fmt.Errorf("scoring: %w", err)
 	}
 
-	ctx := buildContext(symbol, series, stats)
-	result := s.engine.Evaluate(ctx)
+	setupCtx := buildContext(symbol, series, stats)
+	result := s.engine.Evaluate(setupCtx)
 	result.Timeframe = timeframe
 
 	// Apply market-level modifier when a provider is available.
 	if s.marketProvider != nil {
-		if summary, err := s.marketProvider.CalculateRegime(context.Background(), timeframe); err == nil {
+		if summary, err := s.marketProvider.Calculate(ctx, timeframe); err == nil {
 			result = ApplyMarketModifier(result, summary.EffectiveTrend)
 		}
 	}
 
 	// Populate confidence inputs and compute unified confidence.
-	result.VolatilityFit = VolatilityFit(result.Regime, ctx.Volatility)
-	if s.fragilityProvider != nil {
-		if frag, err := s.fragilityProvider.Get(context.Background(), symbol, timeframe); err == nil {
-			result.Crowding = frag.Score
+	result.VolatilityFit = VolatilityFit(result.Regime, setupCtx.Volatility)
+
+	// Forward-looking seasonality fit — supplementary, like
+	// VolatilityExpansion/Dispersion in market.MarketStateService: a
+	// failure here must not fail Evaluate as a whole, so SeasonalityFit
+	// simply stays at its neutral default (matching what a nil provider
+	// already produces) rather than escalating the way the fragility
+	// ctx.Err() check below does for Crowding — see PR-082.
+	result.SeasonalityFit = 0.5
+	if s.seasonalityProvider != nil {
+		if spikeProb, err := s.seasonalityProvider.CurrentSpikeProbability(ctx, timeframe); err == nil {
+			result.SeasonalityFit = SeasonalityFit(spikeProb)
 		}
+	}
+
+	if s.fragilityProvider != nil {
+		frag, err := s.fragilityProvider.Get(ctx, symbol, timeframe)
+		switch {
+		case err == nil:
+			result.Crowding = frag.Score
+		case ctx.Err() != nil:
+			// The caller gave up, not the fragility provider — Crowding's
+			// zero default would otherwise silently maximize the crowding
+			// contribution to ComputeConfidence below, returning a
+			// confidently-computed result built on data we never actually
+			// obtained. Abort instead of masking cancellation as success.
+			return setup.SetupScores{}, ctx.Err()
+		}
+		// else: fragility provider failed for a reason unrelated to
+		// cancellation (network hiccup, bad data) — degrade gracefully,
+		// Crowding stays at its zero default.
 	}
 	result.Confidence = ComputeConfidence(result)
 
@@ -137,7 +187,7 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 		return "sideways", 0
 	}
 
-	regime := dominantRegime(stats.Scores)
+	regime := dominantRegime(stats.Scores, series)
 
 	if regime != "uptrend" && regime != "downtrend" {
 		return regime, 0
@@ -154,8 +204,45 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 	return regime, health
 }
 
+// trendDirectionCalc is the single instance used to recover trend direction
+// in dominantRegime — package-level so it's an explicit, visible
+// dependency and not reallocated on every call.
+var trendDirectionCalc = &scoring.TrendPredictabilityScoreCalculator{}
+
+// scoresAgree reports whether two independently-obtained scores for what
+// should be the same computation are close enough to trust — see
+// dominantRegime's doc for why this matters. Today both sides call the
+// exact same deterministic arithmetic on the exact same series, so they
+// match bit-for-bit; epsilon exists only to tolerate future floating-point
+// variation (e.g. a different summation order), not to absorb any
+// currently-expected divergence — hence a very tight tolerance rather than
+// a looser one.
+func scoresAgree(a, b float64) bool {
+	const epsilon = 1e-9
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < epsilon
+}
+
 // dominantRegime maps the highest-scoring dimension to a regime label.
-func dominantRegime(scores map[string]float64) string {
+// series is only consulted when trend is the dominant dimension, to
+// recover the actual direction — see
+// scoring.TrendPredictabilityScoreCalculator.ScoreWithDirection's doc for
+// why this is the canonical direction source, not a magnitude threshold.
+//
+// scores["Trend Predictability"] and ScoreWithDirection(series) are two
+// independent computations that happen to run the identical calculator
+// over the identical series today (the generic WeightedSymbolScorer just
+// calls each calculator's Score(series) unweighted into the map). That's
+// an implicit invariant, not an enforced one — if the scorer is ever
+// swapped for a decorator, cache, or resampled series, the two could
+// silently diverge. scoresAgree checks it explicitly: if the recomputed
+// magnitude doesn't match what the caller already scored, the direction
+// can't be trusted either, so fall back to "sideways" rather than report
+// a bias that might belong to a different series than the score did.
+func dominantRegime(scores map[string]float64, series domain.CandleSeries) string {
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -174,10 +261,34 @@ func dominantRegime(scores map[string]float64) string {
 		return "compression"
 	}
 	if trend > sideways {
-		if trend > 0.5 {
-			return "uptrend" // simplified; direction not in scores
+		recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
+		switch {
+		case err != nil:
+			// Not expected to happen here — computeRegimeAndHealth already
+			// guards series.Len() < 2, and a regression over >= 2 distinct
+			// indices can't hit ScoreWithDirection's other error path
+			// (zero denominator). Logged because a masked error here would
+			// otherwise be undiagnosable in the field.
+			log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
+			return "sideways"
+		case bias == "neutral":
+			// No reliable direction (flat, clustered, or too little data)
+			// despite a nonzero trend score from other calculators —
+			// don't guess a direction that isn't there.
+			return "sideways"
+		case !scoresAgree(recomputed, trend):
+			// The recomputed score doesn't match what was already scored —
+			// series/scorer diverged somewhere; don't trust the bias. Logged
+			// since this is the one branch scoresAgree's doc comment flags
+			// as "should never happen today" — if it ever fires, that
+			// assumption broke somewhere and needs investigating.
+			log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
+			return "sideways"
+		case bias == "up":
+			return "uptrend"
+		default:
+			return "downtrend"
 		}
-		return "downtrend"
 	}
 	return "sideways"
 }
@@ -280,8 +391,14 @@ func volumeScore(series domain.CandleSeries) float64 {
 	return clamp(ratio / 2.0)
 }
 
+// dailyVolatilityDivisor is the volatilityFromSeries normalization divisor
+// calibrated for 1d candles: typical crypto daily range 0-10% ≈ 0-0.1.
+const dailyVolatilityDivisor = 0.1
+
 // volatilityFromSeries computes a normalised volatility score.
-// Uses ATR-like measure: average (high-low)/close, normalised to [0,1].
+// Uses ATR-like measure: average (high-low)/close, normalised to [0,1]
+// against a divisor scaled for the series' own timeframe (see
+// volatilityDivisorForTimeframe) — PR-080.
 func volatilityFromSeries(series domain.CandleSeries) float64 {
 	n := series.Len()
 	if n == 0 {
@@ -297,7 +414,40 @@ func volatilityFromSeries(series domain.CandleSeries) float64 {
 		total += (c.High() - c.Low()) / c.Close()
 	}
 	avg := total / float64(n)
-	// Typical crypto daily range: 0-10% ≈ 0-0.1.
-	// Map 0→0, 0.05→0.5, ≥0.1→1.
-	return clamp(avg / 0.1)
+	divisor := volatilityDivisorForTimeframe(series.Timeframe())
+	if divisor <= 0 {
+		// Not a real runtime path for any of the six canonical Timeframe
+		// values (each has a fixed positive Duration()) — only reachable via
+		// a NewTimeframeUnsafe zero/garbage value from tests or misuse.
+		return 0
+	}
+	return clamp(avg / divisor)
+}
+
+// dailyMinutes is domain.Timeframe1d's duration in minutes, hoisted to
+// package scope so volatilityDivisorForTimeframe doesn't recompute it on
+// every call (CR follow-up, PR-080).
+var dailyMinutes = domain.Timeframe1d.Duration().Minutes()
+
+// volatilityDivisorForTimeframe scales dailyVolatilityDivisor down for
+// sub-daily timeframes using sqrt(time) scaling — the standard random-walk
+// assumption that volatility scales with the square root of elapsed time
+// (vol(Δt) ≈ vol(1d) * sqrt(Δt/1d)). Without this, volatilityFromSeries
+// applied dailyVolatilityDivisor unconditionally at every timeframe: a 15m
+// candle's average (high-low)/close is typically ~0.1-0.5%, nowhere close to
+// the ~10% this constant assumes, so the normalized result was silently
+// pinned near 0 for every sub-daily timeframe — see PR-080.
+//
+// This is a scaling heuristic, not an empirically fitted constant (neither
+// was the single fixed divisor it replaces) — provisional pending real
+// per-timeframe score-distribution telemetry, not a calibrated result. Real
+// crypto intraday ranges don't necessarily follow clean sqrt(time) scaling
+// (fee/tick-size floors, session effects), so treat 1m/5m/1h/4h as
+// plausible starting points, not validated — see PR-080's doc.
+func volatilityDivisorForTimeframe(tf domain.Timeframe) float64 {
+	if dailyMinutes <= 0 {
+		return 0
+	}
+	scale := math.Sqrt(tf.Duration().Minutes() / dailyMinutes)
+	return dailyVolatilityDivisor * scale
 }

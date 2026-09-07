@@ -26,14 +26,14 @@ type fakeCandleRepo struct {
 	lastN  int
 }
 
-func (f *fakeCandleRepo) GetSeries(symbol domain.Symbol, timeframe domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetSeries(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, from time.Time, to time.Time) (domain.CandleSeries, error) {
 	if s, ok := f.series[symbol]; ok {
 		return s, nil
 	}
 	return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
 }
 
-func (f *fakeCandleRepo) GetLastNCandles(symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
+func (f *fakeCandleRepo) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
 	f.lastN = n
 	if s, ok := f.series[symbol]; ok {
 		return s, nil
