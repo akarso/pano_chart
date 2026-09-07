@@ -3,11 +3,17 @@ package infra_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	infra "pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/ports"
+)
+
+const (
+	testTTL        = time.Minute
+	testFailureTTL = 30 * time.Second
 )
 
 // --- Fakes ---
@@ -67,7 +73,7 @@ func (f *fakeFuturesDataPort) LongShortRatio(_ context.Context, _ string) (float
 }
 
 func TestRedisCachedFuturesData_ImplementsPort(t *testing.T) {
-	var _ ports.FuturesDataPort = infra.NewRedisCachedFuturesData(&fakeFuturesDataPort{}, &fakeFuturesRedis{store: map[string]string{}}, time.Minute)
+	var _ ports.FuturesDataPort = infra.NewRedisCachedFuturesData(&fakeFuturesDataPort{}, &fakeFuturesRedis{store: map[string]string{}}, testTTL, testFailureTTL)
 }
 
 // --- FundingRate ---
@@ -75,7 +81,7 @@ func TestRedisCachedFuturesData_ImplementsPort(t *testing.T) {
 func TestRedisCachedFuturesData_FundingRate_CacheHitSkipsNext(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{"futures:funding:BTCUSDT": "0.0001"}}
 	next := &fakeFuturesDataPort{funding: 0.999}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	rate, err := cache.FundingRate(context.Background(), "BTCUSDT")
 	if err != nil {
@@ -92,7 +98,7 @@ func TestRedisCachedFuturesData_FundingRate_CacheHitSkipsNext(t *testing.T) {
 func TestRedisCachedFuturesData_FundingRate_CacheMissCallsNextAndStores(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{}}
 	next := &fakeFuturesDataPort{funding: 0.0002}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	rate, err := cache.FundingRate(context.Background(), "BTCUSDT")
 	if err != nil {
@@ -109,17 +115,46 @@ func TestRedisCachedFuturesData_FundingRate_CacheMissCallsNextAndStores(t *testi
 	}
 }
 
-func TestRedisCachedFuturesData_FundingRate_NextErrorNotCached(t *testing.T) {
+func TestRedisCachedFuturesData_FundingRate_NextErrorSurfacesAndIsFailureCached(t *testing.T) {
+	// CR follow-up: failures are now cached too (under failureTTL), so a
+	// known-bad symbol isn't re-fetched on every single request — a real
+	// behavior change from "should not cache on provider error".
 	fr := &fakeFuturesRedis{store: map[string]string{}}
 	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	_, err := cache.FundingRate(context.Background(), "NOTASYMBOL")
 	if err == nil {
 		t.Fatal("expected error from next")
 	}
-	if _, ok := fr.store["futures:funding:NOTASYMBOL"]; ok {
-		t.Errorf("should not cache on provider error")
+	if fr.store["futures:funding:NOTASYMBOL"] == "" {
+		t.Errorf("expected the failure to be cached (under failureTTL)")
+	}
+}
+
+func TestRedisCachedFuturesData_FundingRate_CachedFailureSkipsNext(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
+
+	// First call: cache miss, fetch fails, failure gets cached.
+	if _, err := cache.FundingRate(context.Background(), "NOTASYMBOL"); err == nil {
+		t.Fatal("expected error on first call")
+	}
+	if next.fundingCalls != 1 {
+		t.Fatalf("expected next to be called once so far, got %d", next.fundingCalls)
+	}
+
+	// Second call: cached-failure hit — next must not be called again.
+	_, err := cache.FundingRate(context.Background(), "NOTASYMBOL")
+	if err == nil {
+		t.Fatal("expected a cached-failure error on second call")
+	}
+	if !strings.Contains(err.Error(), "no futures market") {
+		t.Errorf("expected the cached failure reason to surface, got: %v", err)
+	}
+	if next.fundingCalls != 1 {
+		t.Errorf("expected next NOT to be called again on a cached-failure hit, got %d calls", next.fundingCalls)
 	}
 }
 
@@ -128,7 +163,7 @@ func TestRedisCachedFuturesData_FundingRate_NextErrorNotCached(t *testing.T) {
 func TestRedisCachedFuturesData_OpenInterestHistory_CacheHitSkipsNext(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{"futures:oi:BTCUSDT": "[1,2,3]"}}
 	next := &fakeFuturesDataPort{oi: []float64{9, 9, 9}}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	oi, err := cache.OpenInterestHistory(context.Background(), "BTCUSDT")
 	if err != nil {
@@ -151,7 +186,7 @@ func TestRedisCachedFuturesData_OpenInterestHistory_CacheHitSkipsNext(t *testing
 func TestRedisCachedFuturesData_OpenInterestHistory_CacheMissCallsNextAndStores(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{}}
 	next := &fakeFuturesDataPort{oi: []float64{10, 20, 30}}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	oi, err := cache.OpenInterestHistory(context.Background(), "BTCUSDT")
 	if err != nil {
@@ -168,12 +203,28 @@ func TestRedisCachedFuturesData_OpenInterestHistory_CacheMissCallsNextAndStores(
 	}
 }
 
+func TestRedisCachedFuturesData_OpenInterestHistory_CachedFailureSkipsNext(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
+
+	if _, err := cache.OpenInterestHistory(context.Background(), "NOTASYMBOL"); err == nil {
+		t.Fatal("expected error on first call")
+	}
+	if _, err := cache.OpenInterestHistory(context.Background(), "NOTASYMBOL"); err == nil {
+		t.Fatal("expected a cached-failure error on second call")
+	}
+	if next.oiCalls != 1 {
+		t.Errorf("expected next NOT to be called again on a cached-failure hit, got %d calls", next.oiCalls)
+	}
+}
+
 // --- LongShortRatio ---
 
 func TestRedisCachedFuturesData_LongShortRatio_CacheHitSkipsNext(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{"futures:longshort:BTCUSDT": "0.65"}}
 	next := &fakeFuturesDataPort{longRatio: 0.01}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	ratio, err := cache.LongShortRatio(context.Background(), "BTCUSDT")
 	if err != nil {
@@ -192,7 +243,7 @@ func TestRedisCachedFuturesData_LongShortRatio_CacheHitSkipsNext(t *testing.T) {
 func TestRedisCachedFuturesData_FallsBackOnRedisFailure(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{}, fail: true}
 	next := &fakeFuturesDataPort{funding: 0.001, oi: []float64{1, 2, 3}, longRatio: 0.5}
-	cache := infra.NewRedisCachedFuturesData(next, fr, time.Minute)
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	if rate, err := cache.FundingRate(context.Background(), "BTCUSDT"); err != nil || rate != 0.001 {
 		t.Errorf("FundingRate: expected 0.001, nil error; got %v, %v", rate, err)

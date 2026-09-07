@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -127,10 +128,18 @@ func (c *BinanceFuturesClient) LongShortRatio(ctx context.Context, symbol string
 	return ratio, nil
 }
 
+// maxErrorBodyBytes bounds how much of a non-2xx response body getJSON will
+// read for its error message — enough to see what a proxy/WAF/rate-limit
+// page actually said, without risking an unbounded read on a pathological
+// response.
+const maxErrorBodyBytes = 512
+
 // getJSON performs a GET request and decodes a successful JSON response
 // into out. A non-2xx status is reported with Binance's own error message
-// when the body parses as one (binanceAPIError), falling back to the raw
-// status code otherwise.
+// when the body parses as one (binanceAPIError); otherwise the raw body
+// (truncated to maxErrorBodyBytes) is included verbatim — a proxy/WAF error
+// page or a 429/418 rate-limit body won't match binanceAPIError's shape, and
+// "binance http 429" alone isn't enough to diagnose that in production.
 func (c *BinanceFuturesClient) getJSON(ctx context.Context, reqURL string, out interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -143,11 +152,15 @@ func (c *BinanceFuturesClient) getJSON(ctx context.Context, reqURL string, out i
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		var apiErr binanceAPIError
-		if jerr := json.NewDecoder(resp.Body).Decode(&apiErr); jerr == nil && apiErr.Msg != "" {
+		if jerr := json.Unmarshal(body, &apiErr); jerr == nil && apiErr.Msg != "" {
 			return fmt.Errorf("binance http %d: %s (code %d)", resp.StatusCode, apiErr.Msg, apiErr.Code)
 		}
-		return fmt.Errorf("binance http %d", resp.StatusCode)
+		if len(body) == 0 {
+			return fmt.Errorf("binance http %d", resp.StatusCode)
+		}
+		return fmt.Errorf("binance http %d: %s", resp.StatusCode, body)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

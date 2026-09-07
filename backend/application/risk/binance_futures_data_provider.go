@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 
+	"golang.org/x/sync/errgroup"
+
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 )
@@ -39,11 +41,19 @@ func NewBinanceFuturesDataProvider(futures ports.FuturesDataPort, candles ports.
 }
 
 // Get implements DataProvider. A failure to fetch any of the three real
-// futures signals fails the whole call rather than degrading to zeros or a
-// proxy — see PR-081 §5: SetupService already treats a non-cancellation
-// FragilityProvider error as "degrade gracefully, Crowding stays at its
-// zero default" (added in the PR-076 CR round), so this composes with
-// existing behavior for free.
+// futures signals (or the candle fetch) fails the whole call rather than
+// degrading to zeros or a proxy — see PR-081 §5: SetupService already
+// treats a non-cancellation FragilityProvider error as "degrade
+// gracefully, Crowding stays at its zero default" (added in the PR-076 CR
+// round), so this composes with existing behavior for free.
+//
+// All four fetches (funding, open interest, long/short ratio, candles) run
+// concurrently via errgroup rather than sequentially — CR follow-up,
+// PR-081: sequenced one-after-another against a client with a timeout tuned
+// for candle backfills, a single request's worst case could exceed 30s.
+// errgroup.WithContext cancels the shared context on the first error, so a
+// fast failure (e.g. an unknown symbol) doesn't have to wait out a slow
+// success elsewhere before Get returns.
 func (p *BinanceFuturesDataProvider) Get(ctx context.Context, symbol, timeframe string) (MarketRiskData, error) {
 	sym, err := domain.NewSymbol(symbol)
 	if err != nil {
@@ -54,23 +64,59 @@ func (p *BinanceFuturesDataProvider) Get(ctx context.Context, symbol, timeframe 
 		return MarketRiskData{}, fmt.Errorf("invalid timeframe: %w", err)
 	}
 
-	funding, err := p.futures.FundingRate(ctx, symbol)
-	if err != nil {
-		return MarketRiskData{}, fmt.Errorf("funding rate: %w", err)
-	}
-	oiSeries, err := p.futures.OpenInterestHistory(ctx, symbol)
-	if err != nil {
-		return MarketRiskData{}, fmt.Errorf("open interest: %w", err)
-	}
-	longRatio, err := p.futures.LongShortRatio(ctx, symbol)
-	if err != nil {
-		return MarketRiskData{}, fmt.Errorf("long/short ratio: %w", err)
+	// The futures calls (and the Redis cache keys they drive, in
+	// RedisCachedFuturesData) must see the same canonical symbol form the
+	// rest of this codebase uses everywhere else — sym.String(), not the
+	// raw (possibly lowercase) symbol argument. Fixes a real bug: the HTTP
+	// handlers validate the path segment via ParseSymbol but discard its
+	// normalized result (setup_handler.go, fragility_handler.go), so a
+	// lowercase request used to reach Binance directly and fragment the
+	// cache per case variant — the previous CandleBasedDataProvider never
+	// had this exposure since it only ever used the normalized sym, never
+	// the raw string, for anything external. CR follow-up, PR-081.
+	normalizedSymbol := sym.String()
+
+	var funding, longRatio float64
+	var oiSeries []float64
+	var series domain.CandleSeries
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		v, err := p.futures.FundingRate(gctx, normalizedSymbol)
+		if err != nil {
+			return fmt.Errorf("funding rate: %w", err)
+		}
+		funding = v
+		return nil
+	})
+	g.Go(func() error {
+		v, err := p.futures.OpenInterestHistory(gctx, normalizedSymbol)
+		if err != nil {
+			return fmt.Errorf("open interest: %w", err)
+		}
+		oiSeries = v
+		return nil
+	})
+	g.Go(func() error {
+		v, err := p.futures.LongShortRatio(gctx, normalizedSymbol)
+		if err != nil {
+			return fmt.Errorf("long/short ratio: %w", err)
+		}
+		longRatio = v
+		return nil
+	})
+	g.Go(func() error {
+		s, err := p.candles.GetLastNCandles(gctx, sym, tf, riskCandleLimit)
+		if err != nil {
+			return fmt.Errorf("candle fetch: %w", err)
+		}
+		series = s
+		return nil
+	})
+	if err := g.Wait(); err != nil {
+		return MarketRiskData{}, err
 	}
 
-	series, err := p.candles.GetLastNCandles(ctx, sym, tf, riskCandleLimit)
-	if err != nil {
-		return MarketRiskData{}, fmt.Errorf("candle fetch: %w", err)
-	}
 	if series.Len() < 2 {
 		return MarketRiskData{}, fmt.Errorf("insufficient candle data for %s %s", symbol, timeframe)
 	}

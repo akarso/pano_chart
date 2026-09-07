@@ -391,9 +391,17 @@ func main() {
 	// --- Fragility / risk engine ---
 	// PR-081: real Binance Futures funding/OI/long-short data, replacing the
 	// candle-derived proxies CandleBasedDataProvider used to compute.
+	// Dedicated client with a shorter timeout than binanceClient's 10s (that
+	// one's tuned for candle backfills; these are single lightweight JSON
+	// endpoints) — shares binanceTransport's connection pool, just a
+	// different per-Client Timeout — CR follow-up.
+	futuresHTTPClient := &http.Client{
+		Transport: binanceTransport,
+		Timeout:   5 * time.Second,
+	}
 	riskEngine := apprisk.NewEngine()
-	futuresClient := infra.NewBinanceFuturesClient(binanceFuturesBase, binanceClient)
-	cachedFuturesData := infra.NewRedisCachedFuturesData(futuresClient, redisClient, 5*time.Minute)
+	futuresClient := infra.NewBinanceFuturesClient(binanceFuturesBase, futuresHTTPClient)
+	cachedFuturesData := infra.NewRedisCachedFuturesData(futuresClient, redisClient, 5*time.Minute, 45*time.Second)
 	riskProvider := apprisk.NewBinanceFuturesDataProvider(cachedFuturesData, candleRepo)
 	riskService := apprisk.NewService(riskEngine, riskProvider)
 	fragilityHandler := adhttp.NewFragilityHandler(riskService)

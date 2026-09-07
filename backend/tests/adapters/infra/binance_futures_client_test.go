@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	infra "pano_chart/backend/adapters/infra"
 	"pano_chart/backend/application/ports"
@@ -127,5 +129,78 @@ func TestBinanceFuturesClient_LongShortRatio_EmptyArrayReturnsError(t *testing.T
 	_, err := c.LongShortRatio(context.Background(), "NOTASYMBOL")
 	if err == nil {
 		t.Fatal("expected error for an empty (no futures market) response")
+	}
+}
+
+// --- getJSON edge cases (CR follow-up) ---
+
+func TestBinanceFuturesClient_NonJSONErrorBody_IncludesRawBodyInError(t *testing.T) {
+	// A proxy/WAF error page or a 429/418 rate-limit body won't match
+	// binanceAPIError's {"code":...,"msg":...} shape — the raw body should
+	// still show up in the error for production triage, not just the bare
+	// status code.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		fmt.Fprint(w, `<html><body>Too Many Requests</body></html>`)
+	}))
+	defer server.Close()
+
+	c := infra.NewBinanceFuturesClient(server.URL, server.Client())
+	_, err := c.FundingRate(context.Background(), "BTCUSDT")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "Too Many Requests") {
+		t.Errorf("expected the raw response body to appear in the error, got: %v", err)
+	}
+}
+
+func TestBinanceFuturesClient_NetworkError_PropagatesAsError(t *testing.T) {
+	// A closed/unreachable server (client.Do failure) must surface as an
+	// error, not panic or hang.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.Close() // closed immediately — connection will be refused
+
+	c := infra.NewBinanceFuturesClient(server.URL, server.Client())
+	_, err := c.FundingRate(context.Background(), "BTCUSDT")
+	if err == nil {
+		t.Fatal("expected an error for a network-level failure")
+	}
+}
+
+func TestBinanceFuturesClient_ContextCancellation_PropagatesPromptly(t *testing.T) {
+	// A slow/hanging server combined with an already-cancelled context must
+	// abort quickly via ctx, not block until the server responds.
+	block := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-block // never responds until the test closes this
+	}))
+	// Single deferred cleanup, ordered explicitly: unblock the handler
+	// first so its in-flight connection can actually finish, then close the
+	// server — server.Close() waits for active connections, so closing
+	// block via a second, later-registered defer (LIFO: Close() would run
+	// BEFORE close(block)) would itself hang.
+	defer func() {
+		close(block)
+		server.Close()
+	}()
+
+	c := infra.NewBinanceFuturesClient(server.URL, server.Client())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.FundingRate(ctx, "BTCUSDT")
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a context-deadline error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("FundingRate did not return promptly after context deadline — cancellation isn't propagating")
 	}
 }
