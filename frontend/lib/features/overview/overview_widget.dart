@@ -113,6 +113,11 @@ class OverviewWidgetState extends State<OverviewWidget>
   bool _hiResSparklines = true;
   bool _excludeStablecoins = true;
   bool _showFavourites = false;
+
+  // True while build() is showing the free-tier upgrade banner (i.e. the
+  // list is capped at 15 items) — set at the end of every build so
+  // _checkAndLoadMore can skip paginating for data the cap won't show.
+  bool _freeTierCapActive = false;
   Set<String> _favourites = {};
 
   /// Which overlay panel is open (none by default).
@@ -309,7 +314,11 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (!_scrollController.hasClients) return;
     final pos = _scrollController.position;
     if (pos.pixels >= pos.maxScrollExtent - _scrollThreshold) {
-      if (!vm.state.isLoading && vm.state.hasMore) {
+      // Skip while the free-tier cap is showing — the grid's
+      // maxScrollExtent is tiny (15 items + banner), so "bottom" is
+      // reached almost immediately, and there's no point fetching more
+      // data the cap won't display anyway — see PR-077 CR follow-up.
+      if (!vm.state.isLoading && vm.state.hasMore && !_freeTierCapActive) {
         vm.loadNext(_timeframe);
       }
     }
@@ -1506,6 +1515,10 @@ class OverviewWidgetState extends State<OverviewWidget>
       visibleItems = visibleItems.sublist(0, 15);
       showUpgradeBanner = true;
     }
+    // Mirrored into a field so _checkAndLoadMore (outside build) can skip
+    // paginating for data the free-tier cap won't show anyway — see PR-077
+    // CR follow-up.
+    _freeTierCapActive = showUpgradeBanner;
 
     if (_showFavourites && visibleItems.isEmpty) {
       return const Center(
@@ -1559,7 +1572,18 @@ class OverviewWidgetState extends State<OverviewWidget>
                     hiddenCount: hiddenTokenCount,
                     columns: _columns,
                     onTap: () {
+                      // billingManager is guaranteed non-null here: this
+                      // tile only builds when showUpgradeBanner is true,
+                      // which requires !_capabilities.fullTokenList — and
+                      // Capabilities.fromBilling(null) is always .pro()
+                      // (fullTokenList: true), so a null billingManager
+                      // can never reach this branch. Assert instead of a
+                      // silent no-op so a future change to that invariant
+                      // fails loudly instead of making this tile a
+                      // silently-broken button — see PR-077 CR follow-up.
                       final billing = widget.billingManager;
+                      assert(billing != null,
+                          'upgrade banner shown without a billingManager');
                       if (billing == null) return;
                       Navigator.of(context).push(
                         MaterialPageRoute(

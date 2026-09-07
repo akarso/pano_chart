@@ -38,6 +38,7 @@ class _TestBillingManager extends BillingManager {
 class _FakeGetOverview extends GetOverview {
   final Duration delay;
   final OverviewResult result;
+  final List<int> pageCalls = [];
 
   _FakeGetOverview({this.delay = Duration.zero, required this.result});
 
@@ -50,6 +51,7 @@ class _FakeGetOverview extends GetOverview {
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
   }) async {
+    pageCalls.add(page);
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;
   }
@@ -333,6 +335,37 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('more tokens with Pro'), findsNothing);
+    });
+
+    testWidgets(
+        'free-tier user scrolling to the cap does not trigger pagination',
+        (WidgetTester tester) async {
+      final getOverview = _FakeGetOverview(
+        result: OverviewResult(items: manyItems(20), hasMore: true),
+      );
+      final vm = OverviewViewModel(getOverview);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(getOverview.pageCalls, [1]);
+
+      // Scroll all the way to the bottom of the (small, capped) grid.
+      await tester.fling(
+          find.byType(GridView), const Offset(0, -3000), 3000);
+      await tester.pumpAndSettle();
+
+      // hasMore is true on the underlying result, but the free-tier cap
+      // is showing — loadNext must not fire for data the cap won't
+      // display anyway.
+      expect(getOverview.pageCalls, [1]);
     });
   });
 }
