@@ -56,6 +56,10 @@ func main() {
 		binanceBase = symbol_universe.DefaultBinanceAPIBaseURL
 	}
 	exchangeInfoURL, tickerURL := symbol_universe.BuildBinanceURLs(binanceBase)
+	binanceFuturesBase := os.Getenv("PC_BINANCE_FUTURES_BASE_URL")
+	if binanceFuturesBase == "" {
+		binanceFuturesBase = infra.DefaultBinanceFuturesBaseURL
+	}
 	redisAddr := os.Getenv("PC_REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
@@ -385,8 +389,20 @@ func main() {
 	log.Println("[main] Setup quality engine initialized")
 
 	// --- Fragility / risk engine ---
+	// PR-081: real Binance Futures funding/OI/long-short data, replacing the
+	// candle-derived proxies CandleBasedDataProvider used to compute.
+	// Dedicated client with a shorter timeout than binanceClient's 10s (that
+	// one's tuned for candle backfills; these are single lightweight JSON
+	// endpoints) — shares binanceTransport's connection pool, just a
+	// different per-Client Timeout — CR follow-up.
+	futuresHTTPClient := &http.Client{
+		Transport: binanceTransport,
+		Timeout:   5 * time.Second,
+	}
 	riskEngine := apprisk.NewEngine()
-	riskProvider := apprisk.NewCandleBasedDataProvider(candleRepo)
+	futuresClient := infra.NewBinanceFuturesClient(binanceFuturesBase, futuresHTTPClient)
+	cachedFuturesData := infra.NewRedisCachedFuturesData(futuresClient, redisClient, 5*time.Minute, 45*time.Second)
+	riskProvider := apprisk.NewBinanceFuturesDataProvider(cachedFuturesData, candleRepo)
 	riskService := apprisk.NewService(riskEngine, riskProvider)
 	fragilityHandler := adhttp.NewFragilityHandler(riskService)
 	setupService.SetFragilityProvider(riskService)
