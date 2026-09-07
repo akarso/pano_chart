@@ -277,7 +277,23 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 	// Notify observer (e.g. regime history tracker) — fire-and-forget, but
 	// logged: a persistent write failure to the regime-history DB would
 	// otherwise be invisible.
-	if s.observer != nil {
+	//
+	// Skipped on an already-cancelled ctx rather than gating Calculate's
+	// whole return on it: callers like CalculateWithCandleMetrics (and,
+	// transitively, HTTP handlers whose client disconnected) intentionally
+	// still want a best-effort summary back promptly rather than an error
+	// — see TestMarketStateService_CalculateWithCandleMetrics_
+	// CancelledContextReturnsPromptly. What must not happen is the
+	// observer write specifically: GetRankings.Execute's per-symbol
+	// workers swallow their own errors (including a cancelled-context
+	// error) and just skip that symbol, so GetLatestEvaluations above can
+	// return a partial result with a nil error even when ctx was
+	// cancelled mid-run — checking ctx directly here, rather than trusting
+	// that nil error, is what actually stops the write from reaching a
+	// regimeHistoryRepo a caller's graceful-shutdown sequence may have
+	// already closed (PR-076 CR follow-up: "Cancellation Still Reaches
+	// Observer").
+	if s.observer != nil && ctx.Err() == nil {
 		if err := s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix()); err != nil {
 			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
 		}
