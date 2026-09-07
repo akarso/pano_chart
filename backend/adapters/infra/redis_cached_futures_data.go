@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -132,17 +133,28 @@ func (r *RedisCachedFuturesData) LongShortRatio(ctx context.Context, symbol stri
 // under ttl, failure under the shorter failureTTL) so a known-bad symbol
 // isn't re-fetched on every single request.
 //
-// A fetch error caused by ctx itself being done (context.Canceled or
-// context.DeadlineExceeded) is NOT cached as a failure — CR follow-up,
-// PR-081: BinanceFuturesDataProvider.Get runs its three futures calls
-// concurrently via errgroup.WithContext, which cancels the shared context
-// the instant ANY sibling call (including the unrelated candle fetch)
-// errors. An otherwise-healthy in-flight call aborted that way returns
-// context.Canceled, not a real "Binance rejected/lacks this symbol"
-// signal — caching that would poison this symbol's cache with a bogus
-// "unavailable" failure for failureTTL, entirely unrelated to whether
-// Binance actually has data for it, on every future request during that
-// window, not just the one racing call.
+// A fetch error is cached as symbol-level unavailability ONLY when it's a
+// CONFIRMED, symbol-specific "no data" signal (*ErrSymbolDataUnavailable —
+// see BinanceFuturesClient.getJSON's doc for exactly which cases qualify:
+// a structured Binance API error, or an HTTP 200 with an empty/insufficient
+// result set). Two categories of error are deliberately never cached:
+//
+//   - ctx itself being done (context.Canceled/context.DeadlineExceeded) —
+//     CR follow-up, PR-081: BinanceFuturesDataProvider.Get runs its three
+//     futures calls concurrently via errgroup.WithContext, which cancels
+//     the shared context the instant ANY sibling call (including the
+//     unrelated candle fetch) errors. An otherwise-healthy in-flight call
+//     aborted that way returns context.Canceled, not a real "Binance
+//     rejected/lacks this symbol" signal.
+//   - any other transient/infrastructure failure — a network error, a
+//     429/5xx or proxy/WAF response that doesn't match Binance's own error
+//     shape, a malformed response body — CR follow-up: these say nothing
+//     about whether the symbol itself is valid, so caching them the same
+//     way would keep every request for that symbol reporting "unavailable"
+//     for failureTTL long after Binance itself recovered.
+//
+// Either way, caching a false negative poisons every request for that
+// symbol during failureTTL, not just the one that hit the transient issue.
 func (r *RedisCachedFuturesData) cachedFetch(ctx context.Context, key string, fetch func() (string, error)) (string, error) {
 	if cached, err := r.redis.Get(ctx, key); err == nil && cached != "" {
 		if reason, isFailure := strings.CutPrefix(cached, failureMarkerPrefix); isFailure {
@@ -156,6 +168,14 @@ func (r *RedisCachedFuturesData) cachedFetch(ctx context.Context, key string, fe
 		if ctx.Err() != nil {
 			// Aborted because our own ctx is done, not because the fetch
 			// itself was confirmed to fail — propagate without caching.
+			return "", err
+		}
+		var unavailable *ErrSymbolDataUnavailable
+		if !errors.As(err, &unavailable) {
+			// Not a confirmed "Binance says this symbol/data doesn't
+			// exist" signal — a transient/infrastructure failure.
+			// Propagate without caching so the next request gets a fresh
+			// attempt instead of a stale negative result.
 			return "", err
 		}
 		msg := err.Error()

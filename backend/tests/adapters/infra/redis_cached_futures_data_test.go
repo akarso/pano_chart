@@ -115,12 +115,14 @@ func TestRedisCachedFuturesData_FundingRate_CacheMissCallsNextAndStores(t *testi
 	}
 }
 
-func TestRedisCachedFuturesData_FundingRate_NextErrorSurfacesAndIsFailureCached(t *testing.T) {
-	// CR follow-up: failures are now cached too (under failureTTL), so a
-	// known-bad symbol isn't re-fetched on every single request — a real
-	// behavior change from "should not cache on provider error".
+func TestRedisCachedFuturesData_FundingRate_ConfirmedUnavailableErrorIsFailureCached(t *testing.T) {
+	// CR follow-up: only a *confirmed* symbol-data-unavailable error
+	// (infra.ErrSymbolDataUnavailable — e.g. "Invalid symbol") is cached
+	// (under failureTTL), so a known-bad symbol isn't re-fetched on every
+	// single request. A transient/infrastructure error is NOT cached — see
+	// TestRedisCachedFuturesData_FundingRate_TransientErrorNotCached below.
 	fr := &fakeFuturesRedis{store: map[string]string{}}
-	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	next := &fakeFuturesDataPort{err: &infra.ErrSymbolDataUnavailable{Reason: "no futures market"}}
 	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	_, err := cache.FundingRate(context.Background(), "NOTASYMBOL")
@@ -134,10 +136,10 @@ func TestRedisCachedFuturesData_FundingRate_NextErrorSurfacesAndIsFailureCached(
 
 func TestRedisCachedFuturesData_FundingRate_CachedFailureSkipsNext(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{}}
-	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	next := &fakeFuturesDataPort{err: &infra.ErrSymbolDataUnavailable{Reason: "no futures market"}}
 	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
-	// First call: cache miss, fetch fails, failure gets cached.
+	// First call: cache miss, fetch fails with a confirmed error, gets cached.
 	if _, err := cache.FundingRate(context.Background(), "NOTASYMBOL"); err == nil {
 		t.Fatal("expected error on first call")
 	}
@@ -155,6 +157,43 @@ func TestRedisCachedFuturesData_FundingRate_CachedFailureSkipsNext(t *testing.T)
 	}
 	if next.fundingCalls != 1 {
 		t.Errorf("expected next NOT to be called again on a cached-failure hit, got %d calls", next.fundingCalls)
+	}
+}
+
+// TestRedisCachedFuturesData_FundingRate_TransientErrorNotCached is the CR
+// follow-up regression test for the second cache-poisoning issue: a
+// transient/infrastructure error (network blip, 429/5xx, malformed
+// response — anything that isn't infra.ErrSymbolDataUnavailable) must NOT
+// be cached as symbol-level unavailability, or every request for that
+// symbol would keep reporting "unavailable" for failureTTL long after the
+// transient issue actually cleared.
+func TestRedisCachedFuturesData_FundingRate_TransientErrorNotCached(t *testing.T) {
+	fr := &fakeFuturesRedis{store: map[string]string{}}
+	next := &fakeFuturesDataPort{err: errors.New("connection reset by peer")} // plain error, not ErrSymbolDataUnavailable
+	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
+
+	// First call: cache miss, fetch fails transiently — must not be cached.
+	if _, err := cache.FundingRate(context.Background(), "BTCUSDT"); err == nil {
+		t.Fatal("expected error on first call")
+	}
+	if _, ok := fr.store["futures:funding:BTCUSDT"]; ok {
+		t.Fatal("expected the transient failure NOT to be cached")
+	}
+
+	// Second call: still a genuine cache miss (nothing cached), so next is
+	// called again — proving a fresh attempt is made instead of serving a
+	// stale negative result. Simulate recovery: this time it succeeds.
+	next.err = nil
+	next.funding = 0.0003
+	rate, err := cache.FundingRate(context.Background(), "BTCUSDT")
+	if err != nil {
+		t.Fatalf("expected the retried call to succeed once the transient issue clears, got: %v", err)
+	}
+	if rate != 0.0003 {
+		t.Errorf("expected the real funding rate 0.0003, got %v", rate)
+	}
+	if next.fundingCalls != 2 {
+		t.Errorf("expected next to be called twice (no false cache hit in between), got %d", next.fundingCalls)
 	}
 }
 
@@ -205,7 +244,7 @@ func TestRedisCachedFuturesData_OpenInterestHistory_CacheMissCallsNextAndStores(
 
 func TestRedisCachedFuturesData_OpenInterestHistory_CachedFailureSkipsNext(t *testing.T) {
 	fr := &fakeFuturesRedis{store: map[string]string{}}
-	next := &fakeFuturesDataPort{err: errors.New("no futures market")}
+	next := &fakeFuturesDataPort{err: &infra.ErrSymbolDataUnavailable{Reason: "no futures market"}}
 	cache := infra.NewRedisCachedFuturesData(next, fr, testTTL, testFailureTTL)
 
 	if _, err := cache.OpenInterestHistory(context.Background(), "NOTASYMBOL"); err == nil {

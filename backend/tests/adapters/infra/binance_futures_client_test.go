@@ -2,6 +2,7 @@ package infra_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -52,19 +53,38 @@ func TestBinanceFuturesClient_FundingRate_InvalidSymbolReturnsError(t *testing.T
 	if err == nil {
 		t.Fatal("expected error for invalid symbol")
 	}
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Errorf("expected *infra.ErrSymbolDataUnavailable (a confirmed, cacheable symbol-data signal), got %T: %v", err, err)
+	}
 }
 
 // --- OpenInterestHistory ---
 
+// openInterestHistEntryJSON builds one GET /futures/data/openInterestHist
+// entry in Binance's real response shape (verified live during PR-081
+// implementation), for building fixtures of arbitrary length.
+func openInterestHistEntryJSON(sumOpenInterest string, timestamp int64) string {
+	return fmt.Sprintf(
+		`{"symbol":"BTCUSDT","sumOpenInterest":%q,"sumOpenInterestValue":"8533728551.63567300","CMCCirculatingSupply":"20080771.00000000","timestamp":%d}`,
+		sumOpenInterest, timestamp)
+}
+
 func TestBinanceFuturesClient_OpenInterestHistory_ParsesRealResponseShape(t *testing.T) {
-	// Fixture matches a live GET /futures/data/openInterestHist response
-	// (oldest-to-newest, as Binance actually returns it).
+	// 12 entries — matches openInterestHistLimit and clears
+	// oiExpansionMinPoints, so this exercises the full happy path rather
+	// than the insufficient-history rejection (covered separately below).
+	const n = 12
+	values := make([]float64, n)
+	entries := make([]string, n)
+	base := 107259.199
+	baseTS := int64(1788786300000)
+	for i := 0; i < n; i++ {
+		values[i] = base - float64(i)*10
+		entries[i] = openInterestHistEntryJSON(fmt.Sprintf("%.8f", values[i]), baseTS+int64(i)*300000)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[
-			{"symbol":"BTCUSDT","sumOpenInterest":"107259.19900000","sumOpenInterestValue":"8533728551.63567300","CMCCirculatingSupply":"20080771.00000000","timestamp":1788786300000},
-			{"symbol":"BTCUSDT","sumOpenInterest":"107240.84300000","sumOpenInterestValue":"8529275487.55589900","CMCCirculatingSupply":"20080771.00000000","timestamp":1788786600000},
-			{"symbol":"BTCUSDT","sumOpenInterest":"107227.24700000","sumOpenInterestValue":"8534238034.17940000","CMCCirculatingSupply":"20080771.00000000","timestamp":1788786900000}
-		]`)
+		fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
 	}))
 	defer server.Close()
 
@@ -73,14 +93,41 @@ func TestBinanceFuturesClient_OpenInterestHistory_ParsesRealResponseShape(t *tes
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []float64{107259.199, 107240.843, 107227.247}
-	if len(oi) != len(want) {
-		t.Fatalf("expected %d entries, got %d", len(want), len(oi))
+	if len(oi) != n {
+		t.Fatalf("expected %d entries, got %d", n, len(oi))
 	}
-	for i := range want {
-		if oi[i] != want[i] {
-			t.Errorf("entry %d: expected %v, got %v", i, want[i], oi[i])
+	for i := range values {
+		if oi[i] != values[i] {
+			t.Errorf("entry %d: expected %v, got %v", i, values[i], oi[i])
 		}
+	}
+}
+
+func TestBinanceFuturesClient_OpenInterestHistory_InsufficientHistoryReturnsError(t *testing.T) {
+	// CR follow-up: Binance can return a nonzero but short series for a
+	// newly-listed or thin futures market — fewer points than
+	// oiExpansion (application/risk/oi_model.go) actually needs (10).
+	// Before this fix, that series passed straight through and silently
+	// scored as "no OI expansion" instead of surfacing as insufficient
+	// data.
+	const tooFew = 3
+	entries := make([]string, tooFew)
+	for i := 0; i < tooFew; i++ {
+		entries[i] = openInterestHistEntryJSON("107259.19900000", 1788786300000+int64(i)*300000)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
+	}))
+	defer server.Close()
+
+	c := infra.NewBinanceFuturesClient(server.URL, server.Client())
+	_, err := c.OpenInterestHistory(context.Background(), "BTCUSDT")
+	if err == nil {
+		t.Fatal("expected an error for a series shorter than oiExpansion's minimum")
+	}
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Errorf("expected *infra.ErrSymbolDataUnavailable (a confirmed, cacheable symbol-data signal), got %T: %v", err, err)
 	}
 }
 
@@ -97,6 +144,10 @@ func TestBinanceFuturesClient_OpenInterestHistory_EmptyArrayReturnsError(t *test
 	_, err := c.OpenInterestHistory(context.Background(), "NOTASYMBOL")
 	if err == nil {
 		t.Fatal("expected error for an empty (no futures market) response")
+	}
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Errorf("expected *infra.ErrSymbolDataUnavailable (a confirmed, cacheable symbol-data signal), got %T: %v", err, err)
 	}
 }
 
@@ -130,6 +181,10 @@ func TestBinanceFuturesClient_LongShortRatio_EmptyArrayReturnsError(t *testing.T
 	if err == nil {
 		t.Fatal("expected error for an empty (no futures market) response")
 	}
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Errorf("expected *infra.ErrSymbolDataUnavailable (a confirmed, cacheable symbol-data signal), got %T: %v", err, err)
+	}
 }
 
 // --- getJSON edge cases (CR follow-up) ---
@@ -153,6 +208,14 @@ func TestBinanceFuturesClient_NonJSONErrorBody_IncludesRawBodyInError(t *testing
 	if !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "Too Many Requests") {
 		t.Errorf("expected the raw response body to appear in the error, got: %v", err)
 	}
+	// CR follow-up: a 429 doesn't match Binance's structured error shape,
+	// so it must NOT be *ErrSymbolDataUnavailable — RedisCachedFuturesData
+	// relies on that distinction to avoid caching a rate-limit response as
+	// if it were a confirmed "this symbol doesn't exist" signal.
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if errors.As(err, &unavailable) {
+		t.Errorf("expected a plain (non-cacheable) error for a 429, got *infra.ErrSymbolDataUnavailable: %v", err)
+	}
 }
 
 func TestBinanceFuturesClient_NetworkError_PropagatesAsError(t *testing.T) {
@@ -165,6 +228,13 @@ func TestBinanceFuturesClient_NetworkError_PropagatesAsError(t *testing.T) {
 	_, err := c.FundingRate(context.Background(), "BTCUSDT")
 	if err == nil {
 		t.Fatal("expected an error for a network-level failure")
+	}
+	// CR follow-up: a network-level failure says nothing about the symbol
+	// itself, so it must not be classified as a cacheable symbol-data
+	// signal either.
+	var unavailable *infra.ErrSymbolDataUnavailable
+	if errors.As(err, &unavailable) {
+		t.Errorf("expected a plain (non-cacheable) error for a network failure, got *infra.ErrSymbolDataUnavailable: %v", err)
 	}
 }
 

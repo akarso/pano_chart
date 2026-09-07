@@ -43,6 +43,28 @@ type binanceAPIError struct {
 	Msg  string `json:"msg"`
 }
 
+// ErrSymbolDataUnavailable marks a CONFIRMED, symbol-specific "no data"
+// signal from Binance — either a structured API error (binanceAPIError,
+// e.g. "Invalid symbol") or an HTTP 200 with an empty/insufficient result
+// set for a symbol with no futures market or too little history. This is
+// deliberately distinct from a transient/infrastructure failure (network
+// error, an unparsed non-2xx like 429/5xx, a malformed response) — see
+// RedisCachedFuturesData.cachedFetch, which only caches this kind of error
+// as symbol-level unavailability. Caching a transient failure the same way
+// would keep reporting "unavailable" long after Binance itself recovered.
+type ErrSymbolDataUnavailable struct {
+	// Reason is exported so tests (in this package and others, e.g. the
+	// RedisCachedFuturesData caching tests) can construct one directly via
+	// a struct literal rather than needing a dedicated constructor.
+	Reason string
+}
+
+func (e *ErrSymbolDataUnavailable) Error() string { return e.Reason }
+
+func errSymbolDataUnavailable(format string, args ...interface{}) *ErrSymbolDataUnavailable {
+	return &ErrSymbolDataUnavailable{Reason: fmt.Sprintf(format, args...)}
+}
+
 // premiumIndexResponse is the subset of GET /fapi/v1/premiumIndex this
 // adapter reads.
 type premiumIndexResponse struct {
@@ -71,10 +93,22 @@ type openInterestHistEntry struct {
 }
 
 // openInterestHistLimit is how many recent points to request — matches
-// oiExpansion's own minimum of 10 data points (application/risk/oi_model.go)
-// with headroom, at the 5m period (the shortest Binance offers for this
-// endpoint besides 5m itself).
+// oiExpansionMinPoints with headroom, at the 5m period (the shortest
+// Binance offers for this endpoint besides 5m itself).
 const openInterestHistLimit = 12
+
+// oiExpansionMinPoints mirrors application/risk/oi_model.go's oiExpansion,
+// which silently returns 0 (no expansion) for a series shorter than this —
+// kept as a separate constant here (oiExpansion's own 10 is unexported and
+// in a different package) rather than an enforced cross-package link, so
+// keep the two in sync if either changes. Without this check, a newly-
+// listed or thin futures market returning 1-9 points used to pass straight
+// through as a normal-looking series and silently score as "no OI
+// expansion" via oiExpansion's own threshold — understating crowding risk
+// for exactly the kind of market where thin data makes that risk harder to
+// see, rather than surfacing it as the insufficient-data case it actually
+// is (CR follow-up).
+const oiExpansionMinPoints = 10
 
 // OpenInterestHistory implements ports.FuturesDataPort.
 func (c *BinanceFuturesClient) OpenInterestHistory(ctx context.Context, symbol string) ([]float64, error) {
@@ -90,7 +124,14 @@ func (c *BinanceFuturesClient) OpenInterestHistory(ctx context.Context, symbol s
 	// symbol has no futures market at all) needs to know either way rather
 	// than silently proceeding with an empty series — see PR-081 §5.
 	if len(entries) == 0 {
-		return nil, fmt.Errorf("openInterestHist: no data for symbol %q", symbol)
+		return nil, errSymbolDataUnavailable("openInterestHist: no data for symbol %q", symbol)
+	}
+	// Fewer points than oiExpansion actually needs — not empty, but not
+	// enough to compute a real expansion reading either. See
+	// oiExpansionMinPoints's doc.
+	if len(entries) < oiExpansionMinPoints {
+		return nil, errSymbolDataUnavailable("openInterestHist: insufficient history for symbol %q (%d points, need >= %d)",
+			symbol, len(entries), oiExpansionMinPoints)
 	}
 	// Binance returns entries oldest-to-newest already (ascending
 	// timestamp) — no reordering needed, matches oiExpansion's expectation.
@@ -119,7 +160,7 @@ func (c *BinanceFuturesClient) LongShortRatio(ctx context.Context, symbol string
 		return 0, fmt.Errorf("globalLongShortAccountRatio: %w", err)
 	}
 	if len(entries) == 0 {
-		return 0, fmt.Errorf("globalLongShortAccountRatio: no data for symbol %q", symbol)
+		return 0, errSymbolDataUnavailable("globalLongShortAccountRatio: no data for symbol %q", symbol)
 	}
 	ratio, err := strconv.ParseFloat(entries[0].LongAccount, 64)
 	if err != nil {
@@ -135,11 +176,20 @@ func (c *BinanceFuturesClient) LongShortRatio(ctx context.Context, symbol string
 const maxErrorBodyBytes = 512
 
 // getJSON performs a GET request and decodes a successful JSON response
-// into out. A non-2xx status is reported with Binance's own error message
-// when the body parses as one (binanceAPIError); otherwise the raw body
-// (truncated to maxErrorBodyBytes) is included verbatim — a proxy/WAF error
-// page or a 429/418 rate-limit body won't match binanceAPIError's shape, and
-// "binance http 429" alone isn't enough to diagnose that in production.
+// into out.
+//
+// A non-2xx status whose body parses as binanceAPIError (Binance's own
+// structured error shape) is a CONFIRMED, symbol-specific rejection —
+// returned as *ErrSymbolDataUnavailable so RedisCachedFuturesData knows
+// it's safe to cache. Anything else — a network-level failure from
+// client.Do, a non-2xx status that doesn't match that shape (a 429/5xx rate
+// limit, a proxy/WAF page), or a JSON decode failure on an otherwise-2xx
+// response — says nothing conclusive about the symbol itself, so it stays
+// a plain error: not cached as symbol-level unavailability, since that
+// would keep reporting "unavailable" long after a transient issue clears
+// (CR follow-up). The raw body (truncated to maxErrorBodyBytes) is still
+// included verbatim in the plain-error case for production triage, even
+// though it isn't Binance's structured shape.
 func (c *BinanceFuturesClient) getJSON(ctx context.Context, reqURL string, out interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -155,7 +205,7 @@ func (c *BinanceFuturesClient) getJSON(ctx context.Context, reqURL string, out i
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		var apiErr binanceAPIError
 		if jerr := json.Unmarshal(body, &apiErr); jerr == nil && apiErr.Msg != "" {
-			return fmt.Errorf("binance http %d: %s (code %d)", resp.StatusCode, apiErr.Msg, apiErr.Code)
+			return errSymbolDataUnavailable("binance http %d: %s (code %d)", resp.StatusCode, apiErr.Msg, apiErr.Code)
 		}
 		if len(body) == 0 {
 			return fmt.Errorf("binance http %d", resp.StatusCode)
