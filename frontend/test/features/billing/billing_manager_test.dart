@@ -6,6 +6,8 @@ import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:in_app_purchase_platform_interface/in_app_purchase_platform_interface.dart';
 import 'package:pano_chart_frontend/features/billing/api/subscription_api.dart';
 import 'package:pano_chart_frontend/features/billing/billing_manager.dart';
+import 'package:pano_chart_frontend/features/billing/trial_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -165,6 +167,61 @@ void main() {
   tearDown(() {
     billing.dispose();
     fakePlatform.dispose();
+  });
+
+  group('hasFullAccess', () {
+    // These construct their own BillingManager directly rather than using
+    // the shared `billing` fixture above — hasFullAccess is a pure getter
+    // over status/trialManager and never touches IAP, so init() isn't
+    // needed here at all.
+
+    test('fails closed to false when no TrialManager is set and status is inactive',
+        () {
+      // Regression test for PR-078 CR follow-up: the fallback used to be
+      // `_trialManager?.isTrialActive() ?? true` (unconditional access
+      // with no TrialManager) — locking in the fail-closed fix directly.
+      final billing = BillingManager(api: _FakeSubscriptionApi(), userId: 'u');
+
+      expect(billing.hasFullAccess, isFalse);
+    });
+
+    test('is true when status.active is true, even with no TrialManager', () async {
+      final fakeApi = _FakeSubscriptionApi()
+        ..statusToReturn =
+            SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+      final billing = BillingManager(api: fakeApi, userId: 'u');
+
+      await billing.refreshStatus();
+
+      expect(billing.hasFullAccess, isTrue);
+    });
+
+    test('reflects an active TrialManager when status is inactive', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final billing = BillingManager(
+        api: _FakeSubscriptionApi(),
+        userId: 'u',
+        trialManager: TrialManager(prefs), // just installed — trial active
+      );
+
+      expect(billing.hasFullAccess, isTrue);
+    });
+
+    test('reflects an expired TrialManager when status is inactive', () async {
+      SharedPreferences.setMockInitialValues({
+        'trial.installDate':
+            DateTime.now().toUtc().subtract(const Duration(days: 30)).toIso8601String(),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final billing = BillingManager(
+        api: _FakeSubscriptionApi(),
+        userId: 'u',
+        trialManager: TrialManager(prefs), // installed 30 days ago — expired
+      );
+
+      expect(billing.hasFullAccess, isFalse);
+    });
   });
 
   group('purchase() guards (platform-independent)', () {

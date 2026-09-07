@@ -45,5 +45,12 @@ void main() {
     expect(find.text('Heading'), findsOneWidget);
     expect(find.textContaining('bold'), findsWidgets);
     expect(find.textContaining('# Heading'), findsNothing);
+
+    // Explicitly unmount rather than relying on the test framework's own
+    // end-of-test teardown to drive dispose() — this is what actually
+    // exercises (and locks in) the dispose() fix below: clearSelectedArticle()
+    // used to fire onChanged -> setState() on an element mid-unmount.
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
   });
 }

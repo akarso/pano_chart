@@ -501,11 +501,16 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   /// Returns `true` if the user has full access (subscription or trial).
   /// When access is denied, navigates to the [UpgradeScreen] and
-  /// returns `false`.
+  /// returns `false`. Fails closed: no billing manager means no access,
+  /// not unconditional access — see PR-078. A null billing manager still
+  /// can't be pushed through to [UpgradeScreen] (it requires one), so
+  /// that case just blocks navigation with nothing to show the user —
+  /// same tradeoff already accepted for the free-tier upgrade banner's
+  /// tap handler.
   bool _requireAccess() {
     final billing = widget.billingManager;
-    // No billing manager → no gating (non-Android / tests).
-    if (billing == null || billing.hasFullAccess) return true;
+    if (billing != null && billing.hasFullAccess) return true;
+    if (billing == null) return false;
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => UpgradeScreen(billingManager: billing),
@@ -742,6 +747,7 @@ class OverviewWidgetState extends State<OverviewWidget>
           const SizedBox(width: 8),
           // Menu icon
           _NavBarIcon(
+            key: const ValueKey('overview-menu-nav-icon'),
             isActive: _overlay == _OverlayKind.menu,
             svgAsset: 'assets/menu.svg',
             onTap: () => _toggleOverlay(_OverlayKind.menu),
@@ -1697,6 +1703,7 @@ class _NavBarIcon extends StatelessWidget {
   final VoidCallback onTap;
 
   const _NavBarIcon({
+    super.key,
     required this.isActive,
     required this.svgAsset,
     required this.onTap,
