@@ -3,6 +3,7 @@ package setups_test
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -100,6 +101,52 @@ func makeDirectionalSeries(n int, rising bool) domain.CandleSeries {
 	}
 	s, _ := domain.NewCandleSeries(sym, tf, candles)
 	return s
+}
+
+// makeSeriesWithTimeframeAndRange builds a flat-close series (no directional
+// bias, so dominantRegime falls back to "sideways" — see
+// TestDominantRegime_DirectionMatchesPriceAction's identical flat-series
+// case) at the given timeframe, with every candle's (high-low)/close ratio
+// set to exactly rangeFrac — used to drive volatilityFromSeries with a known
+// input for the PR-080 regression tests below.
+func makeSeriesWithTimeframeAndRange(t *testing.T, n int, tfStr string, rangeFrac float64) domain.CandleSeries {
+	t.Helper()
+	sym, err := domain.NewSymbol("BTCUSDT")
+	if err != nil {
+		t.Fatalf("NewSymbol: %v", err)
+	}
+	tf, err := domain.NewTimeframe(tfStr)
+	if err != nil {
+		t.Fatalf("NewTimeframe(%q): %v", tfStr, err)
+	}
+	const close = 100.0
+	half := close * rangeFrac / 2
+	candles := make([]domain.Candle, n)
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, base.Add(time.Duration(i)*tf.Duration()),
+			close, close+half, close-half, close, 1000,
+		)
+	}
+	s, err := domain.NewCandleSeries(sym, tf, candles)
+	if err != nil {
+		t.Fatalf("NewCandleSeries: %v", err)
+	}
+	return s
+}
+
+// sidewaysFallbackStats returns SymbolStats scored so dominantRegime falls
+// back to "sideways" for a flat-close series (Compression/Trend both low,
+// and the flat series' recomputed trend bias is "neutral" — see
+// dominantRegime's flat-series fallback path).
+func sidewaysFallbackStats() usecases.SymbolStats {
+	return usecases.SymbolStats{
+		Scores: map[string]float64{
+			"Compression":          0.1,
+			"Trend Predictability": 0.1,
+		},
+	}
 }
 
 // --- Tests ---
@@ -383,5 +430,103 @@ func TestSetupService_FragilityError_DegradesGracefullyWhenNotCancelled(t *testi
 	}
 	if result.Crowding != 0 {
 		t.Errorf("expected Crowding to default to 0 on a non-cancellation error, got %f", result.Crowding)
+	}
+}
+
+// TestVolatilityFromSeries_PR080_FifteenMinuteRangeNoLongerPinnedNearFloor is
+// the regression test for PR-080: volatilityFromSeries used to normalize
+// every timeframe against a divisor (0.1) calibrated for 1d candles. A
+// realistic, genuinely-tradeable 15m average range (~0.5% of price) used to
+// map to ~0.05 — nowhere near VolatilityFit's 0.5 "ideal" input for the
+// sideways regime — silently capping VolatilityFit near its floor (~0.1)
+// regardless of how good the actual conditions were. With the fix, the same
+// 0.5% range should land close to the sideways regime's ideal point.
+func TestVolatilityFromSeries_PR080_FifteenMinuteRangeNoLongerPinnedNearFloor(t *testing.T) {
+	const typical15mRange = 0.005 // 0.5% average (high-low)/close
+	series := makeSeriesWithTimeframeAndRange(t, 50, "15m", typical15mRange)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: sidewaysFallbackStats()}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "15m")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Regime != "sideways" {
+		t.Fatalf("test fixture must classify as sideways to exercise the sideways VolatilityFit curve, got %q", result.Regime)
+	}
+
+	// Pre-fix, the same input produced VolatilityFit ≈ 0.1 (clamp(1-2*|0.05-0.5|)).
+	// Post-fix it should land close to the ideal 0.5 input, i.e. a high fit.
+	if result.VolatilityFit < 0.8 {
+		t.Errorf("expected VolatilityFit >= 0.8 for a typical 15m range post-fix, got %f (pre-fix this would have been ≈0.1)", result.VolatilityFit)
+	}
+}
+
+// TestVolatilityFromSeries_PR080_DailyBehaviorUnchanged pins the 1d divisor
+// at exactly the pre-fix value (0.1) — the fix must not change scoring for
+// the timeframe the original constant was actually calibrated for.
+func TestVolatilityFromSeries_PR080_DailyBehaviorUnchanged(t *testing.T) {
+	const midScaleDailyRange = 0.05 // the original comment's own "0.05→0.5" reference point
+	series := makeSeriesWithTimeframeAndRange(t, 50, "1d", midScaleDailyRange)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: sidewaysFallbackStats()}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "1d")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Regime != "sideways" {
+		t.Fatalf("test fixture must classify as sideways to exercise the sideways VolatilityFit curve, got %q", result.Regime)
+	}
+
+	// 0.05 / 0.1 == 0.5 == the sideways regime's ideal input -> VolatilityFit == 1.0.
+	if result.VolatilityFit < 0.99 {
+		t.Errorf("expected VolatilityFit ≈ 1.0 for the daily divisor's own reference point, got %f", result.VolatilityFit)
+	}
+}
+
+// TestVolatilityFromSeries_PR080_AllTimeframesScaleBySqrtOfTime is the CR
+// follow-up for PR-080: the two tests above only exercised 15m and 1d,
+// leaving 1m/5m/1h/4h uncovered — a sign or exponent slip in
+// volatilityDivisorForTimeframe for any of those would have gone
+// undetected. This computes each timeframe's expected divisor
+// independently (dailyDivisor * sqrt(minutes/1440), duplicating the
+// production formula deliberately — volatilityDivisorForTimeframe is
+// unexported, so this is the only way to pin it from the external
+// setups_test package) and feeds a range set to exactly that divisor's
+// ideal midpoint, so every timeframe must land at VolatilityFit ≈ 1.0 for
+// the fix to be correct across the board, not just at the two points
+// already tested above.
+func TestVolatilityFromSeries_PR080_AllTimeframesScaleBySqrtOfTime(t *testing.T) {
+	const dailyDivisor = 0.1 // must match dailyVolatilityDivisor in service.go
+	dailyMinutes := 24.0 * 60.0
+
+	for _, tfStr := range []string{"1m", "5m", "15m", "1h", "4h", "1d"} {
+		t.Run(tfStr, func(t *testing.T) {
+			tf, err := domain.NewTimeframe(tfStr)
+			if err != nil {
+				t.Fatalf("NewTimeframe(%q): %v", tfStr, err)
+			}
+			expectedDivisor := dailyDivisor * math.Sqrt(tf.Duration().Minutes()/dailyMinutes)
+			rangeFrac := expectedDivisor * 0.5 // the sideways regime's ideal VolatilityFit input
+
+			series := makeSeriesWithTimeframeAndRange(t, 50, tfStr, rangeFrac)
+			repo := &fakeCandleRepo{series: series}
+			scorer := &fakeScorer{stats: sidewaysFallbackStats()}
+			svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+
+			result, err := svc.Evaluate(context.Background(), "BTCUSDT", tfStr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Regime != "sideways" {
+				t.Fatalf("test fixture must classify as sideways, got %q", result.Regime)
+			}
+			if result.VolatilityFit < 0.99 {
+				t.Errorf("expected VolatilityFit ≈ 1.0 at %s's own ideal range, got %f — possible sign/exponent slip in volatilityDivisorForTimeframe", tfStr, result.VolatilityFit)
+			}
+		})
 	}
 }

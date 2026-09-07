@@ -355,8 +355,14 @@ func volumeScore(series domain.CandleSeries) float64 {
 	return clamp(ratio / 2.0)
 }
 
+// dailyVolatilityDivisor is the volatilityFromSeries normalization divisor
+// calibrated for 1d candles: typical crypto daily range 0-10% ≈ 0-0.1.
+const dailyVolatilityDivisor = 0.1
+
 // volatilityFromSeries computes a normalised volatility score.
-// Uses ATR-like measure: average (high-low)/close, normalised to [0,1].
+// Uses ATR-like measure: average (high-low)/close, normalised to [0,1]
+// against a divisor scaled for the series' own timeframe (see
+// volatilityDivisorForTimeframe) — PR-080.
 func volatilityFromSeries(series domain.CandleSeries) float64 {
 	n := series.Len()
 	if n == 0 {
@@ -372,7 +378,40 @@ func volatilityFromSeries(series domain.CandleSeries) float64 {
 		total += (c.High() - c.Low()) / c.Close()
 	}
 	avg := total / float64(n)
-	// Typical crypto daily range: 0-10% ≈ 0-0.1.
-	// Map 0→0, 0.05→0.5, ≥0.1→1.
-	return clamp(avg / 0.1)
+	divisor := volatilityDivisorForTimeframe(series.Timeframe())
+	if divisor <= 0 {
+		// Not a real runtime path for any of the six canonical Timeframe
+		// values (each has a fixed positive Duration()) — only reachable via
+		// a NewTimeframeUnsafe zero/garbage value from tests or misuse.
+		return 0
+	}
+	return clamp(avg / divisor)
+}
+
+// dailyMinutes is domain.Timeframe1d's duration in minutes, hoisted to
+// package scope so volatilityDivisorForTimeframe doesn't recompute it on
+// every call (CR follow-up, PR-080).
+var dailyMinutes = domain.Timeframe1d.Duration().Minutes()
+
+// volatilityDivisorForTimeframe scales dailyVolatilityDivisor down for
+// sub-daily timeframes using sqrt(time) scaling — the standard random-walk
+// assumption that volatility scales with the square root of elapsed time
+// (vol(Δt) ≈ vol(1d) * sqrt(Δt/1d)). Without this, volatilityFromSeries
+// applied dailyVolatilityDivisor unconditionally at every timeframe: a 15m
+// candle's average (high-low)/close is typically ~0.1-0.5%, nowhere close to
+// the ~10% this constant assumes, so the normalized result was silently
+// pinned near 0 for every sub-daily timeframe — see PR-080.
+//
+// This is a scaling heuristic, not an empirically fitted constant (neither
+// was the single fixed divisor it replaces) — provisional pending real
+// per-timeframe score-distribution telemetry, not a calibrated result. Real
+// crypto intraday ranges don't necessarily follow clean sqrt(time) scaling
+// (fee/tick-size floors, session effects), so treat 1m/5m/1h/4h as
+// plausible starting points, not validated — see PR-080's doc.
+func volatilityDivisorForTimeframe(tf domain.Timeframe) float64 {
+	if dailyMinutes <= 0 {
+		return 0
+	}
+	scale := math.Sqrt(tf.Duration().Minutes() / dailyMinutes)
+	return dailyVolatilityDivisor * scale
 }
