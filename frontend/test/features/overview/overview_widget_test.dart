@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pano_chart_frontend/core/app_lifecycle_manager.dart';
 import 'package:pano_chart_frontend/features/billing/api/subscription_api.dart';
 import 'package:pano_chart_frontend/features/billing/billing_manager.dart';
 import 'package:pano_chart_frontend/features/candles/application/get_candle_series.dart';
@@ -315,6 +316,19 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
+      // Scroll all the way down first — otherwise a wrongly-inserted
+      // banner tile near the end of a 20-item grid would sit below the
+      // fold, unbuilt by the lazy GridView, and findsNothing would pass
+      // for the wrong reason (never looked) rather than because the
+      // banner is genuinely absent. Confirmed this catches a real
+      // regression: temporarily dropping the entitlement check from the
+      // cap condition still passed the assertion without this scroll.
+      await tester.scrollUntilVisible(
+        find.text('SYM19'),
+        300.0,
+        scrollable: find.byType(Scrollable),
+      );
+
       expect(find.textContaining('more tokens with Pro'), findsNothing);
     });
 
@@ -366,6 +380,51 @@ void main() {
       // is showing — loadNext must not fire for data the cap won't
       // display anyway.
       expect(getOverview.pageCalls, [1]);
+    });
+  });
+
+  group('lifecycle manager reparenting', () {
+    testWidgets(
+        're-registers with the new AppLifecycleManager when reparented under a different AppLifecycleScope',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(items: [], hasMore: false),
+      ));
+      final managerA = AppLifecycleManager();
+      final managerB = AppLifecycleManager();
+
+      Widget buildUnder(AppLifecycleManager manager) {
+        return MaterialApp(
+          home: Scaffold(
+            body: AppLifecycleScope(
+              manager: manager,
+              child: OverviewWidget(
+                key: const ValueKey('overview'),
+                viewModel: vm,
+                getCandleSeries: _FakeGetCandleSeries(),
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(buildUnder(managerA));
+      await tester.pumpAndSettle();
+
+      expect(managerA.pausableCount, 1,
+          reason: 'expected the widget to register with its initial manager');
+      expect(managerB.pausableCount, 0);
+
+      // Reparent the SAME widget (stable key, so its State persists) under
+      // a different AppLifecycleScope — didChangeDependencies fires again
+      // with a different manager instance.
+      await tester.pumpWidget(buildUnder(managerB));
+      await tester.pumpAndSettle();
+
+      expect(managerA.pausableCount, 0,
+          reason: 'expected the old manager\'s registration to be removed, not leaked');
+      expect(managerB.pausableCount, 1,
+          reason: 'expected the registration to move to the new manager, not be skipped');
     });
   });
 }

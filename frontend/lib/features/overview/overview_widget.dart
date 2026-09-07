@@ -270,22 +270,32 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _lifecycleManager = AppLifecycleScope.of(context);
-    if (_pausable == null) {
-      final mgr = _lifecycleManager;
-      if (mgr != null) {
-        _pausable = Pausable(
-          onPause: () {
-            _autoRefreshTimer?.stop();
-            _stalenessTracker.stop();
-          },
-          onResume: () {
-            _autoRefreshTimer?.start();
-            _stalenessTracker.start();
-          },
-        );
-        mgr.addPausable(_pausable!);
-      }
+    final newManager = AppLifecycleScope.of(context);
+    if (identical(newManager, _lifecycleManager)) return;
+
+    // The manager instance changed — e.g. this widget was reparented under
+    // a different AppLifecycleScope. Move the registration instead of
+    // relying on the old "only ever register once" guard, which left
+    // _pausable registered on the OLD manager forever (never removed —
+    // dispose() only ever unregisters from whatever _lifecycleManager
+    // currently points to) while _lifecycleManager itself had already
+    // moved on to the new one.
+    if (_pausable != null) {
+      _lifecycleManager?.removePausable(_pausable!);
+    }
+    _lifecycleManager = newManager;
+    if (newManager != null) {
+      _pausable ??= Pausable(
+        onPause: () {
+          _autoRefreshTimer?.stop();
+          _stalenessTracker.stop();
+        },
+        onResume: () {
+          _autoRefreshTimer?.start();
+          _stalenessTracker.start();
+        },
+      );
+      newManager.addPausable(_pausable!);
     }
   }
 

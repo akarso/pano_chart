@@ -160,6 +160,32 @@ void main() {
       expect(find.text('Evt_f3'), findsOneWidget);
     });
 
+    testWidgets(
+        'scrollToEventId for a free user reaches a retained past event',
+        (tester) async {
+      // Regression test for PR-077 CR follow-up: a free user only ever
+      // renders 2 past + 3 upcoming events (ListView.separated's actual
+      // item count), but scrollToEventId's index used to be computed
+      // against the FULL, uncapped event list via a separate filtering
+      // pass — for a large event set, a retained event's index in the
+      // full list (here, ~29th) had nothing to do with its actual
+      // position (0 or 1) in the 5-item rendered list. build() and
+      // _scrollToInitialPosition now share one _visibleEvents(state)
+      // computation so the index always matches what's rendered.
+      final events = _manyEvents(pastCount: 30, futureCount: 30);
+      final fake = _FakeGetEvents()
+        ..countryEvents = {'United States': events};
+      final vm = EventsViewModel(fake);
+
+      // p1 is the most recent past event — retained under the free-tier
+      // "last 2 past" cap.
+      await tester.pumpWidget(
+          _app(vm, scrollToEventId: 'p1', isProUser: false));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Evt_p1'), findsOneWidget);
+    });
+
     testWidgets('default scroll positions closest future event visible',
         (tester) async {
       // 15 past + 5 future; without scroll the future events are off-screen

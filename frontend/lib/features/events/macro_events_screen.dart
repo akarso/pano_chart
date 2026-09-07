@@ -76,8 +76,7 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
     // Wait until loading finishes so we scroll on fresh data,
     // not stale events left over from a previous screen.
     if (state.isLoading) return;
-    final filtered = List<Event>.of(state.macroFilteredEvents)
-      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final filtered = _visibleEvents(state);
     if (filtered.isEmpty) return;
 
     _hasScrolled = true;
@@ -158,7 +157,8 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   }) {
     if (!mounted || !_scrollController.hasClients) return;
     final estimated = (index * _estimatedTileExtent * extentMultiplier)
-        .clamp(0.0, _scrollController.position.maxScrollExtent);
+        .clamp(0.0, _scrollController.position.maxScrollExtent)
+        .toDouble();
     _scrollController.jumpTo(estimated);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -199,10 +199,16 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
     return 'Macro Events — ${countries.length} regions';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final state = widget.viewModel.state;
-    var filtered = state.macroFilteredEvents
+  /// The events actually shown in the list: sorted, and — for a free user —
+  /// capped to the last 2 past + next 3 upcoming. Used by both build() and
+  /// _scrollToInitialPosition so an index computed against this list always
+  /// matches the list ListView.separated actually renders — computing them
+  /// separately let a free user's index be computed against the full,
+  /// uncapped event set while only the capped set was ever built, so
+  /// scrollToEventId's coarse jump aimed at a position that didn't
+  /// correspond to anything on screen (see PR-077 CR follow-up).
+  List<Event> _visibleEvents(EventsState state) {
+    var filtered = List<Event>.of(state.macroFilteredEvents)
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     // Free tier: show only 3 upcoming + 2 past events.
@@ -215,6 +221,13 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
         ...upcoming.length > 3 ? upcoming.sublist(0, 3) : upcoming,
       ];
     }
+    return filtered;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = widget.viewModel.state;
+    final filtered = _visibleEvents(state);
 
     // Prune keys for events no longer in the current filtered set — a
     // filter/country change or reload can otherwise let this map grow
