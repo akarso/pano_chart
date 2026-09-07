@@ -55,6 +55,15 @@ func (h *VolatilityHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "TIMEFRAME_NOT_FOUND", "timeframe not available")
 }
 
+// CurrentResult returns the currently-loaded volatility profile, loading it
+// from disk on first use — the same cached data ServeHTTP reads. Exposed
+// for VolatilitySeasonalityProvider (PR-082) to reuse this handler's
+// existing load/cache mechanism instead of a second independent
+// file-read/cache.
+func (h *VolatilityHandler) CurrentResult() (*vol.FullResult, error) {
+	return h.load()
+}
+
 func (h *VolatilityHandler) load() (*vol.FullResult, error) {
 	h.mu.RLock()
 	if h.cached != nil {

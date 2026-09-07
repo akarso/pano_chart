@@ -26,14 +26,30 @@ type FragilityProvider interface {
 	Get(ctx context.Context, symbol, timeframe string) (risk.Fragility, error)
 }
 
+// SeasonalityProvider returns the current moment's historical spike
+// probability — a forward-looking risk read from time-of-day/day-of-week
+// seasonality, as opposed to VolatilityFit's backward-looking read of
+// realized volatility over the last N candles — see PR-082. timeframe is
+// accepted for symmetry with MarketProvider/FragilityProvider and future
+// use, but the current implementation (VolatilitySeasonalityProvider in
+// adapters/http) always answers from 1-minute-of-day granularity
+// regardless of it: infrastructure/volatility's coarser derived timeframes
+// (5m/15m/1h/4h) group 1-minute buckets by array position, not by an
+// explicit time range each bucket covers, so matching "the bucket
+// containing right now" is unambiguous only at 1-minute granularity.
+type SeasonalityProvider interface {
+	CurrentSpikeProbability(ctx context.Context, timeframe string) (float64, error)
+}
+
 // SetupService orchestrates candle retrieval, score computation, and setup
 // evaluation for a single symbol.
 type SetupService struct {
-	candleRepo        ports.CandleRepositoryPort
-	scorer            usecases.SymbolScorer
-	engine            *Engine
-	marketProvider    MarketProvider    // optional; nil means no market modifier
-	fragilityProvider FragilityProvider // optional; nil means crowding = 0
+	candleRepo          ports.CandleRepositoryPort
+	scorer              usecases.SymbolScorer
+	engine              *Engine
+	marketProvider      MarketProvider      // optional; nil means no market modifier
+	fragilityProvider   FragilityProvider   // optional; nil means crowding = 0
+	seasonalityProvider SeasonalityProvider // optional; nil means SeasonalityFit = neutral 0.5
 }
 
 const candleLimit = 200
@@ -55,6 +71,12 @@ func (s *SetupService) SetMarketProvider(mp MarketProvider) {
 // SetFragilityProvider injects the fragility/crowding provider (optional).
 func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
 	s.fragilityProvider = fp
+}
+
+// SetSeasonalityProvider injects the volatility-seasonality provider
+// (optional).
+func (s *SetupService) SetSeasonalityProvider(sp SeasonalityProvider) {
+	s.seasonalityProvider = sp
 }
 
 // Evaluate fetches candles, computes underlying scores, builds a SetupContext,
@@ -100,6 +122,20 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 
 	// Populate confidence inputs and compute unified confidence.
 	result.VolatilityFit = VolatilityFit(result.Regime, setupCtx.Volatility)
+
+	// Forward-looking seasonality fit — supplementary, like
+	// VolatilityExpansion/Dispersion in market.MarketStateService: a
+	// failure here must not fail Evaluate as a whole, so SeasonalityFit
+	// simply stays at its neutral default (matching what a nil provider
+	// already produces) rather than escalating the way the fragility
+	// ctx.Err() check below does for Crowding — see PR-082.
+	result.SeasonalityFit = 0.5
+	if s.seasonalityProvider != nil {
+		if spikeProb, err := s.seasonalityProvider.CurrentSpikeProbability(ctx, timeframe); err == nil {
+			result.SeasonalityFit = SeasonalityFit(spikeProb)
+		}
+	}
+
 	if s.fragilityProvider != nil {
 		frag, err := s.fragilityProvider.Get(ctx, symbol, timeframe)
 		switch {

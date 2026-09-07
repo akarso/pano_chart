@@ -68,6 +68,47 @@ func TestVolatilityFit_Unknown_ReturnsHalf(t *testing.T) {
 	}
 }
 
+// --- SeasonalityFit ---
+
+func TestSeasonalityFit_ZeroSpikeProbIsIdeal(t *testing.T) {
+	got := setups.SeasonalityFit(0.0)
+	if got != 1.0 {
+		t.Errorf("expected 1.0, got %f", got)
+	}
+}
+
+func TestSeasonalityFit_AtReferenceThresholdIsZero(t *testing.T) {
+	got := setups.SeasonalityFit(0.3) // referenceSpikeProb
+	if math.Abs(got-0.0) > 1e-9 {
+		t.Errorf("expected 0.0, got %f", got)
+	}
+}
+
+func TestSeasonalityFit_BeyondThresholdClampsToZero(t *testing.T) {
+	got := setups.SeasonalityFit(0.9)
+	if got != 0.0 {
+		t.Errorf("expected 0.0, got %f", got)
+	}
+}
+
+func TestSeasonalityFit_MidpointIsHalf(t *testing.T) {
+	got := setups.SeasonalityFit(0.15) // half of referenceSpikeProb
+	if math.Abs(got-0.5) > 1e-9 {
+		t.Errorf("expected 0.5, got %f", got)
+	}
+}
+
+func TestSeasonalityFit_MonotonicallyDecreasing(t *testing.T) {
+	// Unlike VolatilityFit's bell curve, low spike probability is always
+	// at least as good as high — never a middle-is-ideal shape.
+	low := setups.SeasonalityFit(0.05)
+	mid := setups.SeasonalityFit(0.15)
+	high := setups.SeasonalityFit(0.25)
+	if !(low > mid && mid > high) {
+		t.Errorf("expected strictly decreasing fit as spike probability rises: low=%f mid=%f high=%f", low, mid, high)
+	}
+}
+
 // --- ComputeConfidence: uptrend/downtrend weights ---
 
 func TestComputeConfidence_Trend_AllPerfect(t *testing.T) {
@@ -77,6 +118,7 @@ func TestComputeConfidence_Trend_AllPerfect(t *testing.T) {
 		MarketEffective: 1.0,
 		Crowding:        0.0, // inverted: (1-0)=1
 		VolatilityFit:   1.0,
+		SeasonalityFit:  1.0,
 	}
 	got := setups.ComputeConfidence(s)
 	if math.Abs(got-1.0) > 1e-9 {
@@ -99,15 +141,18 @@ func TestComputeConfidence_Trend_AllZero(t *testing.T) {
 }
 
 func TestComputeConfidence_Trend_Weights(t *testing.T) {
-	// trend=0.4, market=0.3, crowding=0.2, volatility=0.1
+	// trend=0.4, market=0.3, crowding=0.2, volatility=0.07, seasonality=0.03
+	// (PR-082 split the old flat 0.1 "volatility" weight 2:1 between the
+	// realized and seasonality signals).
 	s := setup.SetupScores{
 		Regime:          "uptrend",
 		TrendHealth:     0.8,
 		MarketEffective: 0.6,
 		Crowding:        0.3, // inverted: 0.7
 		VolatilityFit:   0.5,
+		SeasonalityFit:  0.4,
 	}
-	expected := 0.4*0.8 + 0.3*0.6 + 0.2*0.7 + 0.1*0.5
+	expected := 0.4*0.8 + 0.3*0.6 + 0.2*0.7 + 0.07*0.5 + 0.03*0.4
 	got := setups.ComputeConfidence(s)
 	if math.Abs(got-expected) > 1e-9 {
 		t.Errorf("expected %f, got %f", expected, got)
@@ -117,15 +162,17 @@ func TestComputeConfidence_Trend_Weights(t *testing.T) {
 // --- ComputeConfidence: sideways weights ---
 
 func TestComputeConfidence_Sideways_Weights(t *testing.T) {
-	// trend=0.1, market=0.3, crowding=0.3, volatility=0.3
+	// trend=0.1, market=0.3, crowding=0.3, volatility=0.2, seasonality=0.1
+	// (PR-082 split the old flat 0.3 "volatility" weight 2:1).
 	s := setup.SetupScores{
 		Regime:          "sideways",
 		TrendHealth:     0.5,
 		MarketEffective: 0.7,
 		Crowding:        0.2, // inverted: 0.8
 		VolatilityFit:   0.9,
+		SeasonalityFit:  0.6,
 	}
-	expected := 0.1*0.5 + 0.3*0.7 + 0.3*0.8 + 0.3*0.9
+	expected := 0.1*0.5 + 0.3*0.7 + 0.3*0.8 + 0.2*0.9 + 0.1*0.6
 	got := setups.ComputeConfidence(s)
 	if math.Abs(got-expected) > 1e-9 {
 		t.Errorf("expected %f, got %f", expected, got)
@@ -135,18 +182,45 @@ func TestComputeConfidence_Sideways_Weights(t *testing.T) {
 // --- ComputeConfidence: compression weights ---
 
 func TestComputeConfidence_Compression_Weights(t *testing.T) {
-	// trend=0.2, market=0.3, crowding=0.2, volatility=0.3
+	// trend=0.2, market=0.3, crowding=0.2, volatility=0.2, seasonality=0.1
+	// (PR-082 split the old flat 0.3 "volatility" weight 2:1).
 	s := setup.SetupScores{
 		Regime:          "compression",
 		TrendHealth:     0.3,
 		MarketEffective: 0.5,
 		Crowding:        0.4, // inverted: 0.6
 		VolatilityFit:   0.8,
+		SeasonalityFit:  0.7,
 	}
-	expected := 0.2*0.3 + 0.3*0.5 + 0.2*0.6 + 0.3*0.8
+	expected := 0.2*0.3 + 0.3*0.5 + 0.2*0.6 + 0.2*0.8 + 0.1*0.7
 	got := setups.ComputeConfidence(s)
 	if math.Abs(got-expected) > 1e-9 {
 		t.Errorf("expected %f, got %f", expected, got)
+	}
+}
+
+// --- ComputeConfidence: seasonality (PR-082) ---
+
+// TestComputeConfidence_HighSeasonalityRisk_LowersConfidence is the
+// regression test PR-082's own spec called for: proving a setup with
+// otherwise-identical scores reads as less confident when the current
+// time-of-day's historical spike probability is high than when it's low.
+func TestComputeConfidence_HighSeasonalityRisk_LowersConfidence(t *testing.T) {
+	base := setup.SetupScores{
+		Regime:          "sideways",
+		TrendHealth:     0.5,
+		MarketEffective: 0.6,
+		Crowding:        0.2,
+		VolatilityFit:   0.8,
+		SeasonalityFit:  1.0, // historically calm right now
+	}
+	risky := base
+	risky.SeasonalityFit = 0.0 // historically one of the riskiest moments of the day
+
+	confHigh := setups.ComputeConfidence(base)
+	confRisky := setups.ComputeConfidence(risky)
+	if confRisky >= confHigh {
+		t.Errorf("high seasonality risk should lower confidence: calm=%f risky=%f", confHigh, confRisky)
 	}
 }
 

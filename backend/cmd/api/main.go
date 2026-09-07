@@ -381,10 +381,21 @@ func main() {
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
 
+	// --- Volatility profile (seasonality) ---
+	// Constructed here (rather than at its mux registration further below)
+	// so the same handler/cache can also back the setup engine's
+	// SeasonalityProvider — PR-082.
+	volPath := os.Getenv("VOL_OUTPUT")
+	if volPath == "" {
+		volPath = "volatility_1m.json"
+	}
+	volatilityHandler := adhttp.NewVolatilityHandler(volPath)
+
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
 	setupService.SetMarketProvider(marketService)
+	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
@@ -626,12 +637,9 @@ func main() {
 	mux.Handle("/api/notification/config", authMW(adhttp.NewNotificationConfigHandler(notifConfigStore)))
 	log.Println("[main] /api/notification/config endpoint registered")
 
-	// Volatility profile endpoint
-	volPath := os.Getenv("VOL_OUTPUT")
-	if volPath == "" {
-		volPath = "volatility_1m.json"
-	}
-	mux.Handle("/api/volatility", adhttp.NewVolatilityHandler(volPath))
+	// Volatility profile endpoint (handler constructed earlier, alongside
+	// the setup engine's SeasonalityProvider wiring — PR-082)
+	mux.Handle("/api/volatility", volatilityHandler)
 	log.Println("[main] /api/volatility endpoint registered")
 
 	c := cors.New(cors.Options{
