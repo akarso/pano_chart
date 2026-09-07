@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../../domain/event.dart';
 import 'events_list_screen.dart' show impactColor;
@@ -92,7 +93,7 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
       String eventId, List<Event> sorted, {bool center = false}) {
     final index = sorted.indexWhere((e) => e.id == eventId);
     if (index < 0) return;
-    _scrollToIndex(index, eventId, alignment: center ? 0.5 : 0.0);
+    _scrollToIndex(index, eventId, sorted, alignment: center ? 0.5 : 0.0);
   }
 
   void _scrollToClosestFuture(List<Event> sorted) {
@@ -101,11 +102,11 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
 
     if (futureIdx < 0) {
       // All events are past — scroll to end
-      _scrollToIndex(sorted.length - 1, sorted.last.id, alignment: 1.0);
+      _scrollToIndex(sorted.length - 1, sorted.last.id, sorted, alignment: 1.0);
     } else if (futureIdx > 0) {
       // Show the last past event at the top edge → closest future
       // event appears one row below.
-      _scrollToIndex(futureIdx - 1, sorted[futureIdx - 1].id, alignment: 0.0);
+      _scrollToIndex(futureIdx - 1, sorted[futureIdx - 1].id, sorted, alignment: 0.0);
     }
     // futureIdx == 0 → already at top, nothing to scroll.
   }
@@ -114,12 +115,12 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   /// giving up on a target it still can't find a built context for.
   static const int _maxScrollAttempts = 5;
 
-  /// How much _scrollToIndex widens its per-tile extent estimate on each
-  /// retry that still didn't land the target within the built/cached range.
-  static const double _scrollRetryGrowth = 1.6;
-
   /// Scrolls so the event at [index] (id [eventId]) is visible, aligned per
   /// [alignment] (0.0 = top edge, 0.5 = centered, 1.0 = bottom edge).
+  /// [sorted] is the same list [index] was computed against — used to look
+  /// up the index of whatever tile a failed attempt finds already built,
+  /// so a retry can correct its estimate empirically (see
+  /// _attemptScrollToIndex).
   ///
   /// The list is now lazily built (ListView.separated — see PR-077), so a
   /// target far outside the current viewport + cache extent may not have a
@@ -127,39 +128,56 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
   /// no-op on it. Jump to an estimated offset first (bringing the target
   /// within the built/cached range), then fine-tune with ensureVisible once
   /// its context actually exists.
-  void _scrollToIndex(int index, String eventId, {required double alignment}) {
-    _attemptScrollToIndex(index, eventId,
-        alignment: alignment, extentMultiplier: 1.0, attemptsLeft: _maxScrollAttempts);
+  void _scrollToIndex(int index, String eventId, List<Event> sorted,
+      {required double alignment}) {
+    final idToIndex = {for (var i = 0; i < sorted.length; i++) sorted[i].id: i};
+    _attemptScrollToIndex(
+      index,
+      eventId,
+      idToIndex,
+      alignment: alignment,
+      estimatedOffset: index * _estimatedTileExtent,
+      attemptsLeft: _maxScrollAttempts,
+    );
   }
 
-  /// One coarse-jump attempt for _scrollToIndex, widening the per-tile
-  /// extent estimate and retrying (up to [_maxScrollAttempts] total) when
-  /// the target still isn't built after landing.
+  /// One coarse-jump attempt for _scrollToIndex, correcting its offset
+  /// estimate and retrying (up to [_maxScrollAttempts] total) when the
+  /// target still isn't built after landing.
   ///
-  /// _estimatedTileExtent alone can badly undershoot the real offset when
-  /// enough preceding titles wrap to more lines than the estimate assumes
-  /// — e.g. a distant target following a run of long, wrapped titles could
-  /// land the coarse jump well short of where the target actually is,
-  /// leaving it outside the built/cached range and Scrollable.ensureVisible
-  /// silently no-op'ing on it (a single-attempt jump never recovers from
-  /// this, and since _hasScrolled is already set by the time this runs,
-  /// nothing else retries it either — see PR-077 CR follow-up, "Variable-
-  /// height deep links fail"). Retrying with a growing multiplier here
-  /// self-corrects for that without needing to measure real tile heights:
-  /// each retry assumes tiles are taller than the last guess, converging
-  /// within a handful of attempts for any realistic amount of wrapping.
+  /// _estimatedTileExtent alone can be badly wrong in *either* direction:
+  /// long, wrapped titles ahead of the target make real tiles taller than
+  /// the guess (undershoot — the jump lands short of the target), while a
+  /// run of short, single-line tiles makes them shorter (overshoot — the
+  /// jump lands past it). Either way the target can end up outside the
+  /// built/cached range, with Scrollable.ensureVisible silently no-op'ing
+  /// on it and no other retry (_hasScrolled is already set by the time
+  /// this runs) — see PR-077 CR follow-up ("Variable-height deep links
+  /// fail" / "Retries Cannot Correct Overshoot": an earlier version of
+  /// this retry only ever widened its estimate, which corrects undershoot
+  /// but makes overshoot strictly worse every attempt).
+  ///
+  /// Corrects for both by using real data instead of guessing a direction:
+  /// whatever tile a failed attempt lands near IS built (that's how it got
+  /// there), so its distance from the top of the list — via
+  /// Scrollable.ensureVisible's own offset-computation machinery — divided
+  /// by its known index gives an empirical per-item extent grounded in
+  /// this list's actual rendering, not the static guess. Re-estimating the
+  /// target's offset from that converges within a couple of retries
+  /// regardless of which direction the previous attempt missed by.
   void _attemptScrollToIndex(
     int index,
-    String eventId, {
+    String eventId,
+    Map<String, int> idToIndex, {
     required double alignment,
-    required double extentMultiplier,
+    required double estimatedOffset,
     required int attemptsLeft,
   }) {
     if (!mounted || !_scrollController.hasClients) return;
-    final estimated = (index * _estimatedTileExtent * extentMultiplier)
+    final jumpTarget = estimatedOffset
         .clamp(0.0, _scrollController.position.maxScrollExtent)
         .toDouble();
-    _scrollController.jumpTo(estimated);
+    _scrollController.jumpTo(jumpTarget);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final key = _eventKeys[eventId];
@@ -172,11 +190,46 @@ class MacroEventsScreenState extends State<MacroEventsScreen> {
         return;
       }
       if (attemptsLeft <= 1) return;
+
+      // Find any currently-built tile to use as a real-geometry anchor —
+      // prefer the one closest to the target index, for the most locally
+      // accurate ratio.
+      String? anchorId;
+      int? anchorIndex;
+      for (final entry in _eventKeys.entries) {
+        if (entry.value.currentContext == null) continue;
+        final idx = idToIndex[entry.key];
+        if (idx == null) continue;
+        if (anchorIndex == null ||
+            (idx - index).abs() < (anchorIndex - index).abs()) {
+          anchorId = entry.key;
+          anchorIndex = idx;
+        }
+      }
+
+      double nextEstimate;
+      if (anchorId != null && anchorIndex != null && anchorIndex != 0) {
+        final anchorContext = _eventKeys[anchorId]!.currentContext!;
+        final anchorRenderObject = anchorContext.findRenderObject();
+        final viewport = anchorRenderObject == null
+            ? null
+            : RenderAbstractViewport.maybeOf(anchorRenderObject);
+        final anchorOffset = viewport == null
+            ? jumpTarget // fallback: assume the anchor is ~where we jumped to
+            : viewport.getOffsetToReveal(anchorRenderObject!, 0.0).offset;
+        nextEstimate = index * (anchorOffset / anchorIndex);
+      } else {
+        // No usable anchor (shouldn't normally happen — a jump always
+        // builds something) — fall back to the original static guess.
+        nextEstimate = index * _estimatedTileExtent;
+      }
+
       _attemptScrollToIndex(
         index,
         eventId,
+        idToIndex,
         alignment: alignment,
-        extentMultiplier: extentMultiplier * _scrollRetryGrowth,
+        estimatedOffset: nextEstimate,
         attemptsLeft: attemptsLeft - 1,
       );
     });

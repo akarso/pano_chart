@@ -161,6 +161,33 @@ void main() {
     });
 
     testWidgets(
+        'scrollToEventId reaches a distant target past many compact tiles that overshoot the estimate',
+        (tester) async {
+      // Regression test for PR-077 CR follow-up ("Retries Cannot Correct
+      // Overshoot"): 200 short, single-line-title events, target in the
+      // middle (not near the list's end, so clamping to maxScrollExtent
+      // can't accidentally rescue an overshoot). Real _EventTile height
+      // for compact titles is below _estimatedTileExtent's 72px guess, so
+      // the first coarse jump overshoots the target — a retry that can
+      // only ever widen its estimate (the original implementation) makes
+      // this strictly worse each attempt and never recovers.
+      final now = DateTime.now().toUtc();
+      final events = <Event>[
+        for (var i = 200; i >= 1; i--)
+          _ev('p$i', EventImpact.medium, now.subtract(Duration(hours: i))),
+      ];
+      final fake = _FakeGetEvents()
+        ..countryEvents = {'United States': events};
+      final vm = EventsViewModel(fake);
+
+      await tester.pumpWidget(
+          _app(vm, scrollToEventId: 'p100', isProUser: true));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Evt_p100'), findsOneWidget);
+    });
+
+    testWidgets(
         'scrollToEventId for a free user reaches a retained past event',
         (tester) async {
       // Regression test for PR-077 CR follow-up: a free user only ever
