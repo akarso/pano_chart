@@ -43,14 +43,14 @@ class BillingManager {
 
   /// True when the user may use all features — either via an active
   /// subscription or an active trial.  When no [TrialManager] is set
-  /// (e.g. tests / non-Android), defaults to `true`.
+  /// (e.g. tests / non-Android), fails closed to `false` — see PR-078.
   ///
   /// In debug builds, [debugOverrideAccess] takes priority when non-null.
   bool get hasFullAccess {
     if (kDebugMode && _debugOverrideAccess != null) {
       return _debugOverrideAccess!;
     }
-    return status.active || (_trialManager?.isTrialActive() ?? true);
+    return status.active || (_trialManager?.isTrialActive() ?? false);
   }
 
   // ---- debug helpers (stripped from release builds) ----

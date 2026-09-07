@@ -8,7 +8,7 @@ import 'chart_config.dart';
 Future<ChartIndicatorConfig?> showIndicatorPanel(
   BuildContext context,
   ChartIndicatorConfig current, {
-  bool isProUser = true,
+  bool isProUser = false,
 }) {
   return showModalBottomSheet<ChartIndicatorConfig>(
     context: context,

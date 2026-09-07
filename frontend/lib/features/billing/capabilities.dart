@@ -51,9 +51,12 @@ class Capabilities {
         socialFeed = false,
         notificationsFull = false;
 
-  /// Derives capabilities from the current billing state.
+  /// Derives capabilities from the current billing state. Fails closed:
+  /// no billing manager (billing unavailable/not wired up, e.g. a future
+  /// iOS build before billing lands there) means free, not pro — see
+  /// PR-078.
   factory Capabilities.fromBilling(BillingManager? billing) {
-    if (billing == null || billing.hasFullAccess) {
+    if (billing != null && billing.hasFullAccess) {
       return const Capabilities.pro();
     }
     return const Capabilities.free();
