@@ -11,23 +11,71 @@ import (
 	"pano_chart/backend/domain"
 )
 
-// subscriptionPurchaseResponse models the relevant fields from the
-// Google Play Developer API v3 subscriptions endpoint:
+// subscriptionPurchaseV2Response models the relevant fields from the
+// Google Play Developer API's subscriptionsv2 resource:
 //
-//	GET /androidpublisher/v3/applications/{pkg}/purchases/subscriptions/{sub}/tokens/{token}
+//	GET /androidpublisher/v3/applications/{pkg}/purchases/subscriptionsv2/tokens/{token}
 //
-// See: https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptions
-type subscriptionPurchaseResponse struct {
-	// PaymentState: 0 = pending, 1 = received, 2 = free trial, 3 = deferred
-	PaymentState int `json:"paymentState"`
-	// ExpiryTimeMillis: milliseconds since epoch when the subscription expires.
-	ExpiryTimeMillis string `json:"expiryTimeMillis"`
-	// StartTimeMillis: milliseconds since epoch when the subscription started.
-	StartTimeMillis string `json:"startTimeMillis"`
-	// OrderId: unique order ID from Google (the external transaction ID).
-	OrderId string `json:"orderId"`
-	// AutoRenewing: true if the subscription will renew automatically.
-	AutoRenewing bool `json:"autoRenewing"`
+// This replaces purchases.subscriptions.get (the "v3" flat
+// paymentState/expiryTimeMillis shape) — Google deprecated that method in
+// November 2023 in favor of this one; the old endpoint no longer reliably
+// returns real data — see
+// https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.subscriptionsv2
+//
+// Unlike the old endpoint, the request does not name a specific
+// subscription/product ID — the token itself determines what it covers,
+// and the response lists every product line item associated with it.
+type subscriptionPurchaseV2Response struct {
+	// StartTime: RFC 3339 timestamp string for when the subscription started.
+	StartTime string `json:"startTime"`
+	// SubscriptionState: the top-level lifecycle state — see
+	// subscriptionStateGrantsAccess's doc for which values this treats as
+	// a real, verifiable subscription.
+	SubscriptionState string `json:"subscriptionState"`
+	// LatestOrderId: unique order ID from Google (the external transaction ID).
+	LatestOrderID string `json:"latestOrderId"`
+	// LineItems: one entry per product covered by this purchase — in
+	// practice always exactly one for this app (a single subscription
+	// product), but the API always returns an array.
+	LineItems []subscriptionV2LineItem `json:"lineItems"`
+}
+
+// subscriptionV2LineItem is one entry of subscriptionPurchaseV2Response.LineItems.
+type subscriptionV2LineItem struct {
+	ProductID string `json:"productId"`
+	// ExpiryTime: RFC 3339 timestamp string for when this line item's
+	// access expires.
+	ExpiryTime string `json:"expiryTime"`
+}
+
+// subscriptionStateGrantsAccess reports whether state represents a real,
+// verifiable subscription purchase worth recording — as opposed to one
+// that never completed (PENDING) or has definitively ended (EXPIRED).
+//
+//   - SUBSCRIPTION_STATE_ACTIVE: normal paid or free-trial period — v2 has
+//     no separate "trial" state the way the old paymentState=2 did; a
+//     trial reads as ACTIVE here too.
+//   - SUBSCRIPTION_STATE_IN_GRACE_PERIOD: a renewal payment failed but
+//     Google is still retrying — the user still has access during this
+//     window, so this counts too.
+//   - SUBSCRIPTION_STATE_CANCELED: auto-renew was turned off, but the
+//     already-paid-for period hasn't ended yet — still a real, currently
+//     accessible subscription until its own ExpiryTime.
+//
+// Deliberately excluded: PENDING (payment not yet completed — matches the
+// old code's exclusion of paymentState=0), ON_HOLD (payment failed, access
+// currently suspended), PAUSED, and EXPIRED. Whether "valid" here actually
+// grants access *right now* is decided separately, downstream, by
+// domain.Subscription.IsActive(now) comparing against ExpiryTime — this
+// function only decides whether the API gave us a real subscription record
+// worth storing at all.
+func subscriptionStateGrantsAccess(state string) bool {
+	switch state {
+	case "SUBSCRIPTION_STATE_ACTIVE", "SUBSCRIPTION_STATE_IN_GRACE_PERIOD", "SUBSCRIPTION_STATE_CANCELED":
+		return true
+	default:
+		return false
+	}
 }
 
 // Config carries the runtime parameters required to verify Google Play
@@ -36,7 +84,9 @@ type Config struct {
 	// PackageName is the Android application package (e.g. "com.example.app").
 	PackageName string
 	// SubscriptionID is the product/plan identifier defined in
-	// Google Play Console (e.g. "pano_pro_monthly").
+	// Google Play Console (e.g. "pano_pro_monthly"). Used to pick the
+	// matching line item out of the (usually single-entry) response, and
+	// as a fallback ProductID if no line item matches by ID.
 	SubscriptionID string
 	// AccessToken is a valid OAuth2 access token for the Google Play
 	// Developer API.  When empty the provider assumes the supplied
@@ -86,10 +136,9 @@ func (p *Provider) VerifyPurchase(
 	userID string,
 ) (domain.PaymentVerificationResult, error) {
 	url := fmt.Sprintf(
-		"%s/androidpublisher/v3/applications/%s/purchases/subscriptions/%s/tokens/%s",
+		"%s/androidpublisher/v3/applications/%s/purchases/subscriptionsv2/tokens/%s",
 		p.cfg.baseURL(),
 		p.cfg.PackageName,
-		p.cfg.SubscriptionID,
 		purchaseToken,
 	)
 
@@ -123,46 +172,77 @@ func (p *Provider) VerifyPurchase(
 		return invalid, fmt.Errorf("google play API returned %d: %s", resp.StatusCode, string(body))
 	}
 
-	var purchase subscriptionPurchaseResponse
+	var purchase subscriptionPurchaseV2Response
 	if err := json.Unmarshal(body, &purchase); err != nil {
 		return domain.PaymentVerificationResult{}, fmt.Errorf("decoding response: %w", err)
 	}
 
-	// PaymentState == 1 (received) or 2 (free trial) count as valid.
-	valid := purchase.PaymentState == 1 || purchase.PaymentState == 2
-
-	startTime := parseMillisToUTC(purchase.StartTimeMillis)
-	expiryTime := parseMillisToUTC(purchase.ExpiryTimeMillis)
-
-	if !valid {
+	if !subscriptionStateGrantsAccess(purchase.SubscriptionState) {
 		res, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
 		return res, nil
 	}
 
-	txID := purchase.OrderId
+	// Pick the line item matching the configured product; fall back to the
+	// first (and in practice only) entry if none match by ID exactly — a
+	// token should only ever cover the product it was purchased for, but
+	// being lenient here is safer than erroring out on an unexpected ID
+	// formatting difference between Play Console and this config.
+	item, ok := findLineItem(purchase.LineItems, p.cfg.SubscriptionID)
+	if !ok {
+		return domain.PaymentVerificationResult{}, fmt.Errorf("no line items in subscriptionsv2 response")
+	}
+
+	startTime := parseRFC3339UTC(purchase.StartTime)
+	expiryTime := parseRFC3339UTC(item.ExpiryTime)
+
+	txID := purchase.LatestOrderID
 	if txID == "" {
-		txID = purchaseToken // fallback — some sandbox purchases omit orderId
+		txID = purchaseToken // fallback — some sandbox purchases omit this
+	}
+
+	productID := item.ProductID
+	if productID == "" {
+		productID = p.cfg.SubscriptionID
 	}
 
 	return domain.NewPaymentVerificationResult(
 		true,
 		"google_play",
 		txID,
-		p.cfg.SubscriptionID,
+		productID,
 		userID,
 		startTime,
 		expiryTime,
 	)
 }
 
-// parseMillisToUTC converts a millisecond-epoch string to time.Time UTC.
-func parseMillisToUTC(millis string) time.Time {
-	var ms int64
-	_, _ = fmt.Sscanf(millis, "%d", &ms)
-	if ms == 0 {
+// findLineItem returns the line item whose ProductID matches want, or the
+// first line item if none match (see VerifyPurchase's doc). ok is false
+// only when items is empty entirely.
+func findLineItem(items []subscriptionV2LineItem, want string) (subscriptionV2LineItem, bool) {
+	for _, item := range items {
+		if item.ProductID == want {
+			return item, true
+		}
+	}
+	if len(items) > 0 {
+		return items[0], true
+	}
+	return subscriptionV2LineItem{}, false
+}
+
+// parseRFC3339UTC converts a Google API RFC 3339 timestamp string
+// (e.g. "2026-09-06T13:38:04.126Z") to time.Time UTC. Returns the zero
+// time for an empty or unparseable value.
+func parseRFC3339UTC(ts string) time.Time {
+	if ts == "" {
 		return time.Time{}
 	}
-	return time.UnixMilli(ms).UTC()
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
