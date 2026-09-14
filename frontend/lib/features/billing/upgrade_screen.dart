@@ -23,14 +23,47 @@ class UpgradeScreen extends StatefulWidget {
 class _UpgradeScreenState extends State<UpgradeScreen> {
   late final BillingManager _billing;
 
+  /// Tracks the last verification-error string we've already shown a
+  /// SnackBar for, so onChanged firing again for an unrelated reason (e.g.
+  /// [BillingManager.busy] toggling) doesn't re-show the same message —
+  /// only a genuinely *new* error does.
+  String? _shownVerificationError;
+
   @override
   void initState() {
     super.initState();
     _billing = widget.billingManager;
     _billing.onChanged = () {
+      _maybeShowVerificationError();
       if (mounted) setState(() {});
     };
     Analytics().paywallOpened();
+  }
+
+  /// Surfaces [BillingManager.lastVerificationError] via a SnackBar the
+  /// first time it appears — verification happens asynchronously after the
+  /// Play purchase dialog has already closed, so this is the only
+  /// user-visible feedback path for a failure once the user is back on
+  /// this screen (see billing_manager.dart's doc on the field for why).
+  ///
+  /// [_shownVerificationError] resets to null whenever the underlying
+  /// error clears (a new attempt starts) rather than staying set forever —
+  /// CR follow-up: comparing only "is this the same string I last showed"
+  /// without ever un-marking it meant a *second* failure with the same
+  /// fixed message (the realistic case for a persistent server
+  /// misconfiguration) was silently swallowed, reintroducing the original
+  /// "purchase completes, nothing visible happens" bug on retry.
+  void _maybeShowVerificationError() {
+    final error = _billing.lastVerificationError;
+    if (error == null) {
+      _shownVerificationError = null;
+      return;
+    }
+    if (error == _shownVerificationError || !mounted) return;
+    _shownVerificationError = error;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(error), duration: const Duration(seconds: 8)),
+    );
   }
 
   @override

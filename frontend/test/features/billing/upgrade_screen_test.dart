@@ -49,6 +49,34 @@ class _TestBillingManager extends BillingManager {
   Future<void> restorePurchases() async {
     // No-op in tests.
   }
+
+  // ---- verification-error simulation ----
+  //
+  // lastVerificationError's real backing field is private to
+  // billing_manager.dart, so a subclass can't set it directly — overriding
+  // the getter itself is the clean way to drive the exact onChanged-driven
+  // sequence a real verification failure produces (clear on a new attempt,
+  // set on failure), without needing the full IAP purchase-stream
+  // machinery billing_manager_test.dart already exercises separately.
+
+  String? _testVerificationError;
+
+  @override
+  String? get lastVerificationError => _testVerificationError;
+
+  /// Simulates what [BillingManager] does internally on a verification
+  /// failure: set the error, then notify — see [BillingManager.onChanged].
+  void simulateVerificationFailure(String message) {
+    _testVerificationError = message;
+    onChanged?.call();
+  }
+
+  /// Simulates what [BillingManager.purchase] does at the start of every
+  /// new attempt: clear any stale error, then notify.
+  void simulateNewAttemptStarted() {
+    _testVerificationError = null;
+    onChanged?.call();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +134,52 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Could not start purchase flow'), findsOneWidget);
+    });
+
+    testWidgets(
+        'shows a SnackBar for two consecutive failed purchase attempts with the same message',
+        (tester) async {
+      // CR follow-up regression test: comparing only "is this the same
+      // string I already showed" without ever resetting that tracking
+      // meant a SECOND failure with the identical fixed message (the
+      // realistic case for a persistent server misconfiguration) was
+      // silently swallowed — reintroducing the original "purchase
+      // completes, nothing visible happens" bug on retry.
+      //
+      // Explicitly dismisses the first SnackBar (rather than waiting out
+      // its real duration, which flutter_test's frame-based pump doesn't
+      // reliably fast-forward) and confirms it's actually gone before
+      // triggering the second failure — otherwise findsOneWidget after the
+      // second failure could pass merely because the *first* SnackBar was
+      // still lingering on screen, without proving a second one was ever
+      // queued at all (a false-negative this test itself was caught
+      // producing while being written, before this explicit-dismiss step
+      // was added).
+      await tester.pumpWidget(buildApp());
+      await tester.pumpAndSettle();
+
+      const message = 'We could not verify your purchase.';
+
+      billing.simulateVerificationFailure(message);
+      await tester.pump(); // deliver the SnackBar
+      expect(find.text(message), findsOneWidget);
+
+      ScaffoldMessenger.of(tester.element(find.byType(Scaffold)))
+          .hideCurrentSnackBar();
+      await tester.pumpAndSettle();
+      expect(find.text(message), findsNothing,
+          reason: 'test setup: the first SnackBar must actually be gone before simulating a second failure');
+
+      // Simulate the user starting a fresh purchase attempt (clears the
+      // error), the same sequence BillingManager.purchase() actually
+      // drives, then a second failure with the identical message.
+      billing.simulateNewAttemptStarted();
+      await tester.pump();
+      billing.simulateVerificationFailure(message);
+      await tester.pump();
+
+      expect(find.text(message), findsOneWidget,
+          reason: 'a second failure with the same message must still show a SnackBar');
     });
 
     testWidgets('restore shows "no subscription" snackbar', (tester) async {
