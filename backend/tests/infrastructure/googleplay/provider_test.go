@@ -22,9 +22,8 @@ func validPurchaseV2JSON(productID string, start, expiry time.Time) string {
 	return fmt.Sprintf(`{
 		"startTime": %q,
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId": "GPA.1234-5678-9012",
 		"lineItems": [
-			{"productId": %q, "expiryTime": %q}
+			{"productId": %q, "expiryTime": %q, "latestSuccessfulOrderId": "GPA.1234-5678-9012"}
 		]
 	}`, start.Format(time.RFC3339Nano), productID, expiry.Format(time.RFC3339Nano))
 }
@@ -75,9 +74,8 @@ func TestProvider_VerifyPurchase_FreeTrial(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Add(-time.Hour).Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.trial-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "pano_pro_monthly", "expiryTime": now.Add(7 * 24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "pano_pro_monthly", "expiryTime": now.Add(7 * 24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.trial-001"},
 		},
 	})
 
@@ -107,9 +105,8 @@ func TestProvider_VerifyPurchase_GracePeriod_StillValid(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Add(-30 * 24 * time.Hour).Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_IN_GRACE_PERIOD",
-		"latestOrderId":     "GPA.grace-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "pano_pro_monthly", "expiryTime": now.Add(3 * 24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "pano_pro_monthly", "expiryTime": now.Add(3 * 24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.grace-001"},
 		},
 	})
 
@@ -140,9 +137,8 @@ func TestProvider_VerifyPurchase_CanceledButNotYetExpired_StillValid(t *testing.
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Add(-10 * 24 * time.Hour).Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_CANCELED",
-		"latestOrderId":     "GPA.canceled-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "pano_pro_monthly", "expiryTime": now.Add(20 * 24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "pano_pro_monthly", "expiryTime": now.Add(20 * 24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.canceled-001"},
 		},
 	})
 
@@ -292,9 +288,8 @@ func TestProvider_VerifyPurchase_NoOrderId_FallbackToToken(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "", // sandbox sometimes omits this
 		"lineItems": []map[string]interface{}{
-			{"productId": "sub", "expiryTime": now.Add(30 * 24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "sub", "expiryTime": now.Add(30 * 24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": ""}, // not yet owned by the user
 		},
 	})
 
@@ -327,10 +322,9 @@ func TestProvider_VerifyPurchase_MultipleLineItems_MatchesConfiguredProduct(t *t
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.multi-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "some_other_product", "expiryTime": wrongExpiry.Format(time.RFC3339Nano)},
-			{"productId": "pano_pro_monthly", "expiryTime": rightExpiry.Format(time.RFC3339Nano)},
+			{"productId": "some_other_product", "expiryTime": wrongExpiry.Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.other-001"},
+			{"productId": "pano_pro_monthly", "expiryTime": rightExpiry.Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.multi-001"},
 		},
 	})
 
@@ -352,6 +346,8 @@ func TestProvider_VerifyPurchase_MultipleLineItems_MatchesConfiguredProduct(t *t
 	assert.True(t, result.Valid())
 	assert.Equal(t, "pano_pro_monthly", result.ProductID())
 	assert.WithinDuration(t, rightExpiry, result.ExpirationTime(), time.Second)
+	// Confirms the txID comes from the *matched* line item, not index 0's.
+	assert.Equal(t, "GPA.multi-001", result.ExternalTransactionID())
 }
 
 func TestProvider_VerifyPurchase_SingleLineItemMismatch_FallsBackWithWarning(t *testing.T) {
@@ -368,9 +364,8 @@ func TestProvider_VerifyPurchase_SingleLineItemMismatch_FallsBackWithWarning(t *
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.mismatch-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "some_other_stale_product_id", "expiryTime": expiry.Format(time.RFC3339Nano)},
+			{"productId": "some_other_stale_product_id", "expiryTime": expiry.Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.mismatch-001"},
 		},
 	})
 
@@ -402,10 +397,9 @@ func TestProvider_VerifyPurchase_MultipleLineItemsNoMatch_Errors(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.ambiguous-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "product_a", "expiryTime": now.Add(24 * time.Hour).Format(time.RFC3339Nano)},
-			{"productId": "product_b", "expiryTime": now.Add(48 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "product_a", "expiryTime": now.Add(24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.ambiguous-a"},
+			{"productId": "product_b", "expiryTime": now.Add(48 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.ambiguous-b"},
 		},
 	})
 
@@ -432,9 +426,8 @@ func TestProvider_VerifyPurchase_PausedState_NotValid(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Add(-10 * 24 * time.Hour).Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_PAUSED",
-		"latestOrderId":     "GPA.paused-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "sub", "expiryTime": now.Add(60 * 24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "sub", "expiryTime": now.Add(60 * 24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.paused-001"},
 		},
 	})
 
@@ -465,9 +458,8 @@ func TestProvider_VerifyPurchase_UnparseableExpiryTime_Errors(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.badtime-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "sub", "expiryTime": "not-a-real-timestamp"},
+			{"productId": "sub", "expiryTime": "not-a-real-timestamp", "latestSuccessfulOrderId": "GPA.badtime-001"},
 		},
 	})
 
@@ -493,9 +485,8 @@ func TestProvider_VerifyPurchase_UnparseableStartTime_Errors(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         "also-not-a-timestamp",
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.badstart-001",
 		"lineItems": []map[string]interface{}{
-			{"productId": "sub", "expiryTime": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "sub", "expiryTime": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano), "latestSuccessfulOrderId": "GPA.badstart-001"},
 		},
 	})
 
@@ -522,7 +513,6 @@ func TestProvider_VerifyPurchase_NoLineItems_Errors(t *testing.T) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"startTime":         now.Format(time.RFC3339Nano),
 		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
-		"latestOrderId":     "GPA.empty-001",
 		"lineItems":         []map[string]interface{}{},
 	})
 

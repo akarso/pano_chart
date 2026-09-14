@@ -33,8 +33,6 @@ type subscriptionPurchaseV2Response struct {
 	// subscriptionStateGrantsAccess's doc for which values this treats as
 	// a real, verifiable subscription.
 	SubscriptionState string `json:"subscriptionState"`
-	// LatestOrderId: unique order ID from Google (the external transaction ID).
-	LatestOrderID string `json:"latestOrderId"`
 	// LineItems: one entry per product covered by this purchase — in
 	// practice always exactly one for this app (a single subscription
 	// product), but the API always returns an array.
@@ -47,6 +45,15 @@ type subscriptionV2LineItem struct {
 	// ExpiryTime: RFC 3339 timestamp string for when this line item's
 	// access expires.
 	ExpiryTime string `json:"expiryTime"`
+	// LatestSuccessfulOrderID: the order ID of the latest successful order
+	// for *this* line item (the external transaction ID) — not present if
+	// the item isn't owned by the user yet. CR follow-up: there is no
+	// top-level order ID on subscriptionsv2's response at all (an earlier
+	// version of this struct assumed one, "latestOrderId" — verified
+	// against Google's live API Discovery schema that no such field
+	// exists; it never populated, so every real verification silently fell
+	// through to the purchaseToken fallback below).
+	LatestSuccessfulOrderID string `json:"latestSuccessfulOrderId"`
 }
 
 // subscriptionStateGrantsAccess reports whether state represents a real,
@@ -200,7 +207,7 @@ func (p *Provider) VerifyPurchase(
 		return domain.PaymentVerificationResult{}, fmt.Errorf("subscriptionsv2 expiryTime: %w", err)
 	}
 
-	txID := purchase.LatestOrderID
+	txID := item.LatestSuccessfulOrderID
 	if txID == "" {
 		txID = purchaseToken // fallback — some sandbox purchases omit this
 	}
