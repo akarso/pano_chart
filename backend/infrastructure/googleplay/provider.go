@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -184,18 +185,20 @@ func (p *Provider) VerifyPurchase(
 		return res, nil
 	}
 
-	// Pick the line item matching the configured product; fall back to the
-	// first (and in practice only) entry if none match by ID exactly — a
-	// token should only ever cover the product it was purchased for, but
-	// being lenient here is safer than erroring out on an unexpected ID
-	// formatting difference between Play Console and this config.
-	item, ok := findLineItem(purchase.LineItems, p.cfg.SubscriptionID)
-	if !ok {
-		return domain.PaymentVerificationResult{}, fmt.Errorf("no line items in subscriptionsv2 response")
+	// Pick the line item matching the configured product.
+	item, err := findLineItem(purchase.LineItems, p.cfg.SubscriptionID)
+	if err != nil {
+		return domain.PaymentVerificationResult{}, fmt.Errorf("subscriptionsv2 line items: %w", err)
 	}
 
-	startTime := parseRFC3339UTC(purchase.StartTime)
-	expiryTime := parseRFC3339UTC(item.ExpiryTime)
+	startTime, err := parseRFC3339UTC(purchase.StartTime)
+	if err != nil {
+		return domain.PaymentVerificationResult{}, fmt.Errorf("subscriptionsv2 startTime: %w", err)
+	}
+	expiryTime, err := parseRFC3339UTC(item.ExpiryTime)
+	if err != nil {
+		return domain.PaymentVerificationResult{}, fmt.Errorf("subscriptionsv2 expiryTime: %w", err)
+	}
 
 	txID := purchase.LatestOrderID
 	if txID == "" {
@@ -218,31 +221,55 @@ func (p *Provider) VerifyPurchase(
 	)
 }
 
-// findLineItem returns the line item whose ProductID matches want, or the
-// first line item if none match (see VerifyPurchase's doc). ok is false
-// only when items is empty entirely.
-func findLineItem(items []subscriptionV2LineItem, want string) (subscriptionV2LineItem, bool) {
+// findLineItem returns the line item whose ProductID matches want.
+//
+// If none match: with exactly one line item (this app's normal case — one
+// subscription product), the mismatch most likely means a stale/wrong
+// GOOGLE_PLAY_SUBSCRIPTION_ID rather than a real multi-product purchase —
+// logged loudly so that config drift is visible in production instead of
+// silently tolerated forever, but the one real item is still returned
+// rather than failing outright: rejecting an otherwise-real purchase over
+// an app-side config mismatch would hurt the user more than granting
+// access under a logged-as-suspicious productID. With more than one item
+// and no match, there's no principled way to guess which one the caller
+// meant — CR follow-up: the old v3 code had the product ID in the request
+// URL itself, so a wrong config would 404 immediately; v2's token-only
+// request lost that free diagnostic, so this has to catch it explicitly
+// instead of silently defaulting to index 0.
+func findLineItem(items []subscriptionV2LineItem, want string) (subscriptionV2LineItem, error) {
 	for _, item := range items {
 		if item.ProductID == want {
-			return item, true
+			return item, nil
 		}
 	}
-	if len(items) > 0 {
-		return items[0], true
+	switch len(items) {
+	case 0:
+		return subscriptionV2LineItem{}, fmt.Errorf("no line items in subscriptionsv2 response")
+	case 1:
+		log.Printf("[googleplay] WARNING: line item productId %q does not match configured SubscriptionID %q — check GOOGLE_PLAY_SUBSCRIPTION_ID for drift",
+			items[0].ProductID, want)
+		return items[0], nil
+	default:
+		return subscriptionV2LineItem{}, fmt.Errorf(
+			"no line item matches configured SubscriptionID %q among %d line items — refusing to guess which one", want, len(items))
 	}
-	return subscriptionV2LineItem{}, false
 }
 
 // parseRFC3339UTC converts a Google API RFC 3339 timestamp string
-// (e.g. "2026-09-06T13:38:04.126Z") to time.Time UTC. Returns the zero
-// time for an empty or unparseable value.
-func parseRFC3339UTC(ts string) time.Time {
+// (e.g. "2026-09-06T13:38:04.126Z") to time.Time UTC. An empty or
+// unparseable value is a real error, not a zero-time default — without
+// this, a garbage timestamp could silently produce a technically-valid
+// PaymentVerificationResult whose zero ExpirationTime only surfaces later
+// as a confusing "expiration_time cannot be before start_time" error deep
+// in domain.NewSubscription, instead of a clear parse-failure error right
+// where the bad data was actually read — CR follow-up.
+func parseRFC3339UTC(ts string) (time.Time, error) {
 	if ts == "" {
-		return time.Time{}
+		return time.Time{}, fmt.Errorf("empty timestamp")
 	}
 	t, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, fmt.Errorf("parsing %q: %w", ts, err)
 	}
-	return t.UTC()
+	return t.UTC(), nil
 }

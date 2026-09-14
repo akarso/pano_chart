@@ -45,9 +45,21 @@ class _UpgradeScreenState extends State<UpgradeScreen> {
   /// Play purchase dialog has already closed, so this is the only
   /// user-visible feedback path for a failure once the user is back on
   /// this screen (see billing_manager.dart's doc on the field for why).
+  ///
+  /// [_shownVerificationError] resets to null whenever the underlying
+  /// error clears (a new attempt starts) rather than staying set forever —
+  /// CR follow-up: comparing only "is this the same string I last showed"
+  /// without ever un-marking it meant a *second* failure with the same
+  /// fixed message (the realistic case for a persistent server
+  /// misconfiguration) was silently swallowed, reintroducing the original
+  /// "purchase completes, nothing visible happens" bug on retry.
   void _maybeShowVerificationError() {
     final error = _billing.lastVerificationError;
-    if (error == null || error == _shownVerificationError || !mounted) return;
+    if (error == null) {
+      _shownVerificationError = null;
+      return;
+    }
+    if (error == _shownVerificationError || !mounted) return;
     _shownVerificationError = error;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(error), duration: const Duration(seconds: 8)),

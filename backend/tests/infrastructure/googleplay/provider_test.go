@@ -354,6 +354,169 @@ func TestProvider_VerifyPurchase_MultipleLineItems_MatchesConfiguredProduct(t *t
 	assert.WithinDuration(t, rightExpiry, result.ExpirationTime(), time.Second)
 }
 
+func TestProvider_VerifyPurchase_SingleLineItemMismatch_FallsBackWithWarning(t *testing.T) {
+	// CR follow-up: the realistic misconfiguration case — a stale/wrong
+	// GOOGLE_PLAY_SUBSCRIPTION_ID with exactly one line item in the
+	// response (this app's normal shape). Today's behavior is to still
+	// accept the one real item (rejecting an otherwise-real purchase over
+	// an app-side config mismatch would be worse for the user), logging a
+	// warning rather than silently doing nothing — this test pins that
+	// actual behavior so a future change to it is deliberate, not
+	// accidental.
+	now := time.Now().UTC()
+	expiry := now.Add(30 * 24 * time.Hour)
+	body, _ := json.Marshal(map[string]interface{}{
+		"startTime":         now.Format(time.RFC3339Nano),
+		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+		"latestOrderId":     "GPA.mismatch-001",
+		"lineItems": []map[string]interface{}{
+			{"productId": "some_other_stale_product_id", "expiryTime": expiry.Format(time.RFC3339Nano)},
+		},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "pano_pro_monthly", // does not match the response's productId
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	result, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	require.NoError(t, err)
+	assert.True(t, result.Valid())
+	assert.Equal(t, "some_other_stale_product_id", result.ProductID())
+	assert.WithinDuration(t, expiry, result.ExpirationTime(), time.Second)
+}
+
+func TestProvider_VerifyPurchase_MultipleLineItemsNoMatch_Errors(t *testing.T) {
+	// Distinct from the single-item case above: with more than one line
+	// item and no match, there's no principled way to guess which one the
+	// caller meant, so this must error rather than silently pick index 0.
+	now := time.Now().UTC()
+	body, _ := json.Marshal(map[string]interface{}{
+		"startTime":         now.Format(time.RFC3339Nano),
+		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+		"latestOrderId":     "GPA.ambiguous-001",
+		"lineItems": []map[string]interface{}{
+			{"productId": "product_a", "expiryTime": now.Add(24 * time.Hour).Format(time.RFC3339Nano)},
+			{"productId": "product_b", "expiryTime": now.Add(48 * time.Hour).Format(time.RFC3339Nano)},
+		},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "pano_pro_monthly", // matches neither product_a nor product_b
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	_, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to guess")
+}
+
+func TestProvider_VerifyPurchase_PausedState_NotValid(t *testing.T) {
+	now := time.Now().UTC()
+	body, _ := json.Marshal(map[string]interface{}{
+		"startTime":         now.Add(-10 * 24 * time.Hour).Format(time.RFC3339Nano),
+		"subscriptionState": "SUBSCRIPTION_STATE_PAUSED",
+		"latestOrderId":     "GPA.paused-001",
+		"lineItems": []map[string]interface{}{
+			{"productId": "sub", "expiryTime": now.Add(60 * 24 * time.Hour).Format(time.RFC3339Nano)},
+		},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	result, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	require.NoError(t, err)
+	assert.False(t, result.Valid())
+}
+
+func TestProvider_VerifyPurchase_UnparseableExpiryTime_Errors(t *testing.T) {
+	// CR follow-up: an unparseable timestamp must surface as a clear
+	// error, not a silent zero-time that only manifests later as a
+	// confusing "expiration_time cannot be before start_time" failure
+	// somewhere downstream in domain.NewSubscription.
+	now := time.Now().UTC()
+	body, _ := json.Marshal(map[string]interface{}{
+		"startTime":         now.Format(time.RFC3339Nano),
+		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+		"latestOrderId":     "GPA.badtime-001",
+		"lineItems": []map[string]interface{}{
+			{"productId": "sub", "expiryTime": "not-a-real-timestamp"},
+		},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	_, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expiryTime")
+}
+
+func TestProvider_VerifyPurchase_UnparseableStartTime_Errors(t *testing.T) {
+	body, _ := json.Marshal(map[string]interface{}{
+		"startTime":         "also-not-a-timestamp",
+		"subscriptionState": "SUBSCRIPTION_STATE_ACTIVE",
+		"latestOrderId":     "GPA.badstart-001",
+		"lineItems": []map[string]interface{}{
+			{"productId": "sub", "expiryTime": time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)},
+		},
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	_, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "startTime")
+}
+
 func TestProvider_VerifyPurchase_NoLineItems_Errors(t *testing.T) {
 	now := time.Now().UTC()
 	body, _ := json.Marshal(map[string]interface{}{
