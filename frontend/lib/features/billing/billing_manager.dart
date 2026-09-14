@@ -41,6 +41,22 @@ class BillingManager {
   bool _busy = false;
   bool get busy => _busy;
 
+  /// The most recent purchase-verification failure, if any — cleared at
+  /// the start of every new purchase/restore attempt and on success.
+  ///
+  /// Verification runs asynchronously *after* the Play purchase dialog has
+  /// already closed and control has returned to the app (via
+  /// [_onPurchaseUpdated] → [_verifyAndComplete]), so [purchase]'s own
+  /// return value can't carry a verification outcome — it only reports
+  /// whether the dialog launched. Before this field existed, a
+  /// verification failure was only ever `debugPrint`'d (invisible outside
+  /// a debug console), so the user saw the purchase dialog complete
+  /// successfully in Play and then... nothing — no error, no confirmation,
+  /// same screen. UI layers should surface this (e.g. a SnackBar) whenever
+  /// it changes to non-null via [onChanged].
+  String? get lastVerificationError => _lastVerificationError;
+  String? _lastVerificationError;
+
   /// True when the user may use all features — either via an active
   /// subscription or an active trial.  When no [TrialManager] is set
   /// (e.g. tests / non-Android), fails closed to `false` — see PR-078.
@@ -146,6 +162,10 @@ class BillingManager {
   /// Returns `true` if the flow was started successfully, `false` otherwise.
   Future<bool> purchase() async {
     if (_product == null || _busy) return false;
+    // Reset before the platform guard (not after) so a new attempt clears
+    // stale state regardless of how far it gets — including in tests on a
+    // non-Android host, where every attempt stops at that guard.
+    _lastVerificationError = null;
     if (!Platform.isAndroid) {
       debugPrint('[BillingManager] Purchase flow only supported on Android');
       return false;
@@ -212,10 +232,24 @@ class BillingManager {
       );
       await refreshStatus();
       if (_status.active) {
+        _lastVerificationError = null;
         Analytics().subscriptionStarted(productId: purchase.productID);
+      } else {
+        // The backend call itself succeeded (no exception), but the
+        // subscription still doesn't read as active — e.g. the provider
+        // returned a technically-successful-but-not-valid verification
+        // result. Surface this too, not just a thrown exception: silently
+        // returning to the same "not subscribed" screen with no
+        // explanation is the exact failure mode this field exists to fix.
+        _lastVerificationError =
+            'Purchase completed, but we could not confirm your subscription yet. '
+            'Please try "Restore purchases" in a moment, or contact support if this persists.';
       }
     } catch (e) {
       debugPrint('[BillingManager] Verification failed: $e');
+      _lastVerificationError =
+          'We could not verify your purchase. Please try "Restore purchases" — '
+          'if that doesn\'t work, contact support and we\'ll sort it out.';
     } finally {
       _busy = false;
       _notify();
@@ -228,6 +262,7 @@ class BillingManager {
   /// re-verifies any found purchase tokens).
   Future<void> restorePurchases() async {
     _busy = true;
+    _lastVerificationError = null;
     _notify();
     try {
       await _iap.restorePurchases();

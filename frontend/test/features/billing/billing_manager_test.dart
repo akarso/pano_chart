@@ -314,6 +314,66 @@ void main() {
       expect(billing.status.active, isFalse);
       expect(billing.busy, isFalse,
           reason: 'the finally block must still clear busy on failure');
+      // Regression test: a verification failure used to be debugPrint-only
+      // (invisible outside a debug console) — the user completed the Play
+      // purchase dialog and got back to a screen with zero explanation of
+      // what went wrong. lastVerificationError is UpgradeScreen's only way
+      // to know something needs surfacing.
+      expect(billing.lastVerificationError, isNotNull);
+    });
+
+    test(
+        'TestPurchase_VerifiedButStatusNotActive_SetsVerificationErrorWithoutThrowing',
+        () async {
+      // The backend call can succeed (no exception) while the resulting
+      // subscription status still doesn't read as active — e.g. the
+      // provider verified the token but returned a not-yet-valid result.
+      // This must also surface an error, not just the thrown-exception
+      // path above.
+      await billing.init();
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
+
+      fakePlatform.push(_purchase());
+      await pumpEventQueue();
+
+      expect(fakeApi.verifyCallCount, 1);
+      expect(billing.status.active, isFalse);
+      expect(billing.lastVerificationError, isNotNull);
+    });
+
+    test('TestPurchase_Success_ClearsAnyPriorVerificationError', () async {
+      await billing.init();
+      fakeApi.verifyError = Exception('first attempt fails');
+      fakeApi.statusToReturn =
+          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+
+      fakePlatform.push(_purchase(token: 'tok-fail'));
+      await pumpEventQueue();
+      expect(billing.lastVerificationError, isNotNull);
+
+      // A later successful purchase must clear the stale error rather than
+      // leaving a resolved issue permanently flagged.
+      fakeApi.verifyError = null;
+      fakePlatform.push(_purchase(token: 'tok-succeed'));
+      await pumpEventQueue();
+
+      expect(billing.status.active, isTrue);
+      expect(billing.lastVerificationError, isNull);
+    });
+
+    test('purchase() clears a stale verification error at the start of a new attempt',
+        () async {
+      await billing.init();
+      fakeApi.verifyError = Exception('first attempt fails');
+      fakePlatform.push(_purchase(token: 'tok-fail'));
+      await pumpEventQueue();
+      expect(billing.lastVerificationError, isNotNull);
+
+      // purchase() on this fake platform can't reach the IAP-launch path
+      // (Platform.isAndroid guard — see PR-078), so this only exercises
+      // purchase()'s own early reset, not a second full purchase flow.
+      await billing.purchase();
+      expect(billing.lastVerificationError, isNull);
     });
 
     test('TestPurchase_Restored_ReVerifiesLikeAPurchase', () async {
