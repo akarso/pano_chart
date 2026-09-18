@@ -337,7 +337,7 @@ func main() {
 	)
 	compositeService := metrics.NewCompositeIndexService(candleProvider, rankingWorkers)
 	compositeCacheTTL := 3 * time.Minute
-	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite")
+	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite_v2")
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 

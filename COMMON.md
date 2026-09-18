@@ -172,3 +172,34 @@ Any change to this file requires:
 ## Guiding Principle
 
 If backend and frontend disagree, this document wins.
+
+---
+
+## Market Pulse Semantics (PR-084)
+
+### Headline regime
+
+`GET /api/market/regime` and `GET /api/market/state` set `regime`/`state`,
+`prevalence`/`confidence`, `label`, and `bias` from scoring the **merged
+composite tape** (volume-weighted when available, else median) with the same
+per-chart calculators as rankings.
+
+Additive fields:
+
+* `regimeSource`: `composite_volume_weighted` | `composite_median` | `participation`
+* `structure` (state endpoint): tape score mix
+* regime `scores`: tape structure (not token vote share)
+
+### Participation (metrics)
+
+`metrics.trendBreadth` / `sidewaysBreadth` / `compressionBreadth` /
+`expansionBreadth` remain **per-token participation** averages. UI copy must
+not present these as the headline regime.
+
+### Composite index
+
+`GET /api/market/composite`:
+
+* `points` — equal-weight median (unchanged)
+* `volumeWeightedPoints` — quote-volume-weighted mean (additive)
+

@@ -78,15 +78,11 @@ func TestMarketStateService_NoCandleProvider_DefaultsMetrics(t *testing.T) {
 	}
 }
 
-// TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider is the
-// regression test for the PR-073 CR finding that /api/market/state (and the
-// notification scheduler, and the setup scanner) got significantly more
-// expensive because every Calculate() call paid for a full symbol-universe
-// candle fan-out, whether or not the caller read VolatilityExpansion/
-// Dispersion. Calculate must stay cheap even when a CandleProvider is
-// configured for CalculateWithCandleMetrics's benefit — only the latter may
-// touch it.
-func TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider(t *testing.T) {
+// TestMarketStateService_Calculate_UsesCandleProviderForTapeRegime documents
+// PR-084: Calculate may fan out candles to score the composite tape for the
+// headline regime. Vol/dispersion still stay at Calculate defaults — those
+// remain CalculateWithCandleMetrics-only.
+func TestMarketStateService_Calculate_UsesCandleProviderForTapeRegime(t *testing.T) {
 	spy := &fanoutSpyCandleProvider{}
 	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
 	svc.SetCandleProvider(spy)
@@ -95,11 +91,11 @@ func TestMarketStateService_Calculate_SkipsCandleFanoutEvenWithProvider(t *testi
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if spy.symbolsCalls != 0 {
-		t.Errorf("expected Calculate to never touch the CandleProvider, got %d Symbols() calls", spy.symbolsCalls)
+	if spy.symbolsCalls == 0 {
+		t.Errorf("expected Calculate to touch CandleProvider for composite tape, got 0 Symbols() calls")
 	}
 	if s.VolatilityExpansion != 1.0 || s.Dispersion != 0 {
-		t.Errorf("expected default metrics from Calculate, got vol=%f disp=%f", s.VolatilityExpansion, s.Dispersion)
+		t.Errorf("expected default vol/dispersion from Calculate, got vol=%f disp=%f", s.VolatilityExpansion, s.Dispersion)
 	}
 }
 
@@ -113,7 +109,9 @@ func (f *fanoutSpyCandleProvider) Symbols(_ context.Context) ([]domain.Symbol, e
 }
 
 func (f *fanoutSpyCandleProvider) GetLastNCandles(_ context.Context, _ domain.Symbol, _ domain.Timeframe, _ int) (domain.CandleSeries, error) {
-	return domain.CandleSeries{}, fmt.Errorf("should never be called by Calculate")
+	// Empty universe from Symbols() means CalculateTape returns early; this
+	// path should not be hit when Symbols returns nil, but stay defensive.
+	return domain.CandleSeries{}, fmt.Errorf("no candles in spy")
 }
 
 func TestMarketStateService_VolatilityExpansion_InsufficientData(t *testing.T) {
