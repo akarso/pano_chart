@@ -155,6 +155,10 @@ No test may cross architectural boundaries.
 
 ## Pull Request Roadmap
 
+The phases below are the original v1 bootstrap sequence (historical). The current delivery
+plan — tracks, slices, specs, and dependencies for PR-085 onward — lives in the repo-root
+`ROADMAP.md`.
+
 PRs must be merged **in order**.
 
 ### Phase 0 — Baseline
