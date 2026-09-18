@@ -271,7 +271,7 @@ void main() {
 
       // Regime card shown instead of state card
       expect(find.text('COMPRESSION'), findsOneWidget);
-      expect(find.text('71% prevalence  •  4h'), findsOneWidget);
+      expect(find.text('71% tape confidence  •  4h'), findsOneWidget);
 
       // Metrics card shown
       expect(find.text('Market Metrics'), findsOneWidget);
@@ -331,12 +331,12 @@ void main() {
       // Not the normal regime display — an outage must not look like a
       // legitimate (if empty) "Sideways" reading.
       expect(find.text('SIDEWAYS'), findsNothing);
-      expect(find.text('0% prevalence  •  4h'), findsNothing);
+      expect(find.text('0% tape confidence  •  4h'), findsNothing);
       // Nor the metrics/breadth cards, which would otherwise render the
       // unavailable response's placeholder values as if they were real
       // volatility/dispersion/breadth measurements (PR-074 CR Issue 1).
       expect(find.text('Market Metrics'), findsNothing);
-      expect(find.text('Market Breadth'), findsNothing);
+      expect(find.text('Token Participation'), findsNothing);
     });
 
     testWidgets(
@@ -390,7 +390,7 @@ void main() {
       expect(find.text('Data unavailable'), findsNothing);
       expect(find.text('TREND'), findsOneWidget);
       // And the breadth card still shows its real numbers.
-      expect(find.text('Market Breadth'), findsOneWidget);
+      expect(find.text('Token Participation'), findsOneWidget);
     });
 
     testWidgets('shows state card as fallback without regimeApi',

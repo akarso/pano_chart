@@ -139,7 +139,7 @@ The overall market is classified into one of four states:
 - **Trend** — sustained directional movement
 - **Expansion** — high volatility, wide swings
 
-Confidence scores and breadth breakdowns show how unanimous the signal is across tokens.
+Confidence scores show how strongly the **merged market tape** fits the dominant regime. Token participation (metrics) shows how individual tokens distribute across regimes — complementary, not the same signal.
 
 ### Transition Probabilities
 

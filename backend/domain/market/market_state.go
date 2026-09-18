@@ -28,13 +28,23 @@ type Summary struct {
 	Timeframe   string
 	State       State
 	Confidence  float64
-	Breadth     Breadth
+	Breadth     Breadth // participation across tokens (metrics panel)
 	SymbolCount int
 	// Bias indicates the dominant direction when State is trend:
 	// "up", "down", or "neutral".
 	Bias string
 
+	// Structure is the composite-tape score mix that drives State/Confidence
+	// when RegimeSource is a composite_* value (PR-084). Zero/empty when the
+	// service fell back to participation-only classification.
+	Structure Breadth
+
+	// RegimeSource explains how State was chosen:
+	// "composite_volume_weighted", "composite_median", or "participation".
+	RegimeSource string
+
 	// Trend health aggregates (additive — zero values are backward compatible).
+	// When RegimeSource is composite_*, these are health of the tape itself.
 	EffectiveTrend float64 // average trend health across all tokens (0–1)
 	BreakdownRate  float64 // fraction of trending tokens with health < 0.4
 	Label          string  // human-readable quality label

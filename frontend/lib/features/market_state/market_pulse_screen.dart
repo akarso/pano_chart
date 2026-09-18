@@ -52,6 +52,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   String? _error;
   bool _loading = true;
   String _timeframe = '4h';
+  /// When true and volume-weighted series exists, chart that path (PR-084).
+  bool _useVolumeWeighted = true;
 
   AutoRefreshTimer? _autoRefreshTimer;
   Pausable? _pausable;
@@ -411,8 +413,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% prevalence  •  ${data.timeframe}',
+            '$pct% tape confidence  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            data.regimeSource.startsWith('composite')
+                ? 'From merged market tape (same scores as one chart)'
+                : 'From token participation (tape unavailable)',
+            style: const TextStyle(color: Colors.white24, fontSize: 10),
           ),
           const SizedBox(height: 16),
           _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
@@ -494,8 +503,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                       '  • < 0.8 low  •  0.8–1.3 normal  •  > 1.3 high\n\n'
                       'Dispersion — how differently assets move from each other.\n'
                       '  • < 2% low  •  2–5% moderate  •  > 5% high\n\n'
-                      'Trend Breadth — average directional strength across all tokens (0–100%).\n\n'
-                      'Compression Breadth — average range-contraction signal across all tokens (0–100%).',
+                      'Participation — how individual tokens score across regimes '
+                      '(not the headline). The headline comes from the merged market tape.',
                 ),
                 child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
               ),
@@ -509,25 +518,25 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               _dispersionColor(m.dispersion)),
           const SizedBox(height: 8),
           _metricRow(
-            'Trend Breadth',
+            'Trend participation',
             '${(m.trendBreadth * 100).toStringAsFixed(1)}%',
             Colors.tealAccent,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Sideways Breadth',
+            'Sideways participation',
             '${(m.sidewaysBreadth * 100).toStringAsFixed(1)}%',
             Colors.blueGrey,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Compression Breadth',
+            'Compression participation',
             '${(m.compressionBreadth * 100).toStringAsFixed(1)}%',
             Colors.amber,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Expansion Breadth',
+            'Expansion participation',
             '${(m.expansionBreadth * 100).toStringAsFixed(1)}%',
             Colors.redAccent,
           ),
@@ -855,14 +864,20 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Composite Index Chart Card ----------
 
   Widget _buildCompositeCard(CompositeIndexData data) {
-    final hasPoints = data.points.isNotEmpty;
-    final change = hasPoints && data.points.length > 1
-        ? data.points.last.value - data.points.first.value
+    final chartPoints = (_useVolumeWeighted && data.hasVolumeWeighted)
+        ? data.volumeWeightedPoints
+        : data.points;
+    final hasPoints = chartPoints.isNotEmpty;
+    final change = hasPoints && chartPoints.length > 1
+        ? chartPoints.last.value - chartPoints.first.value
         : 0.0;
     final changeStr = change >= 0
         ? '+${change.toStringAsFixed(2)}'
         : change.toStringAsFixed(2);
     final changeColor = change >= 0 ? Colors.greenAccent : Colors.redAccent;
+    final seriesLabel = (_useVolumeWeighted && data.hasVolumeWeighted)
+        ? 'Volume weighted'
+        : 'Equal weight (median)';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -892,9 +907,27 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '${data.symbolCount} symbols  •  base 100${_timeRangeLabel(data.points)}',
+            '${data.symbolCount} symbols  •  $seriesLabel  •  base 100${_timeRangeLabel(chartPoints)}',
             style: const TextStyle(color: Colors.grey, fontSize: 11),
           ),
+          if (data.hasVolumeWeighted) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                _compositeSeriesChip(
+                  label: 'Volume weighted',
+                  selected: _useVolumeWeighted,
+                  onTap: () => setState(() => _useVolumeWeighted = true),
+                ),
+                const SizedBox(width: 8),
+                _compositeSeriesChip(
+                  label: 'Median',
+                  selected: !_useVolumeWeighted,
+                  onTap: () => setState(() => _useVolumeWeighted = false),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           SizedBox(
             height: 200,
@@ -905,13 +938,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                         child: CustomPaint(
                           size: Size.infinite,
                           painter: _CompositeChartPainter(
-                            points: data.points,
+                            points: chartPoints,
                             lineColor: changeColor,
                           ),
                         ),
                       ),
                       const SizedBox(height: 4),
-                      _buildTimeLabels(data.points),
+                      _buildTimeLabels(chartPoints),
                     ],
                   )
                 : const Center(
@@ -922,6 +955,33 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _compositeSeriesChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white12 : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? Colors.white38 : Colors.white12,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: selected ? Colors.white70 : Colors.white38,
+          ),
+        ),
       ),
     );
   }
@@ -1005,7 +1065,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           Row(
             children: [
               const Text(
-                'Market Breadth',
+                'Token Participation',
                 style: TextStyle(
                   color: Colors.white70,
                   fontSize: 14,
@@ -1015,16 +1075,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               const SizedBox(width: 4),
               GestureDetector(
                 onTap: () => _showInfoDialog(
-                  title: 'Market Breadth',
-                  body: 'Average score weight for each regime across the '
-                      'full token universe (0–100%).\n\n'
-                      'Direction-adjusted: tokens trending in '
-                      'opposite directions cancel out, preventing '
-                      'mixed markets from appearing as trends.\n\n'
-                      '• Trend — strong directional move\n'
-                      '• Sideways — range-bound, low conviction\n'
+                  title: 'Token Participation',
+                  body: 'Average score mix across individual tokens (0–100%).\n\n'
+                      'This is NOT the headline regime — that comes from scoring '
+                      'the merged market tape like one chart.\n\n'
+                      '• Trend — tokens with clean directional structure\n'
+                      '• Sideways — range-bound structure\n'
                       '• Compression — narrowing ranges\n'
-                      '• Expansion — breakout amplified by volatility',
+                      '• Expansion — breakout / volatility expansion',
                 ),
                 child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
               ),

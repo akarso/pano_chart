@@ -28,9 +28,10 @@ func NewMarketCompositeHandler(s CompositeCalculator) *MarketCompositeHandler {
 
 // compositeResponse is the JSON response DTO.
 type compositeResponse struct {
-	Timeframe   string          `json:"timeframe"`
-	Points      []indexPointDTO `json:"points"`
-	SymbolCount int             `json:"symbolCount"`
+	Timeframe            string          `json:"timeframe"`
+	Points               []indexPointDTO `json:"points"`
+	VolumeWeightedPoints []indexPointDTO `json:"volumeWeightedPoints,omitempty"`
+	SymbolCount          int             `json:"symbolCount"`
 }
 
 type indexPointDTO struct {
@@ -68,11 +69,19 @@ func (h *MarketCompositeHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			V: math.Round(p.Value*100) / 100, // 2 decimal places
 		}
 	}
+	vwPts := make([]indexPointDTO, len(index.VolumeWeightedPoints))
+	for i, p := range index.VolumeWeightedPoints {
+		vwPts[i] = indexPointDTO{
+			T: p.Timestamp,
+			V: math.Round(p.Value*100) / 100,
+		}
+	}
 
 	resp := compositeResponse{
-		Timeframe:   index.Timeframe,
-		Points:      pts,
-		SymbolCount: index.SymbolCount,
+		Timeframe:            index.Timeframe,
+		Points:               pts,
+		VolumeWeightedPoints: vwPts,
+		SymbolCount:          index.SymbolCount,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

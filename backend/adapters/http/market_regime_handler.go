@@ -45,6 +45,7 @@ type regimeResponse struct {
 	BreakdownRate  float64          `json:"breakdownRate"`
 	Label          string           `json:"label"`
 	DataQuality    string           `json:"dataQuality"`
+	RegimeSource   string           `json:"regimeSource,omitempty"`
 }
 
 type regimeScoresDTO struct {
@@ -76,18 +77,22 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Metrics' four breadth fields are the same Breadth values also exposed
-	// under "scores" — Summary has one breadth computation now, not two.
+	// scores = composite-tape structure (headline); metrics.*Breadth =
+	// per-token participation (PR-084).
+	structure := summary.Structure
+	if summary.RegimeSource == "" {
+		structure = summary.Breadth
+	}
 	resp := regimeResponse{
 		Timeframe:  summary.Timeframe,
 		Regime:     string(summary.State),
 		Prevalence: roundTo(summary.Confidence, 4),
 		Bias:       summary.Bias,
 		Scores: regimeScoresDTO{
-			Expansion:   roundTo(summary.Breadth.Expansion, 4),
-			Compression: roundTo(summary.Breadth.Compression, 4),
-			Trend:       roundTo(summary.Breadth.Trend, 4),
-			Sideways:    roundTo(summary.Breadth.Sideways, 4),
+			Expansion:   roundTo(structure.Expansion, 4),
+			Compression: roundTo(structure.Compression, 4),
+			Trend:       roundTo(structure.Trend, 4),
+			Sideways:    roundTo(structure.Sideways, 4),
 		},
 		Metrics: regimeMetricsDTO{
 			TrendBreadth:        roundTo(summary.Breadth.Trend, 4),
@@ -101,6 +106,7 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
 		Label:          summary.Label,
 		DataQuality:    string(summary.DataQuality),
+		RegimeSource:   summary.RegimeSource,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

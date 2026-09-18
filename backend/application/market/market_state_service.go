@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -68,27 +69,15 @@ func (s *MarketStateService) SetObserver(o RegimeObserver) {
 	s.observer = o
 }
 
-// Calculate produces a market state summary for the given timeframe from
-// evaluation snapshots only — no candle I/O, cheap regardless of symbol
-// universe size. VolatilityExpansion/Dispersion are left at their defaults
-// (1.0/0); use CalculateWithCandleMetrics when a caller actually needs them
-// (the legacy /api/market/regime response, the transition engine's
-// volatility slope). Consumers that don't read those two fields —
-// /api/market/state, the notification scheduler, the setup scanner — should
-// keep using this cheaper method: see PR-073 CR follow-up, which found
-// every Calculate() call was paying for a full symbol-universe candle
-// fan-out regardless of whether the caller needed it.
+// Calculate produces a market state summary for the given timeframe.
 //
-// Breadth is computed using proportional weighting: every symbol distributes
-// its scores continuously across all four regimes (sideways, compression,
-// expansion, trend).  This eliminates the zero-breadth problem that occurred
-// with binary classification thresholds.
+// Headline State / Confidence / Label come from scoring the merged composite
+// tape (same calculators as one chart) when a CandleProvider is configured —
+// see PR-084. Breadth remains per-token participation for the metrics panel.
 //
-// Trend prevalence is health-dampened: if most "trending" tokens are actually
-// falling apart (price far from extremes, large drawdowns), the trend breadth
-// is penalised before state determination.  This prevents a broken market
-// from being classified as "Trend 94%" just because individual tokens have
-// moderate R² values that happen to exceed their other scores.
+// Without a CandleProvider, classification falls back to participation-only
+// (legacy path). VolatilityExpansion/Dispersion stay at defaults (1.0/0);
+// use CalculateWithCandleMetrics when those fields are needed.
 func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (mkt.Summary, error) {
 	evaluations, err := s.provider.GetLatestEvaluations(ctx, timeframe)
 	if err != nil {
@@ -142,96 +131,107 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 
 	total := float64(len(evaluations))
 
-	// ---- 1. Raw proportional breadth ----
-	var breadth mkt.Breadth
+	// ---- 1. Participation breadth (per-token score mix) — metrics only ----
+	var participation mkt.Breadth
 	for _, e := range evaluations {
 		w := scoreWeights(e)
-		breadth.Sideways += w.Sideways
-		breadth.Compression += w.Compression
-		breadth.Expansion += w.Expansion
-		breadth.Trend += w.Trend
+		participation.Sideways += w.Sideways
+		participation.Compression += w.Compression
+		participation.Expansion += w.Expansion
+		participation.Trend += w.Trend
 	}
-	breadth.Sideways /= total
-	breadth.Compression /= total
-	breadth.Expansion /= total
-	breadth.Trend /= total
+	participation.Sideways /= total
+	participation.Compression /= total
+	participation.Expansion /= total
+	participation.Trend /= total
 
-	// ---- 2. Trend health (compute BEFORE state determination) ----
-	var trendCount, healthyTrendCount, effectiveSum, breakdowns float64
-	for _, e := range evaluations {
-		w := scoreWeights(e)
-		if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
-			continue
+	// ---- 2. Prefer composite-tape regime when candles are available (PR-084) ----
+	var (
+		dominant       = mkt.StateSideways
+		maxWeight      float64
+		bias           = "neutral"
+		label          string
+		effectiveTrend float64
+		breakdownRate  float64
+		structure      mkt.Breadth
+		regimeSource   = "participation"
+	)
+
+	if tape, ok := s.scoreCompositeTape(ctx, timeframe); ok {
+		structure = tape.Structure
+		dominant = tape.State
+		maxWeight = tape.Confidence
+		bias = tape.Bias
+		label = tape.Label
+		effectiveTrend = tape.EffectiveTrend
+		breakdownRate = tape.BreakdownRate
+		regimeSource = tape.Source
+	} else {
+		// Legacy fallback: participation + health dampening.
+		var healthyTrendCount, effectiveSum, breakdowns float64
+		for _, e := range evaluations {
+			w := scoreWeights(e)
+			if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
+				continue
+			}
+			if e.ATR == 0 {
+				continue
+			}
+			healthyTrendCount++
+			state := "uptrend"
+			if e.Bias == "down" {
+				state = "downtrend"
+			}
+			h := ComputeTrendHealth(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn)
+			effectiveSum += h
+			if h < 0.4 {
+				breakdowns++
+			}
 		}
-		trendCount++
-		// Skip tokens without price data — they can't contribute to health.
-		if e.ATR == 0 {
-			continue
+		// Average health of trend-dominant tokens only (not diluted by /total).
+		if healthyTrendCount > 0 {
+			effectiveTrend = effectiveSum / healthyTrendCount
+			breakdownRate = breakdowns / healthyTrendCount
+			participation = DampenTrendByHealth(participation, effectiveTrend, breakdownRate)
 		}
-		healthyTrendCount++
-		state := "uptrend"
-		if e.Bias == "down" {
-			state = "downtrend"
+
+		dominant, maxWeight = dominantFromBreadth(participation)
+		first, second := topTwo([]float64{
+			participation.Sideways, participation.Compression,
+			participation.Expansion, participation.Trend,
+		})
+		if first < 0.50 || (first-second) < 0.30 {
+			dominant = mkt.StateIndecisive
+			maxWeight = first
 		}
-		h := ComputeTrendHealth(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn)
-		effectiveSum += h
-		if h < 0.4 {
-			breakdowns++
+
+		var upWeight, downWeight, returnSum float64
+		for _, e := range evaluations {
+			ts := math.Abs(e.TrendScore)
+			switch e.Bias {
+			case "up":
+				upWeight += ts
+			case "down":
+				downWeight += ts
+			}
+			returnSum += e.RecentReturn
 		}
+		avgReturn := returnSum / total
+		if upWeight > downWeight {
+			bias = "up"
+		} else if downWeight > upWeight {
+			bias = "down"
+		}
+		if bias == "up" && avgReturn < -0.5 {
+			bias = "neutral"
+		} else if bias == "down" && avgReturn > 0.5 {
+			bias = "neutral"
+		}
+		label = BuildMarketLabel(participation.Trend, effectiveTrend)
+		structure = participation
 	}
 
-	var effectiveTrend, breakdownRate float64
-	if total > 0 {
-		effectiveTrend = effectiveSum / total
-	}
-	if healthyTrendCount > 0 {
-		breakdownRate = breakdowns / healthyTrendCount
-	}
-
-	// ---- 3. Health-dampen trend prevalence ----
-	// Only apply when we have meaningful health data from tokens with
-	// price information.  Without ATR/price data, dampening would
-	// incorrectly penalize trends.
-	if healthyTrendCount > 0 {
-		breadth = DampenTrendByHealth(breadth, effectiveTrend, breakdownRate)
-	}
-
-	// ---- 4. Dominant state from health-adjusted breadth ----
-	dominant := mkt.StateSideways
-	maxWeight := breadth.Sideways
-
-	if breadth.Trend >= maxWeight {
-		dominant = mkt.StateTrend
-		maxWeight = breadth.Trend
-	}
-	if breadth.Compression >= maxWeight {
-		dominant = mkt.StateCompression
-		maxWeight = breadth.Compression
-	}
-	if breadth.Expansion >= maxWeight {
-		dominant = mkt.StateExpansion
-		maxWeight = breadth.Expansion
-	}
-
-	// Second-highest breadth for indecisive check.
-	weights := []float64{breadth.Sideways, breadth.Compression,
-		breadth.Expansion, breadth.Trend}
-	first, second := topTwo(weights)
-
-	// ---- 4a. Indecisive override ----
-	// Rule 1: no regime above 50% → indecisive.
-	// Rule 2: gap between top two < 30pp → indecisive.
-	if first < 0.50 || (first-second) < 0.30 {
-		dominant = mkt.StateIndecisive
-		maxWeight = first
-	}
-
-	// ---- 4b. Silent override (flat activity, low volume) ----
-	// Silent = sideways-dominant or indecisive, near-zero absolute
-	// return, and volume not elevated.  A flat chart with high volume
-	// signals something cooking, not silence.
-	// We only apply the silent override when volume data is present —
-	// without it we can't distinguish silence from missing data.
+	// Silent override still uses per-token activity (flat + quiet volume).
 	if dominant == mkt.StateSideways || dominant == mkt.StateIndecisive {
 		avgAbsReturn, avgVolume, medianVolume := AggregateActivityMetrics(evaluations)
 		hasVolumeData := medianVolume > 0
@@ -241,58 +241,6 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		}
 	}
 
-	// ---- 5. Directional bias with aggregate return validation ----
-	var upWeight, downWeight float64
-	var returnSum float64
-	for _, e := range evaluations {
-		ts := math.Abs(e.TrendScore)
-		switch e.Bias {
-		case "up":
-			upWeight += ts
-		case "down":
-			downWeight += ts
-		}
-		returnSum += e.RecentReturn
-	}
-	avgReturn := returnSum / total
-
-	bias := "neutral"
-	if upWeight > downWeight {
-		bias = "up"
-	} else if downWeight > upWeight {
-		bias = "down"
-	}
-
-	// Override: if aggregate return clearly contradicts the bias, demote.
-	// A -1.66% aggregate with bias="up" makes no sense.
-	if bias == "up" && avgReturn < -0.5 {
-		bias = "neutral"
-	} else if bias == "down" && avgReturn > 0.5 {
-		bias = "neutral"
-	}
-
-	trendPrevalence := breadth.Trend
-	label := BuildMarketLabel(trendPrevalence, effectiveTrend)
-
-	// Notify observer (e.g. regime history tracker) — fire-and-forget, but
-	// logged: a persistent write failure to the regime-history DB would
-	// otherwise be invisible.
-	//
-	// Skipped on an already-cancelled ctx rather than gating Calculate's
-	// whole return on it: callers like CalculateWithCandleMetrics (and,
-	// transitively, HTTP handlers whose client disconnected) intentionally
-	// still want a best-effort summary back promptly rather than an error
-	// — see TestMarketStateService_CalculateWithCandleMetrics_
-	// CancelledContextReturnsPromptly. What must not happen is the
-	// observer write specifically: GetRankings.Execute's per-symbol
-	// workers swallow their own errors (including a cancelled-context
-	// error) and just skip that symbol, so GetLatestEvaluations above can
-	// return a partial result with a nil error even when ctx was
-	// cancelled mid-run — checking ctx directly here, rather than trusting
-	// that nil error, is what actually stops the write from reaching a
-	// regimeHistoryRepo a caller's graceful-shutdown sequence may have
-	// already closed (PR-076 CR follow-up: "Cancellation Still Reaches
-	// Observer").
 	if s.observer != nil && ctx.Err() == nil {
 		if err := s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix()); err != nil {
 			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
@@ -303,7 +251,9 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		Timeframe:           timeframe,
 		State:               dominant,
 		Confidence:          maxWeight,
-		Breadth:             breadth,
+		Breadth:             participation,
+		Structure:           structure,
+		RegimeSource:        regimeSource,
 		SymbolCount:         len(evaluations),
 		Bias:                bias,
 		EffectiveTrend:      effectiveTrend,
@@ -312,6 +262,19 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		VolatilityExpansion: 1.0,
 		DataQuality:         dataQuality,
 	}, nil
+}
+
+// scoreCompositeTape builds the merged market series and scores it like one chart.
+func (s *MarketStateService) scoreCompositeTape(ctx context.Context, timeframe string) (TapeRegime, bool) {
+	if s.candles == nil || ctx.Err() != nil {
+		return TapeRegime{}, false
+	}
+	svc := metrics.NewCompositeIndexService(s.candles, candleMetricsFanoutLimit)
+	tape, err := svc.CalculateTape(ctx, timeframe, candleMetricsWindow)
+	if err != nil || tape.PreferredSeries().Len() < 2 {
+		return TapeRegime{}, false
+	}
+	return ScoreMarketTape(tape.PreferredSeries(), timeframe, tape.PreferredSource), true
 }
 
 // CalculateWithCandleMetrics is Calculate plus VolatilityExpansion/Dispersion,

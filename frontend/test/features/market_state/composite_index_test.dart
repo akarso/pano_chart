@@ -216,7 +216,7 @@ void main() {
       expect(find.text('Market Composite Index'), findsOneWidget);
       expect(find.textContaining('+1.50'), findsOneWidget);
       // Breadth card
-      expect(find.text('Market Breadth'), findsOneWidget);
+      expect(find.text('Token Participation'), findsOneWidget);
       expect(find.text('Sideways'), findsOneWidget);
       expect(find.text('Compression'), findsOneWidget);
     });
