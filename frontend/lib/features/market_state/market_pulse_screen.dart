@@ -413,7 +413,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% tape confidence  •  ${data.timeframe}',
+            '$pct% ${regimeConfidenceLabel(data.regimeSource)}  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 2),
@@ -861,7 +861,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% tape confidence  •  ${data.symbolCount} symbols  •  ${data.timeframe}',
+            '$pct% ${data.confidenceLabel}  •  ${data.symbolCount} symbols  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
         ],

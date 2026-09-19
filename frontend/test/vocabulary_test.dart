@@ -9,9 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 /// `prevalence` or `breadth`, unless that source line has a `// glossary-ok`
 /// comment (e.g. JSON key access that must stay stable).
 ///
-/// Triple-quoted literals are scanned across the full file (multiline).
-/// Single-line `'…'` / `"…"` stay line-oriented so apostrophes in comments
-/// (e.g. `source's`) are not mistaken for string delimiters.
+/// Comments are masked before literal scanning so banned words inside
+/// `//` / `/* */` documentation never fail the test. String literals
+/// (including those that contain comment-like text) are preserved.
 void main() {
   test('lib/features string literals avoid deprecated glossary words', () {
     final featuresDir = Directory('lib/features');
@@ -32,9 +32,10 @@ void main() {
 
     for (final entity in featuresDir.listSync(recursive: true)) {
       if (entity is! File || !entity.path.endsWith('.dart')) continue;
-      final source = entity.readAsStringSync();
+      final original = entity.readAsStringSync();
       final rel = entity.path.replaceAll('\\', '/');
-      final lines = source.split('\n');
+      final lines = original.split('\n');
+      final source = _maskComments(original);
 
       for (final match in tripleQuoted.allMatches(source)) {
         final literal = match.group(0)!;
@@ -46,10 +47,10 @@ void main() {
         }
       }
 
-      for (var i = 0; i < lines.length; i++) {
-        final line = lines[i];
-        if (line.contains('// glossary-ok')) continue;
-        for (final match in singleLineQuoted.allMatches(line)) {
+      final maskedLines = source.split('\n');
+      for (var i = 0; i < maskedLines.length; i++) {
+        if (i < lines.length && lines[i].contains('// glossary-ok')) continue;
+        for (final match in singleLineQuoted.allMatches(maskedLines[i])) {
           final literal = match.group(0)!;
           if (banned.hasMatch(_stripQuotes(literal))) {
             violations.add('$rel:${i + 1}: ${_preview(literal)}');
@@ -66,6 +67,103 @@ void main() {
           '${violations.join('\n')}',
     );
   });
+}
+
+/// Replaces `//` and `/* */` comment regions with spaces (keeps newlines and
+/// overall length) so literal scanners never see comment text. String
+/// literals are copied through unchanged so their contents remain matchable.
+String _maskComments(String source) {
+  final out = StringBuffer();
+  var i = 0;
+  while (i < source.length) {
+    // Line comment
+    if (source.startsWith('//', i)) {
+      while (i < source.length && source[i] != '\n') {
+        out.write(' ');
+        i++;
+      }
+      continue;
+    }
+    // Block comment
+    if (source.startsWith('/*', i)) {
+      out.write('  ');
+      i += 2;
+      while (i < source.length) {
+        if (source.startsWith('*/', i)) {
+          out.write('  ');
+          i += 2;
+          break;
+        }
+        out.write(source[i] == '\n' ? '\n' : ' ');
+        i++;
+      }
+      continue;
+    }
+    // Raw / normal triple-quoted strings
+    if (source.startsWith("r'''", i) ||
+        source.startsWith('r"""', i) ||
+        source.startsWith("'''", i) ||
+        source.startsWith('"""', i)) {
+      final raw = source[i] == 'r';
+      if (raw) {
+        out.write('r');
+        i++;
+      }
+      final quote = source.substring(i, i + 3);
+      out.write(quote);
+      i += 3;
+      while (i < source.length) {
+        if (source.startsWith(quote, i)) {
+          out.write(quote);
+          i += 3;
+          break;
+        }
+        out.write(source[i]);
+        i++;
+      }
+      continue;
+    }
+    // Raw single-quoted / double-quoted (triples handled above)
+    if (source.startsWith("r'", i) || source.startsWith('r"', i)) {
+      final q = source[i + 1];
+      out.write('r');
+      out.write(q);
+      i += 2;
+      while (i < source.length && source[i] != q && source[i] != '\n') {
+        out.write(source[i]);
+        i++;
+      }
+      if (i < source.length && source[i] == q) {
+        out.write(q);
+        i++;
+      }
+      continue;
+    }
+    // Normal single / double quoted (with escapes)
+    if (source[i] == "'" || source[i] == '"') {
+      final q = source[i];
+      out.write(q);
+      i++;
+      while (i < source.length && source[i] != '\n') {
+        if (source[i] == '\\' && i + 1 < source.length) {
+          out.write(source[i]);
+          out.write(source[i + 1]);
+          i += 2;
+          continue;
+        }
+        out.write(source[i]);
+        if (source[i] == q) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+    out.write(source[i]);
+    i++;
+  }
+  return out.toString();
 }
 
 int _lineNumberAt(String source, int offset) {

@@ -12,6 +12,8 @@ class MarketStateData {
   final double breakdownRate;
   final String label;
   final String dataQuality;
+  /// Backend regime source (`composite_*` vs `participation`).
+  final String regimeSource;
 
   const MarketStateData({
     required this.timeframe,
@@ -24,12 +26,16 @@ class MarketStateData {
     this.breakdownRate = 0,
     this.label = '',
     this.dataQuality = 'ok',
+    this.regimeSource = '',
   });
 
   /// Whether this reading reflects a real market read, as opposed to a
   /// full evaluation-source outage — see PR-074. Without this check, an
   /// outage looks identical to a genuinely quiet market.
   bool get isDataUnavailable => isDataQualityUnavailable(dataQuality);
+
+  /// Human label for [confidence] — tape vs participation share.
+  String get confidenceLabel => regimeConfidenceLabel(regimeSource);
 
   factory MarketStateData.fromJson(Map<String, dynamic> json) {
     final symbolCount = json['symbolCount'] as int;
@@ -53,8 +59,21 @@ class MarketStateData {
       breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0,
       label: json['label'] as String? ?? '',
       dataQuality: dataQuality,
+      regimeSource: json['regimeSource'] as String? ?? '',
     );
   }
+}
+
+/// Label for the confidence percentage given a backend [regimeSource].
+String regimeConfidenceLabel(String regimeSource) {
+  if (regimeSource.startsWith('composite')) {
+    return 'tape confidence';
+  }
+  if (regimeSource == 'participation' || regimeSource.isEmpty) {
+    // Empty: legacy clients / fallback card without source — do not claim tape.
+    return 'participation share';
+  }
+  return 'confidence';
 }
 
 /// Breadth breakdown per market regime.

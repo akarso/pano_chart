@@ -12,6 +12,7 @@ import (
 )
 
 type fakeCompositeRedis struct {
+	mu       sync.RWMutex
 	store    map[string]string
 	lastTTL  time.Duration
 	setCount int
@@ -24,6 +25,8 @@ func newFakeCompositeRedis() *fakeCompositeRedis {
 }
 
 func (f *fakeCompositeRedis) Get(_ context.Context, key string) (string, error) {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
 	if f.failGet {
 		return "", errors.New("redis get fail")
 	}
@@ -31,6 +34,8 @@ func (f *fakeCompositeRedis) Get(_ context.Context, key string) (string, error) 
 }
 
 func (f *fakeCompositeRedis) Set(_ context.Context, key string, value string, ttl time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.failSet {
 		return errors.New("redis set fail")
 	}

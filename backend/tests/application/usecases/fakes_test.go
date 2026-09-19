@@ -76,7 +76,6 @@ func (f *fakePurchaseRepository) FindByTransactionID(
 
 func (f *fakePurchaseRepository) ApplyVerifiedPurchase(
 	_ context.Context,
-	previousOwnerID string,
 	result domain.PaymentVerificationResult,
 ) error {
 	if f.applyErr != nil {
@@ -90,6 +89,8 @@ func (f *fakePurchaseRepository) ApplyVerifiedPurchase(
 	if !ok {
 		return fmt.Errorf("purchase not found")
 	}
+
+	previousOwnerID := existing.UserID()
 
 	updated := domain.NewPurchaseUnsafe(
 		existing.ID(),

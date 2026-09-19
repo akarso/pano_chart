@@ -247,6 +247,7 @@ void main() {
         timeframe: '4h',
         regime: 'compression',
         prevalence: 0.71,
+        regimeSource: 'composite_median',
         scores: RegimeScores(
           expansion: 0.05, compression: 0.71, trend: 0.14, sideways: 0.10,
         ),

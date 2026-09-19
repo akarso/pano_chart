@@ -62,7 +62,7 @@ func (s *subscriptionService) ActivateSubscription(
 		return fmt.Errorf("cannot activate subscription: verification result is not valid")
 	}
 
-	existing, exists, err := s.purchases.FindByTransactionID(
+	_, exists, err := s.purchases.FindByTransactionID(
 		ctx, result.Provider(), result.ExternalTransactionID(),
 	)
 	if err != nil {
@@ -74,17 +74,22 @@ func (s *subscriptionService) ActivateSubscription(
 	// transaction Google has already verified. Rejecting those as
 	// "duplicate" is what the client surfaces as "we could not verify
 	// your purchase" — after Google already took the money. Idempotently
-	// refresh the caller's entitlement instead. If a different device
-	// identity presents the same valid token, move access to that
-	// identity: the token is proof of Play ownership; our user ID is
-	// just a device credential.
+	// refresh the caller's entitlement instead.
+	//
+	// Identity model: app user IDs are device secrets, not Google
+	// accounts. Possession of a still-valid Play purchase token is the
+	// authorized migration proof for restore/reinstall. Google's verify
+	// response is not device-bound; binding transfers to a Play account
+	// id would require obfuscatedAccountId plumbing we do not ship yet.
+	// Until then, the token itself is the continuity signal — treat
+	// token exfiltration as equivalent to account takeover.
 	//
 	// Purchase.user_id is the source of truth for who currently holds
-	// the transaction. ApplyVerifiedPurchase expires that holder (not a
-	// stale first owner), updates ownership + expiry, and upserts the
-	// new subscription atomically.
+	// the transaction. ApplyVerifiedPurchase re-reads that owner inside
+	// its write transaction, expires that holder, updates ownership +
+	// expiry, and upserts the new subscription atomically.
 	if exists {
-		return s.applier.ApplyVerifiedPurchase(ctx, existing.UserID(), result)
+		return s.applier.ApplyVerifiedPurchase(ctx, result)
 	}
 
 	purchase, err := domain.NewPurchase(

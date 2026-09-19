@@ -3,6 +3,8 @@ package usecases
 import (
 	"context"
 	"fmt"
+
+	"pano_chart/backend/application/ports"
 )
 
 // VerifyPurchase orchestrates payment verification.
@@ -37,13 +39,13 @@ func NewVerifyPurchase(
 
 func (uc *verifyPurchase) Execute(ctx context.Context, input VerifyPurchaseInput) error {
 	if input.Provider == "" {
-		return fmt.Errorf("provider is required")
+		return fmt.Errorf("%w: provider is required", ports.ErrInvalidPurchaseToken)
 	}
 	if input.PurchaseToken == "" {
-		return fmt.Errorf("purchase_token is required")
+		return fmt.Errorf("%w: purchase_token is required", ports.ErrInvalidPurchaseToken)
 	}
 	if input.UserID == "" {
-		return fmt.Errorf("user_id is required")
+		return fmt.Errorf("%w: user_id is required", ports.ErrInvalidPurchaseToken)
 	}
 
 	provider, err := uc.registry.Get(input.Provider)
@@ -57,7 +59,7 @@ func (uc *verifyPurchase) Execute(ctx context.Context, input VerifyPurchaseInput
 	}
 
 	if !result.Valid() {
-		return fmt.Errorf("purchase verification returned invalid result")
+		return fmt.Errorf("%w: purchase verification returned invalid result", ports.ErrInvalidPurchaseToken)
 	}
 
 	if err := uc.subscription.ActivateSubscription(ctx, result); err != nil {

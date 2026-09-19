@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/infrastructure/googleplay"
 )
 
@@ -297,6 +298,47 @@ func TestProvider_VerifyPurchase_APIError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
 	assert.False(t, result.Valid())
+	assert.ErrorIs(t, err, ports.ErrInvalidPurchaseToken)
+	assert.NotErrorIs(t, err, ports.ErrProviderUnavailable)
+	assert.NotErrorIs(t, err, ports.ErrProviderRateLimited)
+}
+
+func TestProvider_VerifyPurchase_API5xxIsUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal"}`))
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	result, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ports.ErrProviderUnavailable)
+	assert.False(t, result.Valid())
+}
+
+func TestProvider_VerifyPurchase_API429IsRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate"}`))
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	_, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.ErrorIs(t, err, ports.ErrProviderRateLimited)
 }
 
 func TestProvider_VerifyPurchase_MalformedJSON(t *testing.T) {

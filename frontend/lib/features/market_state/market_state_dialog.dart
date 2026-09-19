@@ -124,7 +124,7 @@ class _MarketStateDialog extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% tape confidence  •  ${data.symbolCount} symbols',
+            '$pct% ${data.confidenceLabel}  •  ${data.symbolCount} symbols',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 4),

@@ -43,6 +43,7 @@ func TestSQLiteAccountStore_UpsertAndGet(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("expected account")
+		return
 	}
 	if got.Handle != "alice" {
 		t.Fatalf("expected 'alice', got '%s'", got.Handle)

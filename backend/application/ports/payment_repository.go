@@ -35,8 +35,9 @@ type SubscriptionRepository interface {
 type VerifiedPurchaseApplier interface {
 	// ApplyVerifiedPurchase updates the existing purchase row's owner and
 	// expiration to match result, upserts the caller's subscription, and
-	// expires previousOwnerID's subscription when it differs from
-	// result.UserID(). previousOwnerID must be the purchase.user_id read
-	// before this call (source of truth for who currently holds the tx).
-	ApplyVerifiedPurchase(ctx context.Context, previousOwnerID string, result domain.PaymentVerificationResult) error
+	// expires the purchase's current owner when that owner differs from
+	// result.UserID(). The current owner MUST be read inside the write
+	// transaction (not from a pre-tx snapshot) so concurrent rebinds cannot
+	// leave a stale intermediate holder entitled.
+	ApplyVerifiedPurchase(ctx context.Context, result domain.PaymentVerificationResult) error
 }

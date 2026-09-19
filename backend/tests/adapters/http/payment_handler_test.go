@@ -17,6 +17,7 @@ import (
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/adapters/http/middleware"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -308,17 +309,41 @@ func TestVerifyPurchaseHandler_UseCaseError(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "internal_error", result["error"])
+	assert.NotContains(t, w.Body.String(), "provider not registered",
+		"raw provider error must not leak to the client")
+}
+
+func TestVerifyPurchaseHandler_InvalidTokenMapsTo400(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{
+		err: fmt.Errorf("%w: purchase verification returned invalid result", ports.ErrInvalidPurchaseToken),
+	}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "google_play",
+		"purchaseToken": "tok",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
 	var result map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, "invalid_token", result["error"])
-	assert.NotContains(t, w.Body.String(), "provider not registered",
-		"raw provider error must not leak to the client")
 }
 
 func TestVerifyPurchaseHandler_RateLimitedMapsToStableCode(t *testing.T) {
-	uc := &fakeVerifyPurchaseUC{err: fmt.Errorf("google: 429 resource_exhausted")}
+	uc := &fakeVerifyPurchaseUC{err: fmt.Errorf("wrapped: %w", ports.ErrProviderRateLimited)}
 	handler := adhttp.NewVerifyPurchaseHandler(uc)
 
 	body, _ := json.Marshal(map[string]string{
@@ -337,6 +362,33 @@ func TestVerifyPurchaseHandler_RateLimitedMapsToStableCode(t *testing.T) {
 	var result map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, "rate_limited", result["error"])
+}
+
+func TestVerifyPurchaseHandler_Provider500MapsToUnavailableNotInvalidToken(t *testing.T) {
+	// Regression: scraping err.Error() for keywords missed "google play API
+	// returned 500: ..." and told the client the token was invalid.
+	uc := &fakeVerifyPurchaseUC{
+		err: fmt.Errorf("%w: google play API returned 500: boom", ports.ErrProviderUnavailable),
+	}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "google_play",
+		"purchaseToken": "tok",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "provider_unavailable", result["error"])
+	assert.NotContains(t, w.Body.String(), "boom")
 }
 
 // ---- Subscription Status Handler Tests ----

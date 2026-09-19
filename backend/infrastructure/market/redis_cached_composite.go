@@ -96,6 +96,10 @@ type tapeCacheDTO struct {
 // TTL is timeframe-aware: min(baseTTL, tf/2) so short timeframes do not serve
 // stale tapes (e.g. 1m → 30s). Concurrent misses for the same key are
 // coalesced with singleflight so only one candle fan-out runs per process.
+//
+// The shared flight uses a context detached from any single caller so the
+// first caller's cancellation cannot abort work (or poison the result) for
+// siblings still waiting on the same key.
 func (c *RedisCachedComposite) CalculateTape(ctx context.Context, timeframe string, limit int) (metrics.CompositeTape, error) {
 	key := fmt.Sprintf("%s:tape:%s:%d", c.keyPrefix, timeframe, limit)
 
@@ -103,14 +107,16 @@ func (c *RedisCachedComposite) CalculateTape(ctx context.Context, timeframe stri
 		return tape, nil
 	}
 
-	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
+	ch := c.sf.DoChan(key, func() (interface{}, error) {
+		workCtx := context.WithoutCancel(ctx)
+
 		// Double-check after winning the flight — another caller may have
 		// filled Redis while we waited.
-		if tape, ok := c.tapeFromCache(ctx, key); ok {
+		if tape, ok := c.tapeFromCache(workCtx, key); ok {
 			return tape, nil
 		}
 
-		tape, err := c.next.CalculateTape(ctx, timeframe, limit)
+		tape, err := c.next.CalculateTape(workCtx, timeframe, limit)
 		if err != nil {
 			return metrics.CompositeTape{}, err
 		}
@@ -119,15 +125,21 @@ func (c *RedisCachedComposite) CalculateTape(ctx context.Context, timeframe stri
 		// even after candles recover.
 		if tapeUsable(tape) {
 			if data, marshalErr := marshalTape(tape, timeframe); marshalErr == nil {
-				_ = c.redis.Set(ctx, key, string(data), c.ttlForTimeframe(timeframe))
+				_ = c.redis.Set(workCtx, key, string(data), c.ttlForTimeframe(timeframe))
 			}
 		}
 		return tape, nil
 	})
-	if err != nil {
-		return metrics.CompositeTape{}, err
+
+	select {
+	case <-ctx.Done():
+		return metrics.CompositeTape{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return metrics.CompositeTape{}, res.Err
+		}
+		return res.Val.(metrics.CompositeTape), nil
 	}
-	return v.(metrics.CompositeTape), nil
 }
 
 func (c *RedisCachedComposite) tapeFromCache(ctx context.Context, key string) (metrics.CompositeTape, bool) {

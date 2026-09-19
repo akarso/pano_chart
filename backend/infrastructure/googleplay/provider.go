@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 )
 
@@ -159,7 +160,7 @@ func (p *Provider) VerifyPurchase(
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return domain.PaymentVerificationResult{}, fmt.Errorf("google play API call: %w", err)
+		return domain.PaymentVerificationResult{}, fmt.Errorf("%w: google play API call: %v", ports.ErrProviderUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -169,19 +170,15 @@ func (p *Provider) VerifyPurchase(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Return an invalid verification result — the purchase could not
-		// be verified. Truncate the body so a huge Google error page
-		// cannot flood logs when this error is wrapped and printed.
-		snippet := string(body)
-		if len(snippet) > 512 {
-			snippet = snippet[:512] + "…"
-		}
-		log.Printf("[googleplay] subscriptionsv2 returned %d for pkg=%s: %s",
-			resp.StatusCode, p.cfg.PackageName, snippet)
+		// Do not log or embed the response body — Google error pages can be
+		// huge and may contain sensitive snippets. Status alone is enough
+		// for classification and ops.
+		log.Printf("[googleplay] subscriptionsv2 returned %d for pkg=%s",
+			resp.StatusCode, p.cfg.PackageName)
 		invalid, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
-		return invalid, fmt.Errorf("google play API returned %d: %s", resp.StatusCode, snippet)
+		return invalid, wrapPlayHTTPError(resp.StatusCode)
 	}
 
 	var purchase subscriptionPurchaseV2Response
@@ -282,6 +279,20 @@ func subscriptionsv2URL(base, packageName, purchaseToken string) string {
 		url.PathEscape(packageName) +
 		"/purchases/subscriptionsv2/tokens/" +
 		url.PathEscape(purchaseToken)
+}
+
+// wrapPlayHTTPError maps Google Play HTTP status codes onto ports sentinel
+// errors so HTTP handlers can classify without scraping error text. The
+// error carries only the status code — never the response body.
+func wrapPlayHTTPError(status int) error {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderRateLimited, status)
+	case status >= 500 || status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderUnavailable, status)
+	default:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrInvalidPurchaseToken, status)
+	}
 }
 
 // parseRFC3339UTC converts a Google API RFC 3339 timestamp string

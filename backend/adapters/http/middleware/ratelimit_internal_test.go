@@ -34,7 +34,7 @@ func TestSafeEvictionTTL_CoversNaturalRefillTime(t *testing.T) {
 // (natural refill well under keyLimiterMinTTL) still uses the floor, not a
 // tiny TTL that would sweep entries far more aggressively than before.
 func TestSafeEvictionTTL_FastRefillStaysAtTheFloor(t *testing.T) {
-	perSecond := 60.0 / 60.0 // PerIPRateLimit(60, ...) — 1/sec
+	perSecond := 1.0 // PerIPRateLimit(60, ...) — 60/hour → 1/sec
 	burst := 3               // natural refill: 3 seconds
 
 	got := safeEvictionTTL(perSecond, burst)

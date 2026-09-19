@@ -163,7 +163,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 
 	// ---- 2. Prefer composite-tape regime when candles are available (PR-084) ----
 	var (
-		dominant       = mkt.StateSideways
+		dominant       mkt.State
 		maxWeight      float64
 		bias           = "neutral"
 		label          string

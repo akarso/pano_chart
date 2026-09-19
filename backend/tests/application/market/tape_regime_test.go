@@ -124,7 +124,7 @@ func TestScoreMarketTape_FlatOscillationFavorsSideways(t *testing.T) {
 	for i := range candles {
 		// Oscillate in a tight band.
 		phase := float64(i % 8)
-		v := 100.0
+		var v float64
 		if phase < 4 {
 			v = 100 + phase*0.15
 		} else {

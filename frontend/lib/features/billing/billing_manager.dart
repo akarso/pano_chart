@@ -202,36 +202,80 @@ class BillingManager {
   // ---- purchase update handler ----
 
   Future<void> _onPurchaseUpdated(List<PurchaseDetails> purchases) async {
+    // Deduplicate purchased/restored tokens within one stream batch so a
+    // sequential await cannot re-verify the same token after the first
+    // finishes and clears _inFlightTokens. Preserve every PurchaseDetails
+    // for acknowledgement.
+    final verifyByToken = <String, PurchaseDetails>{};
+    final ackExtrasByToken = <String, List<PurchaseDetails>>{};
+    final nonVerify = <PurchaseDetails>[];
+
     for (final purchase in purchases) {
       switch (purchase.status) {
         case PurchaseStatus.purchased:
         case PurchaseStatus.restored:
-          await _verifyAndComplete(purchase);
+          final token = purchase.verificationData.serverVerificationData;
+          if (token.isEmpty) {
+            nonVerify.add(purchase);
+            break;
+          }
+          final existing = verifyByToken[token];
+          if (existing == null) {
+            verifyByToken[token] = purchase;
+          } else {
+            (ackExtrasByToken[token] ??= []).add(purchase);
+          }
           break;
+        default:
+          nonVerify.add(purchase);
+          break;
+      }
+    }
+
+    for (final purchase in nonVerify) {
+      switch (purchase.status) {
         case PurchaseStatus.error:
           debugPrint('[BillingManager] Purchase error: ${purchase.error}');
-          _busy = false;
+          if (_inFlightTokens.isEmpty) {
+            _busy = false;
+          }
           _notify();
           break;
         case PurchaseStatus.canceled:
           debugPrint('[BillingManager] Purchase canceled');
-          _busy = false;
+          if (_inFlightTokens.isEmpty) {
+            _busy = false;
+          }
           _notify();
           break;
         case PurchaseStatus.pending:
           debugPrint('[BillingManager] Purchase pending');
           break;
+        case PurchaseStatus.purchased:
+        case PurchaseStatus.restored:
+          // Empty-token purchased/restored — still run verify path for error UX.
+          await _verifyAndComplete(purchase);
+          break;
       }
 
-      // Acknowledge error/canceled so Play clears them from the queue.
-      // Purchased/restored are acknowledged inside [_verifyAndComplete]
-      // only after the backend actually grants access — acknowledging a
-      // failed verify used to hide the token from the next restore.
       if (purchase.pendingCompletePurchase &&
           purchase.status != PurchaseStatus.purchased &&
           purchase.status != PurchaseStatus.restored) {
         await _iap.completePurchase(purchase);
       }
+    }
+
+    for (final entry in verifyByToken.entries) {
+      final token = entry.key;
+      final extras = ackExtrasByToken[token];
+      if (extras != null) {
+        for (final details in extras) {
+          if (details.pendingCompletePurchase) {
+            (_pendingAckByToken[token] ??= []).add(details);
+          }
+        }
+      }
+      await _verifyAndComplete(entry.value);
     }
   }
 
@@ -270,8 +314,7 @@ class BillingManager {
       await refreshStatus();
       if (_status.active) {
         _lastVerificationError = null;
-        await _acknowledge(purchase);
-        await _acknowledgeQueued(token);
+        await _acknowledgeAll(token, purchase);
         Analytics().subscriptionStarted(productId: purchase.productID);
       } else {
         // The backend call itself succeeded (no exception), but the
@@ -297,7 +340,11 @@ class BillingManager {
       _pendingAckByToken.remove(token);
     } finally {
       _inFlightTokens.remove(token);
-      _busy = false;
+      // Overlapping stream callbacks for different tokens must keep the UI
+      // busy until the aggregate in-flight set is empty.
+      if (_inFlightTokens.isEmpty) {
+        _busy = false;
+      }
       _notify();
     }
   }
@@ -308,11 +355,35 @@ class BillingManager {
     }
   }
 
-  Future<void> _acknowledgeQueued(String token) async {
-    final queued = _pendingAckByToken.remove(token);
-    if (queued == null) return;
+  /// Acknowledges [direct] then any queued duplicates for [token]. Failed
+  /// acks stay queued so a later restore can retry; ack failures are not
+  /// reported as verification failures.
+  Future<void> _acknowledgeAll(String token, PurchaseDetails direct) async {
+    final failed = <PurchaseDetails>[];
+    if (!await _tryAcknowledge(direct) && direct.pendingCompletePurchase) {
+      failed.add(direct);
+    }
+    final queued = _pendingAckByToken.remove(token) ?? const <PurchaseDetails>[];
     for (final details in queued) {
-      await _acknowledge(details);
+      if (!await _tryAcknowledge(details) && details.pendingCompletePurchase) {
+        failed.add(details);
+      }
+    }
+    if (failed.isNotEmpty) {
+      _pendingAckByToken[token] = failed;
+      _lastVerificationError =
+          'Your subscription is active, but we could not finish confirming with '
+          'Google Play. Please try "Restore purchases".';
+    }
+  }
+
+  Future<bool> _tryAcknowledge(PurchaseDetails purchase) async {
+    try {
+      await _acknowledge(purchase);
+      return true;
+    } catch (e) {
+      debugPrint('[BillingManager] Acknowledge failed: $e');
+      return false;
     }
   }
 

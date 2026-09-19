@@ -2,9 +2,9 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"pano_chart/backend/adapters/http/middleware"
@@ -59,8 +59,9 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 			UserID:        userID,
 		}
 		if err := uc.Execute(r.Context(), input); err != nil {
-			log.Printf("[payments] verify failed user=%s provider=%s: %v", userID, req.Provider, err)
 			code, status := classifyVerifyError(err)
+			log.Printf("[payments] verify failed user=%s provider=%s code=%s status=%d",
+				userID, req.Provider, code, status)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -110,18 +111,19 @@ func NewVerifyPurchaseRoute(uc usecases.VerifyPurchase, store ports.CredentialSt
 }
 
 // classifyVerifyError maps provider / use-case errors to stable client codes.
-// Raw Google snippets stay in the server log only.
+// Prefer ports sentinel errors (errors.Is). Only explicit token-validation
+// failures become invalid_token/400; unexpected provider, DB, and unknown
+// errors surface as server failures (500/502).
 func classifyVerifyError(err error) (code string, status int) {
-	msg := strings.ToLower(err.Error())
 	switch {
-	case strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "resource_exhausted"):
+	case errors.Is(err, ports.ErrProviderRateLimited):
 		return "rate_limited", http.StatusTooManyRequests
-	case strings.Contains(msg, "unavailable") || strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "deadline") || strings.Contains(msg, "connection reset"):
+	case errors.Is(err, ports.ErrProviderUnavailable):
 		return "provider_unavailable", http.StatusBadGateway
-	default:
+	case errors.Is(err, ports.ErrInvalidPurchaseToken):
 		return "invalid_token", http.StatusBadRequest
+	default:
+		return "internal_error", http.StatusInternalServerError
 	}
 }
 
