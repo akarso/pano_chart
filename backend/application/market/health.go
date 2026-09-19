@@ -8,6 +8,11 @@ import mkt "pano_chart/backend/domain/market"
 //
 // state must be "uptrend" or "downtrend"; all other values return 0.
 // atr == 0 returns 0 (no volatility baseline).
+//
+// recentReturn MUST be in ATR units: (priceChange) / atr.
+// Callers that only have a fractional return (e.g. 0.05 = 5%) must convert
+// first: recentReturnATR = fracReturn * refPrice / atr. Do not pass raw
+// percentages — the adverse-move thresholds (±1.5) are ATR multiples.
 func ComputeTrendHealth(state string, price, recentHigh, recentLow, atr, recentReturn float64) float64 {
 	if atr == 0 {
 		return 0
@@ -26,9 +31,19 @@ func ComputeTrendHealth(state string, price, recentHigh, recentLow, atr, recentR
 		return 0
 	}
 
-	// Crash penalty: a large adverse move suggests the trend is breaking.
-	if recentReturn < -1.5 {
-		health *= 0.3
+	// Adverse-move penalty: only punish moves *against* the labeled trend.
+	// A large negative window return is healthy for a downtrend (the trend
+	// itself), not a "crash" — applying the old signed-return penalty here
+	// collapsed clean downtrends into sideways on the tape (PR-088 CR).
+	switch state {
+	case "uptrend":
+		if recentReturn < -1.5 {
+			health *= 0.3
+		}
+	case "downtrend":
+		if recentReturn > 1.5 {
+			health *= 0.3
+		}
 	}
 
 	return clamp(health, 0, 1)

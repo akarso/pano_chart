@@ -54,6 +54,23 @@ func TestTrendHealth_CrashPenalty(t *testing.T) {
 	}
 }
 
+func TestTrendHealth_Downtrend_LargeNegativeReturnIsHealthy(t *testing.T) {
+	// Window return is largely negative in ATR units on a smooth sell-off —
+	// that is the downtrend, not a crash against it.
+	h := appmarket.ComputeTrendHealth("downtrend", 80, 100, 80, 5, -100.0)
+	if h != 1.0 {
+		t.Errorf("expected 1.0 (no adverse penalty), got %f", h)
+	}
+}
+
+func TestTrendHealth_Downtrend_SqueezePenalty(t *testing.T) {
+	// Large *positive* return while labeled downtrend = squeeze against trend.
+	h := appmarket.ComputeTrendHealth("downtrend", 80, 100, 80, 5, 2.0)
+	if h < 0.29 || h > 0.31 {
+		t.Errorf("expected ~0.3 after squeeze penalty, got %f", h)
+	}
+}
+
 func TestTrendHealth_ZeroATR(t *testing.T) {
 	h := appmarket.ComputeTrendHealth("uptrend", 100, 100, 80, 0, 0.5)
 	if h != 0 {
