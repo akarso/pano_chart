@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -152,6 +153,7 @@ func perKeyRateLimitWithClock(keyFunc func(*http.Request) string, perSecond floa
 				key = noKeySentinel
 			}
 			if !limiterFor(key).Allow() {
+				log.Printf("[ratelimit] 429 %s %s", r.Method, r.URL.Path)
 				http.Error(w, `{"error":"too many requests"}`, http.StatusTooManyRequests)
 				return
 			}

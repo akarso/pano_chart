@@ -426,21 +426,35 @@ func (g *GetRankings) rankerForAlgo(override SidewaysAlgoMode) RankSymbols {
 	return NewDefaultRankSymbols(swapped)
 }
 
+// SidewaysCalcFor returns the sideways calculator for the given algo mode.
+// V3 and V5 use TimeframeAwareCalculator so IdealATRRange / RMin-RMax match
+// the series timeframe (not a hardcoded "1h"). Shared by main.go wiring and
+// the rankings algo-override path (rankerForAlgo / swapSidewaysCalculator).
+func SidewaysCalcFor(algo SidewaysAlgoMode) scoring.SymbolScoreCalculator {
+	return sidewaysCalcFor(algo)
+}
+
 // sidewaysCalcFor returns the sideways calculator for the given algo mode.
+// V3 and V5 use TimeframeAwareCalculator so IdealATRRange / RMin-RMax match
+// the series timeframe (not a hardcoded "1h").
 func sidewaysCalcFor(algo SidewaysAlgoMode) scoring.SymbolScoreCalculator {
 	switch algo {
 	case SidewaysAlgoV2:
 		return &scoring.SidewaysV2ScoreCalculator{}
 	case SidewaysAlgoV3:
-		return &scoring.SidewaysV3ScoreCalculator{
-			Config: scoring.DefaultSidewaysV3Config("1h"),
-		}
+		return scoring.NewTimeframeAwareCalculator("Sideways Consistency", func(tf string) scoring.SymbolScoreCalculator {
+			return &scoring.SidewaysV3ScoreCalculator{
+				Config: scoring.DefaultSidewaysV3Config(tf),
+			}
+		})
 	case SidewaysAlgoV4:
 		return &scoring.SidewaysV4ScoreCalculator{}
 	case SidewaysAlgoV5:
-		return &scoring.SidewaysV5ScoreCalculator{
-			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}
+		return scoring.NewTimeframeAwareCalculator("Sideways Consistency", func(tf string) scoring.SymbolScoreCalculator {
+			return &scoring.SidewaysV5ScoreCalculator{
+				Config: scoring.NewSidewaysV5ConfigForTimeframe(tf),
+			}
+		})
 	default:
 		return &scoring.SidewaysConsistencyScoreCalculator{}
 	}

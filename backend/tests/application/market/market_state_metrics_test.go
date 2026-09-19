@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appmarket "pano_chart/backend/application/market"
+	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -97,6 +98,37 @@ func TestMarketStateService_Calculate_UsesCandleProviderForTapeRegime(t *testing
 	if s.VolatilityExpansion != 1.0 || s.Dispersion != 0 {
 		t.Errorf("expected default vol/dispersion from Calculate, got vol=%f disp=%f", s.VolatilityExpansion, s.Dispersion)
 	}
+}
+
+// TestMarketStateService_Calculate_TapeProviderSkipsCandles documents PR-086:
+// when a TapeProvider is injected, Calculate never fans out via CandleProvider.
+func TestMarketStateService_Calculate_TapeProviderSkipsCandles(t *testing.T) {
+	spy := &fanoutSpyCandleProvider{}
+	tape := &fakeTapeProvider{err: fmt.Errorf("tape unavailable")}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: []domain.EvaluationSnapshot{oneTrendEval()}})
+	svc.SetCandleProvider(spy)
+	svc.SetTapeProvider(tape)
+
+	if _, err := svc.Calculate(context.Background(), "4h"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spy.symbolsCalls != 0 {
+		t.Errorf("expected zero CandleProvider.Symbols calls with TapeProvider set, got %d", spy.symbolsCalls)
+	}
+	if tape.calls != 1 {
+		t.Errorf("expected one TapeProvider.CalculateTape call, got %d", tape.calls)
+	}
+}
+
+type fakeTapeProvider struct {
+	tape  metrics.CompositeTape
+	err   error
+	calls int
+}
+
+func (f *fakeTapeProvider) CalculateTape(_ context.Context, _ string, _ int) (metrics.CompositeTape, error) {
+	f.calls++
+	return f.tape, f.err
 }
 
 type fanoutSpyCandleProvider struct {

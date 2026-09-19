@@ -2,7 +2,9 @@ package http
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"pano_chart/backend/adapters/http/middleware"
@@ -57,10 +59,17 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 			UserID:        userID,
 		}
 		if err := uc.Execute(r.Context(), input); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			log.Printf("[payments] verify failed user=%s provider=%s: %v", userID, req.Provider, err)
+			code, status := classifyVerifyError(err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": code,
+			})
 			return
 		}
 
+		log.Printf("[payments] verify ok user=%s provider=%s", userID, req.Provider)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -69,21 +78,17 @@ func NewVerifyPurchaseHandler(uc usecases.VerifyPurchase) http.HandlerFunc {
 
 // verifyPurchaseRateLimitPerHour / Burst bound how often one authenticated
 // user can hit /api/payments/verify. Each call triggers a live provider API
-// request (Google Play/App Store) with a real cost, and — unlike outbound
-// exchange calls, already throttled via infrastructure/ratelimiter — this
-// endpoint had no abuse protection at all before PR-075.
+// request (Google Play/App Store) with a real cost.
 //
-// Burst is intentionally smaller than the hourly limit, not equal to it
-// (CR follow-up): token-bucket burst refills immediately once the bucket
-// is full again, so burst == limit would let a user spend the entire
-// hourly allowance right at the top of one hour and again right at the
-// top of the next — effectively ~10 calls in a short window straddling
-// the boundary, not a smooth 5/hour. Burst 3 still covers a legitimate
-// user retrying a few times after a flaky provider response without
-// permitting that doubling.
+// Burst must cover a legitimate Play Billing session: the purchase stream
+// commonly emits the same token more than once (purchased + restore on
+// init, plus the user tapping Restore after a failure). Burst 3 / 5 per
+// hour was exhausting that in a single purchase attempt, after which
+// every retry returned 429 and the app showed "we could not verify your
+// purchase" — even when Google had already accepted the payment.
 const (
-	verifyPurchaseRateLimitPerHour = 5
-	verifyPurchaseRateLimitBurst   = 3
+	VerifyPurchaseRateLimitPerHour = 20
+	VerifyPurchaseRateLimitBurst   = 8
 )
 
 // NewVerifyPurchaseRoute wires the production handler chain for
@@ -100,8 +105,24 @@ const (
 // before RequireAuth wraps it — PerUserRateLimit reads the authenticated
 // user ID from context, which only exists once RequireAuth has already run.
 func NewVerifyPurchaseRoute(uc usecases.VerifyPurchase, store ports.CredentialStore) http.Handler {
-	limited := middleware.PerUserRateLimit(verifyPurchaseRateLimitPerHour, verifyPurchaseRateLimitBurst)(NewVerifyPurchaseHandler(uc))
+	limited := middleware.PerUserRateLimit(VerifyPurchaseRateLimitPerHour, VerifyPurchaseRateLimitBurst)(NewVerifyPurchaseHandler(uc))
 	return middleware.RequireAuth(store, true)(limited)
+}
+
+// classifyVerifyError maps provider / use-case errors to stable client codes.
+// Raw Google snippets stay in the server log only.
+func classifyVerifyError(err error) (code string, status int) {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "resource_exhausted"):
+		return "rate_limited", http.StatusTooManyRequests
+	case strings.Contains(msg, "unavailable") || strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline") || strings.Contains(msg, "connection reset"):
+		return "provider_unavailable", http.StatusBadGateway
+	default:
+		return "invalid_token", http.StatusBadRequest
+	}
 }
 
 // ---- Subscription Status Handler ----

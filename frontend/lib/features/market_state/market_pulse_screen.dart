@@ -15,7 +15,7 @@ import 'regime_data.dart';
 import 'regime_history_data.dart';
 import 'transition_data.dart';
 
-/// Full-page Market Pulse screen showing market state, breadth, and
+/// Full-page Market Pulse screen showing market state, participation, and
 /// composite index chart. Designed for extensibility with future stats.
 class MarketPulseScreen extends StatefulWidget {
   final MarketStateApi marketStateApi;
@@ -419,7 +419,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           const SizedBox(height: 2),
           Text(
             data.regimeSource.startsWith('composite')
-                ? 'From merged market tape (same scores as one chart)'
+                ? 'From merged market tape (same structure as one chart)'
                 : 'From token participation (tape unavailable)',
             style: const TextStyle(color: Colors.white24, fontSize: 10),
           ),
@@ -499,12 +499,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               GestureDetector(
                 onTap: () => _showInfoDialog(
                   title: 'Market Metrics',
-                  body: 'Volatility — short-term ATR / long-term ATR ratio.\n'
+                  body: 'Participation — average per-token score mix across the '
+                      'universe (0–1 each).\n\n'
+                      'Volatility — short-term ATR / long-term ATR ratio.\n'
                       '  • < 0.8 low  •  0.8–1.3 normal  •  > 1.3 high\n\n'
                       'Dispersion — how differently assets move from each other.\n'
                       '  • < 2% low  •  2–5% moderate  •  > 5% high\n\n'
-                      'Participation — how individual tokens score across regimes '
-                      '(not the headline). The headline comes from the merged market tape.',
+                      'Participation rows are not the headline. The headline '
+                      'comes from the merged market tape.',
                 ),
                 child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
               ),
@@ -610,10 +612,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   GestureDetector(
                     onTap: () => _showInfoDialog(
                       title: 'Transition Probabilities',
-                      body: 'Estimated likelihood of the market transitioning '
+                      body: 'Regime — dominant structure of the tape: trend / '
+                          'sideways / compression / expansion / indecisive / '
+                          'silent.\n\n'
+                          'Estimated likelihood of the market transitioning '
                           'to each regime given the current conditions.\n\n'
-                          'Based on compression breadth, volatility slope, '
-                          'and regime age (older regimes build more '
+                          'Based on compression participation, volatility '
+                          'slope, and regime age (older regimes build more '
                           'expansion pressure).\n\n'
                           'Values are 0–100% and sum to ~100%.\n\n'
                           'Regime Age shows how long the current regime '
@@ -704,7 +709,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   GestureDetector(
                     onTap: () => _showInfoDialog(
                       title: 'Regime History',
-                      body: 'Timeline of detected market regimes.\n\n'
+                      body: 'Regime — dominant structure of the tape: trend / '
+                          'sideways / compression / expansion / indecisive / '
+                          'silent.\n\n'
+                          'Timeline of detected market regimes.\n\n'
                           'Age — how many candle periods the current regime '
                           'has been active.\n\n'
                           'The coloured bar shows the most recent regime '
@@ -853,7 +861,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% confidence  •  ${data.symbolCount} symbols  •  ${data.timeframe}',
+            '$pct% tape confidence  •  ${data.symbolCount} symbols  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
         ],
@@ -986,7 +994,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  // ---------- Breadth Card ----------
+  // ---------- Participation Card ----------
 
   /// Builds evenly-spaced time labels beneath the chart.
   Widget _buildTimeLabels(List<IndexPoint> points) {
@@ -1032,11 +1040,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Widget _buildBreadthCard() {
     // Prefer regime metrics (same pipeline as regime card) so the numbers
-    // are consistent.  Fall back to state breadth when regime is unavailable.
-    // Neither source's placeholder values (zeros, "normal" defaults) are
-    // real measurements when isDataUnavailable — see PR-074 — so skip a
-    // source entirely rather than let its outage-time zeros read as "the
-    // market has 0% breadth right now."
+    // are consistent.  Fall back to state participation when regime is
+    // unavailable. Neither source's placeholder values (zeros, "normal"
+    // defaults) are real measurements when isDataUnavailable — see PR-074 —
+    // so skip a source entirely rather than let its outage-time zeros read
+    // as "the market has 0% participation right now."
     double sideways, compression, expansion, trend;
     if (_regimeData != null && !_regimeData!.isDataUnavailable) {
       final m = _regimeData!.metrics;
@@ -1076,9 +1084,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               GestureDetector(
                 onTap: () => _showInfoDialog(
                   title: 'Token Participation',
-                  body: 'Average score mix across individual tokens (0–100%).\n\n'
-                      'This is NOT the headline regime — that comes from scoring '
-                      'the merged market tape like one chart.\n\n'
+                  body: 'Participation — average per-token score mix across '
+                      'the universe (0–1 each).\n\n'
+                      'Shown here as 0–100%. This is NOT the headline regime '
+                      '— that comes from scoring the merged market tape like '
+                      'one chart.\n\n'
                       '• Trend — tokens with clean directional structure\n'
                       '• Sideways — range-bound structure\n'
                       '• Compression — narrowing ranges\n'

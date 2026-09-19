@@ -119,3 +119,49 @@ func TestSQLiteRepository_FindByUserID_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+func TestSQLiteRepository_ApplyVerifiedPurchase_ChainedRebinds(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	exp := now.Add(30 * 24 * time.Hour)
+
+	p, err := domain.NewPurchase("user1", "google_play", "tx_chain", "premium", now, exp, true)
+	require.NoError(t, err)
+	_, err = repo.Save(ctx, p)
+	require.NoError(t, err)
+
+	sub1, err := domain.NewSubscription("user1", "google_play", "premium", now, exp)
+	require.NoError(t, err)
+	require.NoError(t, repo.Upsert(ctx, sub1))
+
+	moveTo := func(from, to string) {
+		t.Helper()
+		result, err := domain.NewPaymentVerificationResult(
+			true, "google_play", "tx_chain", "premium", to, now, exp,
+		)
+		require.NoError(t, err)
+		require.NoError(t, repo.ApplyVerifiedPurchase(ctx, from, result))
+	}
+
+	moveTo("user1", "user2")
+	moveTo("user2", "user3")
+
+	found, ok, err := repo.FindByTransactionID(ctx, "google_play", "tx_chain")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "user3", found.UserID())
+
+	for _, uid := range []string{"user1", "user2"} {
+		sub, ok, err := repo.FindByUserID(ctx, uid)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.False(t, sub.IsActive(time.Now().UTC()), "%s should be expired", uid)
+	}
+
+	sub3, ok, err := repo.FindByUserID(ctx, "user3")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.True(t, sub3.IsActive(time.Now().UTC()))
+}

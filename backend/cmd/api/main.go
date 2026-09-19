@@ -132,23 +132,16 @@ func main() {
 
 	var sidewaysCalc scoring.SymbolScoreCalculator
 	switch sidewaysAlgo {
-	case usecases.SidewaysAlgoV2:
-		sidewaysCalc = &scoring.SidewaysV2ScoreCalculator{}
-	case usecases.SidewaysAlgoV3:
-		sidewaysCalc = &scoring.SidewaysV3ScoreCalculator{
-			Config: scoring.DefaultSidewaysV3Config("1h"),
-		}
-	case usecases.SidewaysAlgoV4:
-		sidewaysCalc = &scoring.SidewaysV4ScoreCalculator{}
-	case usecases.SidewaysAlgoV5:
-		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
-			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}, sidewaysV5LogSampleRate)
+	case usecases.SidewaysAlgoV2, usecases.SidewaysAlgoV3, usecases.SidewaysAlgoV4, usecases.SidewaysAlgoV5:
+		sidewaysCalc = usecases.SidewaysCalcFor(sidewaysAlgo)
 	default:
 		sidewaysAlgo = usecases.SidewaysAlgoV5
-		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(&scoring.SidewaysV5ScoreCalculator{
-			Config: scoring.NewSidewaysV5ConfigForTimeframe("1h"),
-		}, sidewaysV5LogSampleRate)
+		sidewaysCalc = usecases.SidewaysCalcFor(sidewaysAlgo)
+	}
+	// Sample-log V5 (and default) score distribution in production — wrap
+	// outside TimeframeAware so one decorator covers all timeframes.
+	if sidewaysAlgo == usecases.SidewaysAlgoV5 {
+		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(sidewaysCalc, sidewaysV5LogSampleRate)
 	}
 
 	// --- Use cases ---
@@ -344,6 +337,9 @@ func main() {
 	// Enables VolatilityExpansion/Dispersion on the market summary (used by
 	// the legacy /api/market/regime response and the transition engine).
 	marketService.SetCandleProvider(candleProvider)
+	// Cached tape for headline regime scoring (PR-086) — avoids rebuilding the
+	// composite on every MarketStateService.Calculate / notification tick.
+	marketService.SetTapeProvider(compositeUC)
 
 	// --- Regime history tracker (SQLite-backed) ---
 	regimeHistoryDBPath := os.Getenv("PC_REGIME_HISTORY_DB")

@@ -45,7 +45,8 @@ class MarketStateData {
       state: json['state'] as String,
       confidence: (json['confidence'] as num).toDouble(),
       breadth:
-          MarketBreadth.fromJson(json['breadth'] as Map<String, dynamic>),
+          MarketBreadth.fromJson(
+              json['breadth'] as Map<String, dynamic>), // glossary-ok
       symbolCount: symbolCount,
       bias: json['bias'] as String? ?? 'neutral',
       effectiveTrend: (json['effectiveTrend'] as num?)?.toDouble() ?? 0,

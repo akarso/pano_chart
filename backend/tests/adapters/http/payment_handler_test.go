@@ -220,9 +220,9 @@ func TestVerifyPurchaseRoute_RateLimited_Returns429(t *testing.T) {
 		return w.Result().StatusCode
 	}
 
-	// Burst allowance (3 — intentionally less than the 5/hour limit, see
-	// the constants' doc comment) must all succeed.
-	for i := 0; i < 3; i++ {
+	// Burst allowance must all succeed. Use the production constant so
+	// this test tracks the real limit rather than a stale hardcoded 3.
+	for i := 0; i < adhttp.VerifyPurchaseRateLimitBurst; i++ {
 		if code := doRequest(); code != http.StatusOK {
 			t.Fatalf("request %d: expected 200 within the burst allowance, got %d", i+1, code)
 		}
@@ -256,7 +256,7 @@ func TestVerifyPurchaseRoute_RateLimitTracksUsersIndependently(t *testing.T) {
 		return w.Result().StatusCode
 	}
 
-	for i := 0; i < 3; i++ {
+	for i := 0; i < adhttp.VerifyPurchaseRateLimitBurst; i++ {
 		if code := doRequest("secret-a"); code != http.StatusOK {
 			t.Fatalf("user-a request %d: expected 200, got %d", i+1, code)
 		}
@@ -306,7 +306,37 @@ func TestVerifyPurchaseHandler_UseCaseError(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "invalid_token", result["error"])
+	assert.NotContains(t, w.Body.String(), "provider not registered",
+		"raw provider error must not leak to the client")
+}
+
+func TestVerifyPurchaseHandler_RateLimitedMapsToStableCode(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{err: fmt.Errorf("google: 429 resource_exhausted")}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "google_play",
+		"purchaseToken": "tok",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "rate_limited", result["error"])
 }
 
 // ---- Subscription Status Handler Tests ----

@@ -301,16 +301,12 @@ void main() {
     test('TestPurchase_ServerVerificationFails_DoesNotUnlock', () async {
       await billing.init();
       fakeApi.verifyError = Exception('backend rejected the token');
-      fakeApi.statusToReturn =
-          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
 
       fakePlatform.push(_purchase());
       await pumpEventQueue();
 
       expect(fakeApi.verifyCallCount, 1);
-      // refreshStatus() is only called after verifyPurchase succeeds, so a
-      // failure here must leave status untouched even though the fake API
-      // would otherwise report active.
       expect(billing.status.active, isFalse);
       expect(billing.busy, isFalse,
           reason: 'the finally block must still clear busy on failure');
@@ -320,6 +316,81 @@ void main() {
       // what went wrong. lastVerificationError is UpgradeScreen's only way
       // to know something needs surfacing.
       expect(billing.lastVerificationError, isNotNull);
+    });
+
+    test('TestPurchase_EmptyToken_DoesNotClearBusyWhileVerifyInFlight', () async {
+      await billing.init();
+      fakeApi.statusToReturn =
+          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+      final gate = Completer<void>();
+      fakeApi.verifyGate = gate;
+
+      // Start a real verify (busy is set by restorePurchases).
+      await billing.restorePurchases();
+      fakePlatform.push(_purchase(token: 'tok-inflight'));
+      await pumpEventQueue();
+      expect(billing.busy, isTrue);
+      expect(fakeApi.verifyCallCount, 1);
+
+      // Empty/malformed batch entry must not clear busy mid-flight.
+      fakePlatform.push(_purchase(token: ''));
+      await pumpEventQueue();
+
+      expect(billing.busy, isTrue,
+          reason: 'empty token must not clear busy while _inFlightTokens is non-empty');
+      expect(billing.lastVerificationError, isNotNull);
+
+      gate.complete();
+      await pumpEventQueue();
+      expect(billing.busy, isFalse);
+    });
+
+    test('TestPurchase_VerifyFailsWhileAlreadyActive_DoesNotAcknowledge',
+        () async {
+      // An already-pro user can still receive a new/bad token. Being
+      // active must not mean "this purchase is fine" — acknowledging
+      // tells Play delivery succeeded for a failed verify.
+      await billing.init();
+      fakeApi.verifyError = Exception('backend rejected the token');
+      fakeApi.statusToReturn =
+          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+
+      fakePlatform.push(_purchase(pendingComplete: true));
+      await pumpEventQueue();
+
+      expect(billing.status.active, isTrue);
+      expect(billing.lastVerificationError, isNotNull);
+      expect(fakePlatform.completedPurchases, isEmpty,
+          reason: 'must not completePurchase when verify of this token failed');
+    });
+
+    test('TestPurchase_FailedVerify_DoesNotAcknowledge', () async {
+      await billing.init();
+      fakeApi.verifyError = Exception('backend rejected the token');
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
+
+      fakePlatform.push(_purchase(pendingComplete: true));
+      await pumpEventQueue();
+
+      expect(fakePlatform.completedPurchases, isEmpty,
+          reason: 'acknowledging a failed verify hides the token from restore');
+      expect(billing.lastVerificationError, isNotNull);
+    });
+
+    test('TestPurchase_429_ShowsRateLimitMessage', () async {
+      await billing.init();
+      fakeApi.verifyError = Exception(
+        'Purchase verification failed (429): {"error":"too many requests"}',
+      );
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
+
+      fakePlatform.push(_purchase());
+      await pumpEventQueue();
+
+      expect(
+        billing.lastVerificationError,
+        contains('Too many verification attempts'),
+      );
     });
 
     test(
@@ -344,8 +415,7 @@ void main() {
     test('TestPurchase_Success_ClearsAnyPriorVerificationError', () async {
       await billing.init();
       fakeApi.verifyError = Exception('first attempt fails');
-      fakeApi.statusToReturn =
-          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
 
       fakePlatform.push(_purchase(token: 'tok-fail'));
       await pumpEventQueue();
@@ -354,6 +424,8 @@ void main() {
       // A later successful purchase must clear the stale error rather than
       // leaving a resolved issue permanently flagged.
       fakeApi.verifyError = null;
+      fakeApi.statusToReturn =
+          SubscriptionStatus(active: true, expiresAt: DateTime(2099));
       fakePlatform.push(_purchase(token: 'tok-succeed'));
       await pumpEventQueue();
 
@@ -365,6 +437,7 @@ void main() {
         () async {
       await billing.init();
       fakeApi.verifyError = Exception('first attempt fails');
+      fakeApi.statusToReturn = SubscriptionStatus.inactive();
       fakePlatform.push(_purchase(token: 'tok-fail'));
       await pumpEventQueue();
       expect(billing.lastVerificationError, isNotNull);

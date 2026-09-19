@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"pano_chart/backend/domain"
@@ -143,14 +145,9 @@ func (p *Provider) VerifyPurchase(
 	purchaseToken string,
 	userID string,
 ) (domain.PaymentVerificationResult, error) {
-	url := fmt.Sprintf(
-		"%s/androidpublisher/v3/applications/%s/purchases/subscriptionsv2/tokens/%s",
-		p.cfg.baseURL(),
-		p.cfg.PackageName,
-		purchaseToken,
-	)
+	reqURL := subscriptionsv2URL(p.cfg.baseURL(), p.cfg.PackageName, purchaseToken)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return domain.PaymentVerificationResult{}, fmt.Errorf("building request: %w", err)
 	}
@@ -173,11 +170,18 @@ func (p *Provider) VerifyPurchase(
 
 	if resp.StatusCode != http.StatusOK {
 		// Return an invalid verification result — the purchase could not
-		// be verified.
+		// be verified. Truncate the body so a huge Google error page
+		// cannot flood logs when this error is wrapped and printed.
+		snippet := string(body)
+		if len(snippet) > 512 {
+			snippet = snippet[:512] + "…"
+		}
+		log.Printf("[googleplay] subscriptionsv2 returned %d for pkg=%s: %s",
+			resp.StatusCode, p.cfg.PackageName, snippet)
 		invalid, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
-		return invalid, fmt.Errorf("google play API returned %d: %s", resp.StatusCode, string(body))
+		return invalid, fmt.Errorf("google play API returned %d: %s", resp.StatusCode, snippet)
 	}
 
 	var purchase subscriptionPurchaseV2Response
@@ -186,6 +190,8 @@ func (p *Provider) VerifyPurchase(
 	}
 
 	if !subscriptionStateGrantsAccess(purchase.SubscriptionState) {
+		log.Printf("[googleplay] token does not grant access: state=%s pkg=%s",
+			purchase.SubscriptionState, p.cfg.PackageName)
 		res, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
@@ -260,6 +266,22 @@ func findLineItem(items []subscriptionV2LineItem, want string) (subscriptionV2Li
 		return subscriptionV2LineItem{}, fmt.Errorf(
 			"no line item matches configured SubscriptionID %q among %d line items — refusing to guess which one", want, len(items))
 	}
+}
+
+// subscriptionsv2URL builds the purchases.subscriptionsv2.get URL.
+//
+// The purchase token is a path parameter, not a query value — Google Play
+// tokens are opaque and routinely contain `/`, `+`, and `=`. Putting the
+// raw token in the path makes the request hit the wrong resource (Google
+// returns 404), which the client then surfaces as "we could not verify
+// your purchase." Path-escape each segment so those characters stay
+// inside the token, not as extra path components.
+func subscriptionsv2URL(base, packageName, purchaseToken string) string {
+	base = strings.TrimRight(base, "/")
+	return base + "/androidpublisher/v3/applications/" +
+		url.PathEscape(packageName) +
+		"/purchases/subscriptionsv2/tokens/" +
+		url.PathEscape(purchaseToken)
 }
 
 // parseRFC3339UTC converts a Google API RFC 3339 timestamp string

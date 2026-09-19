@@ -79,6 +79,32 @@ Represents OHLCV market data for a symbol and timeframe.
 
 ---
 
+## Glossary
+
+Every number shown to a user must map to exactly one term below.
+Backend JSON may keep legacy field names for compatibility; UI copy must use
+these terms.
+
+| Term | Definition | Where it comes from |
+|---|---|---|
+| **Tape** | The merged market series (composite OHLCV) | `CompositeIndexService.CalculateTape` |
+| **Regime** | Dominant structure of the tape: trend / sideways / compression / expansion / indecisive / silent | `ScoreMarketTape` |
+| **Tape confidence** | Share of the dominant structure in the tape's score mix (0–1) | `TapeRegime.Confidence` |
+| **Structure** | The tape's four-way score mix | `TapeRegime.Structure` |
+| **Participation** | Average per-token score mix across the universe (0–1 each) | `MarketStateService` participation breadth |
+| **Bias** | Direction of the tape's trend: up / down / neutral | `TapeRegime.Bias` |
+| **Composite (median)** | Equal-weight median rebased index | `CompositeIndex.Points` |
+| **Composite (volume-weighted)** | Quote-volume-weighted mean rebased index | `CompositeIndex.VolumeWeightedPoints` |
+| **Relative strength (RS)** | Symbol return minus composite return over the same window | Track C |
+| **Signal** | Any user-facing call the app makes at a point in time (badge, setup, regime, transition) | Track B |
+| **Outcome** | What happened after a signal over a fixed horizon | Track B |
+| **Hit rate** | Fraction of signals whose outcome met the success rule | Track B |
+
+Deprecated words in UI copy: *prevalence*, *breadth*, *scores* (as a UI label).
+JSON keys stay unchanged.
+
+---
+
 ## API Contracts (Versioned)
 
 ### Overview Request

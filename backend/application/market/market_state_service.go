@@ -22,6 +22,13 @@ type CandleProvider interface {
 	GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error)
 }
 
+// TapeProvider supplies a pre-built composite tape (cached in production).
+// Optional — see SetTapeProvider. When nil, scoreCompositeTape falls back to
+// constructing a CompositeIndexService from CandleProvider (test / legacy path).
+type TapeProvider interface {
+	CalculateTape(ctx context.Context, timeframe string, limit int) (metrics.CompositeTape, error)
+}
+
 // RegimeObserver is notified after every Calculate call. The Tracker from
 // the regimehistory package satisfies this interface.
 type RegimeObserver interface {
@@ -49,6 +56,7 @@ const expectedSymbolCount = 150
 type MarketStateService struct {
 	provider EvaluationProvider
 	candles  CandleProvider // optional; nil disables VolatilityExpansion/Dispersion
+	tape     TapeProvider   // optional; nil falls back to inline CompositeIndexService
 	observer RegimeObserver // optional; nil disables history tracking
 }
 
@@ -62,6 +70,14 @@ func NewMarketStateService(p EvaluationProvider) *MarketStateService {
 // to 0 — Calculate remains fully usable, just without these two metrics.
 func (s *MarketStateService) SetCandleProvider(cp CandleProvider) {
 	s.candles = cp
+}
+
+// SetTapeProvider injects a composite-tape source (typically Redis-cached).
+// When set, scoreCompositeTape uses it exclusively and never fans out candles
+// via CandleProvider. When nil, the inline CompositeIndexService path is used
+// if candles != nil (keeps unit tests working without wiring a cache).
+func (s *MarketStateService) SetTapeProvider(tp TapeProvider) {
+	s.tape = tp
 }
 
 // SetObserver attaches a regime observer (e.g. the history tracker).
@@ -266,11 +282,21 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 
 // scoreCompositeTape builds the merged market series and scores it like one chart.
 func (s *MarketStateService) scoreCompositeTape(ctx context.Context, timeframe string) (TapeRegime, bool) {
-	if s.candles == nil || ctx.Err() != nil {
+	if ctx.Err() != nil {
 		return TapeRegime{}, false
 	}
-	svc := metrics.NewCompositeIndexService(s.candles, candleMetricsFanoutLimit)
-	tape, err := svc.CalculateTape(ctx, timeframe, candleMetricsWindow)
+
+	var tape metrics.CompositeTape
+	var err error
+	switch {
+	case s.tape != nil:
+		tape, err = s.tape.CalculateTape(ctx, timeframe, candleMetricsWindow)
+	case s.candles != nil:
+		svc := metrics.NewCompositeIndexService(s.candles, candleMetricsFanoutLimit)
+		tape, err = svc.CalculateTape(ctx, timeframe, candleMetricsWindow)
+	default:
+		return TapeRegime{}, false
+	}
 	if err != nil || tape.PreferredSeries().Len() < 2 {
 		return TapeRegime{}, false
 	}

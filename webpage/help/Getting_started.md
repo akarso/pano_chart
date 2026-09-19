@@ -44,7 +44,7 @@ The free tier includes the sparkline grid, detail charts with indicators, score 
 
 - **Auto-refresh** — live updates across all views, from 10-second intervals on 1m charts to hourly on dailies
 - **Full token list** — access to the complete token universe
-- **Market Pulse** — market regime detection, breadth analysis, composite index, and transition forecasts
+- **Market Pulse** — market regime detection, token participation, composite index, and transition forecasts
 - **Social feed** — social and macro event feeds
 - **Advanced notifications** — full notification settings
 - **Future axis** — extended chart timeframe support

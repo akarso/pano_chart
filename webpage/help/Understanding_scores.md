@@ -143,7 +143,7 @@ Confidence scores show how strongly the **merged market tape** fits the dominant
 
 ### Transition Probabilities
 
-Heuristic model predicting the likelihood of regime shifts. Key inputs: compression breadth, volatility slope, market dispersion, and how long the current regime has lasted.
+Heuristic model predicting the likelihood of regime shifts. Key inputs: compression participation, volatility slope, market dispersion, and how long the current regime has lasted.
 
 ## Limitations
 
