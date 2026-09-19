@@ -34,7 +34,7 @@ func TestSafeEvictionTTL_CoversNaturalRefillTime(t *testing.T) {
 // (natural refill well under keyLimiterMinTTL) still uses the floor, not a
 // tiny TTL that would sweep entries far more aggressively than before.
 func TestSafeEvictionTTL_FastRefillStaysAtTheFloor(t *testing.T) {
-	perSecond := 60.0 / 60.0 // PerIPRateLimit(60, ...) — 1/sec
+	perSecond := 1.0 // PerIPRateLimit(60, ...) — 60/hour → 1/sec
 	burst := 3               // natural refill: 3 seconds
 
 	got := safeEvictionTTL(perSecond, burst)
@@ -58,9 +58,9 @@ func TestSafeEvictionTTL_ZeroRateDoesNotDivideByZero(t *testing.T) {
 // (and that both PerIPRateLimit and PerUserRateLimit delegate to), but with
 // an injectable clock and a single constant key — isolating the
 // eviction/reuse behavior under test from request-derived key parsing,
-// which is already covered elsewhere. Params match PerUserRateLimit's
-// actual production call for /api/payments/verify (5/hour, burst 3), the
-// exact case the CR finding is about.
+// which is already covered elsewhere. Params are an example of a slow
+// hourly limiter (5/hour, burst 3) — the shape /api/payments/verify uses,
+// not the current production numbers.
 func fixedKeyLimiter(nowFn func() time.Time) http.Handler {
 	mw := perKeyRateLimitWithClock(func(*http.Request) string { return "user1" }, 5.0/3600.0, 3, nowFn)
 	return mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

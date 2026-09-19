@@ -25,7 +25,7 @@ func TestBinanceFuturesClient_FundingRate_ParsesRealResponseShape(t *testing.T) 
 	// Fixture matches a live GET /fapi/v1/premiumIndex?symbol=BTCUSDT
 	// response verified against the real API during PR-081 implementation.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"symbol":"BTCUSDT","markPrice":"79599.53797101","indexPrice":"79635.62369565","estimatedSettlePrice":"79584.97426575","lastFundingRate":"0.00003858","interestRate":"0.00010000","nextFundingTime":1788796800000,"time":1788787264000}`)
+		_, _ = fmt.Fprint(w, `{"symbol":"BTCUSDT","markPrice":"79599.53797101","indexPrice":"79635.62369565","estimatedSettlePrice":"79584.97426575","lastFundingRate":"0.00003858","interestRate":"0.00010000","nextFundingTime":1788796800000,"time":1788787264000}`)
 	}))
 	defer server.Close()
 
@@ -44,7 +44,7 @@ func TestBinanceFuturesClient_FundingRate_InvalidSymbolReturnsError(t *testing.T
 	// verified live during PR-081 implementation.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"code":-1121,"msg":"Invalid symbol."}`)
+		_, _ = fmt.Fprint(w, `{"code":-1121,"msg":"Invalid symbol."}`)
 	}))
 	defer server.Close()
 
@@ -84,7 +84,7 @@ func TestBinanceFuturesClient_OpenInterestHistory_ParsesRealResponseShape(t *tes
 		entries[i] = openInterestHistEntryJSON(fmt.Sprintf("%.8f", values[i]), baseTS+int64(i)*300000)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
+		_, _ = fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
 	}))
 	defer server.Close()
 
@@ -116,7 +116,7 @@ func TestBinanceFuturesClient_OpenInterestHistory_InsufficientHistoryReturnsErro
 		entries[i] = openInterestHistEntryJSON("107259.19900000", 1788786300000+int64(i)*300000)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
+		_, _ = fmt.Fprintf(w, `[%s]`, strings.Join(entries, ","))
 	}))
 	defer server.Close()
 
@@ -136,7 +136,7 @@ func TestBinanceFuturesClient_OpenInterestHistory_EmptyArrayReturnsError(t *test
 	// futures market — verified live during PR-081 implementation
 	// (unlike premiumIndex, which returns an HTTP 400 for the same case).
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[]`)
+		_, _ = fmt.Fprint(w, `[]`)
 	}))
 	defer server.Close()
 
@@ -156,7 +156,7 @@ func TestBinanceFuturesClient_OpenInterestHistory_EmptyArrayReturnsError(t *test
 func TestBinanceFuturesClient_LongShortRatio_ParsesRealResponseShape(t *testing.T) {
 	// Fixture matches a live GET /futures/data/globalLongShortAccountRatio response.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[{"symbol":"BTCUSDT","longAccount":"0.5268","longShortRatio":"1.1133","shortAccount":"0.4732","timestamp":1788786900000}]`)
+		_, _ = fmt.Fprint(w, `[{"symbol":"BTCUSDT","longAccount":"0.5268","longShortRatio":"1.1133","shortAccount":"0.4732","timestamp":1788786900000}]`)
 	}))
 	defer server.Close()
 
@@ -172,7 +172,7 @@ func TestBinanceFuturesClient_LongShortRatio_ParsesRealResponseShape(t *testing.
 
 func TestBinanceFuturesClient_LongShortRatio_EmptyArrayReturnsError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `[]`)
+		_, _ = fmt.Fprint(w, `[]`)
 	}))
 	defer server.Close()
 
@@ -196,7 +196,7 @@ func TestBinanceFuturesClient_NonJSONErrorBody_IncludesRawBodyInError(t *testing
 	// status code.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `<html><body>Too Many Requests</body></html>`)
+		_, _ = fmt.Fprint(w, `<html><body>Too Many Requests</body></html>`)
 	}))
 	defer server.Close()
 

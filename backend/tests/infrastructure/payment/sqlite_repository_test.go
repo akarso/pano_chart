@@ -119,3 +119,105 @@ func TestSQLiteRepository_FindByUserID_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+func TestSQLiteRepository_ApplyVerifiedPurchase_ChainedRebinds(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	exp := now.Add(30 * 24 * time.Hour)
+
+	p, err := domain.NewPurchase("user1", "google_play", "tx_chain", "premium", now, exp, true)
+	require.NoError(t, err)
+	_, err = repo.Save(ctx, p)
+	require.NoError(t, err)
+
+	sub1, err := domain.NewSubscription("user1", "google_play", "premium", now, exp)
+	require.NoError(t, err)
+	require.NoError(t, repo.Upsert(ctx, sub1))
+
+	moveTo := func(to string) {
+		t.Helper()
+		result, err := domain.NewPaymentVerificationResult(
+			true, "google_play", "tx_chain", "premium", to, now, exp,
+		)
+		require.NoError(t, err)
+		require.NoError(t, repo.ApplyVerifiedPurchase(ctx, result))
+	}
+
+	moveTo("user2")
+	moveTo("user3")
+
+	found, ok, err := repo.FindByTransactionID(ctx, "google_play", "tx_chain")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "user3", found.UserID())
+
+	for _, uid := range []string{"user1", "user2"} {
+		sub, ok, err := repo.FindByUserID(ctx, uid)
+		require.NoError(t, err)
+		require.True(t, ok)
+		assert.False(t, sub.IsActive(time.Now().UTC()), "%s should be expired", uid)
+	}
+
+	sub3, ok, err := repo.FindByUserID(ctx, "user3")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.True(t, sub3.IsActive(time.Now().UTC()))
+}
+
+// Concurrent rebinds must leave only the final purchase owner entitled.
+// Before the owner-checked UPDATE, two devices that both read owner A could
+// each grant themselves an active subscription while only expiring A.
+func TestSQLiteRepository_ApplyVerifiedPurchase_ConcurrentRebindsExpireLosers(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	exp := now.Add(30 * 24 * time.Hour)
+
+	p, err := domain.NewPurchase("user-a", "google_play", "tx_race", "premium", now, exp, true)
+	require.NoError(t, err)
+	_, err = repo.Save(ctx, p)
+	require.NoError(t, err)
+	subA, err := domain.NewSubscription("user-a", "google_play", "premium", now, exp)
+	require.NoError(t, err)
+	require.NoError(t, repo.Upsert(ctx, subA))
+
+	users := []string{"user-b", "user-c", "user-d", "user-e"}
+	errCh := make(chan error, len(users))
+	for _, u := range users {
+		go func(uid string) {
+			result, err := domain.NewPaymentVerificationResult(
+				true, "google_play", "tx_race", "premium", uid, now, exp,
+			)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- repo.ApplyVerifiedPurchase(ctx, result)
+		}(u)
+	}
+	for range users {
+		require.NoError(t, <-errCh)
+	}
+
+	found, ok, err := repo.FindByTransactionID(ctx, "google_play", "tx_race")
+	require.NoError(t, err)
+	require.True(t, ok)
+	owner := found.UserID()
+
+	activeCount := 0
+	for _, uid := range append([]string{"user-a"}, users...) {
+		sub, ok, err := repo.FindByUserID(ctx, uid)
+		require.NoError(t, err)
+		if !ok {
+			continue
+		}
+		if sub.IsActive(time.Now().UTC()) {
+			activeCount++
+			assert.Equal(t, owner, uid, "only the purchase owner may remain active")
+		}
+	}
+	assert.Equal(t, 1, activeCount, "exactly one user must remain entitled")
+}

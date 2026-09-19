@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,6 +25,10 @@ func NewSQLiteRepository(dbPath string) (*SQLiteRepository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening sqlite db: %w", err)
 	}
+	// SQLite does not like concurrent writers across pooled connections
+	// (and :memory: is per-connection). One open connection keeps the
+	// schema visible and serializes ApplyVerifiedPurchase transfers.
+	db.SetMaxOpenConns(1)
 	// Enable WAL mode for better concurrent read performance.
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
@@ -137,6 +142,138 @@ func (r *SQLiteRepository) FindByTransactionID(
 		provider, externalTransactionID,
 	)
 	return r.scanPurchase(row)
+}
+
+// errStalePurchaseOwner means another writer moved the purchase between our
+// SELECT of the current owner and the owner-checked UPDATE. The caller retries.
+var errStalePurchaseOwner = fmt.Errorf("stale purchase owner")
+
+// ApplyVerifiedPurchase updates purchase ownership + expiry, upserts the
+// caller's subscription, and expires the holder observed inside the same
+// write transaction when they differ — so concurrent rebinds cannot leave an
+// intermediate destination entitled after a later transfer wins.
+func (r *SQLiteRepository) ApplyVerifiedPurchase(
+	ctx context.Context,
+	result domain.PaymentVerificationResult,
+) error {
+	const maxAttempts = 5
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := r.applyVerifiedPurchaseOnce(ctx, result)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, errStalePurchaseOwner) {
+			return err
+		}
+	}
+	return fmt.Errorf("transferring purchase after concurrent rebinds: %w", errStalePurchaseOwner)
+}
+
+func (r *SQLiteRepository) applyVerifiedPurchaseOnce(
+	ctx context.Context,
+	result domain.PaymentVerificationResult,
+) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transfer tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT OR IGNORE INTO users (id) VALUES (?)`,
+		result.UserID(),
+	); err != nil {
+		return fmt.Errorf("ensuring user: %w", err)
+	}
+
+	var currentOwner string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_id FROM purchases
+		 WHERE provider = ? AND external_transaction_id = ?`,
+		result.Provider(),
+		result.ExternalTransactionID(),
+	).Scan(&currentOwner)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("purchase not found for %s/%s", result.Provider(), result.ExternalTransactionID())
+	}
+	if err != nil {
+		return fmt.Errorf("reading purchase owner: %w", err)
+	}
+
+	// Owner-checked update: if another transfer committed after our SELECT,
+	// RowsAffected is 0 and we retry with a fresh owner read.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE purchases
+		 SET user_id = ?, expiration_time = ?
+		 WHERE provider = ? AND external_transaction_id = ? AND user_id = ?`,
+		result.UserID(),
+		result.ExpirationTime().Format(time.RFC3339),
+		result.Provider(),
+		result.ExternalTransactionID(),
+		currentOwner,
+	)
+	if err != nil {
+		return fmt.Errorf("updating purchase ownership: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return errStalePurchaseOwner
+	}
+
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO subscriptions
+			(user_id, provider, product_id, start_time, expiration_time, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id) DO UPDATE SET
+			provider = excluded.provider,
+			product_id = excluded.product_id,
+			start_time = excluded.start_time,
+			expiration_time = excluded.expiration_time,
+			updated_at = excluded.updated_at`,
+		result.UserID(),
+		result.Provider(),
+		result.ProductID(),
+		result.PurchaseTime().Format(time.RFC3339),
+		result.ExpirationTime().Format(time.RFC3339),
+		now.Format(time.RFC3339),
+	); err != nil {
+		return fmt.Errorf("upserting subscription: %w", err)
+	}
+
+	if currentOwner != "" && currentOwner != result.UserID() {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO users (id) VALUES (?)`,
+			currentOwner,
+		); err != nil {
+			return fmt.Errorf("ensuring previous user: %w", err)
+		}
+		// Expire the owner observed in this transaction (start=expiration=now).
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO subscriptions
+				(user_id, provider, product_id, start_time, expiration_time, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(user_id) DO UPDATE SET
+				provider = excluded.provider,
+				product_id = excluded.product_id,
+				start_time = excluded.start_time,
+				expiration_time = excluded.expiration_time,
+				updated_at = excluded.updated_at`,
+			currentOwner,
+			result.Provider(),
+			result.ProductID(),
+			now.Format(time.RFC3339),
+			now.Format(time.RFC3339),
+			now.Format(time.RFC3339),
+		); err != nil {
+			return fmt.Errorf("expiring previous subscriber: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transfer tx: %w", err)
+	}
+	return nil
 }
 
 func (r *SQLiteRepository) scanPurchase(row *sql.Row) (domain.Purchase, bool, error) {

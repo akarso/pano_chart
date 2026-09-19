@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'market_state_data.dart';
 import 'http_market_state_api.dart';
 
-/// Shows a dialog with the current market state and breadth.
+/// Shows a dialog with the current market state and participation.
 Future<void> showMarketStateDialog(
   BuildContext context,
   MarketStateApi api, {
@@ -124,7 +124,7 @@ class _MarketStateDialog extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            '$pct% confidence  •  ${data.symbolCount} symbols',
+            '$pct% ${data.confidenceLabel}  •  ${data.symbolCount} symbols',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
           const SizedBox(height: 4),

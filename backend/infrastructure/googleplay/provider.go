@@ -7,8 +7,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 )
 
@@ -143,14 +146,9 @@ func (p *Provider) VerifyPurchase(
 	purchaseToken string,
 	userID string,
 ) (domain.PaymentVerificationResult, error) {
-	url := fmt.Sprintf(
-		"%s/androidpublisher/v3/applications/%s/purchases/subscriptionsv2/tokens/%s",
-		p.cfg.baseURL(),
-		p.cfg.PackageName,
-		purchaseToken,
-	)
+	reqURL := subscriptionsv2URL(p.cfg.baseURL(), p.cfg.PackageName, purchaseToken)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return domain.PaymentVerificationResult{}, fmt.Errorf("building request: %w", err)
 	}
@@ -162,7 +160,7 @@ func (p *Provider) VerifyPurchase(
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return domain.PaymentVerificationResult{}, fmt.Errorf("google play API call: %w", err)
+		return domain.PaymentVerificationResult{}, fmt.Errorf("%w: google play API call: %v", ports.ErrProviderUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -172,12 +170,15 @@ func (p *Provider) VerifyPurchase(
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Return an invalid verification result — the purchase could not
-		// be verified.
+		// Do not log or embed the response body — Google error pages can be
+		// huge and may contain sensitive snippets. Status alone is enough
+		// for classification and ops.
+		log.Printf("[googleplay] subscriptionsv2 returned %d for pkg=%s",
+			resp.StatusCode, p.cfg.PackageName)
 		invalid, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
-		return invalid, fmt.Errorf("google play API returned %d: %s", resp.StatusCode, string(body))
+		return invalid, wrapPlayHTTPError(resp.StatusCode)
 	}
 
 	var purchase subscriptionPurchaseV2Response
@@ -186,6 +187,8 @@ func (p *Provider) VerifyPurchase(
 	}
 
 	if !subscriptionStateGrantsAccess(purchase.SubscriptionState) {
+		log.Printf("[googleplay] token does not grant access: state=%s pkg=%s",
+			purchase.SubscriptionState, p.cfg.PackageName)
 		res, _ := domain.NewPaymentVerificationResult(
 			false, "google_play", "", "", "", time.Time{}, time.Time{},
 		)
@@ -259,6 +262,42 @@ func findLineItem(items []subscriptionV2LineItem, want string) (subscriptionV2Li
 	default:
 		return subscriptionV2LineItem{}, fmt.Errorf(
 			"no line item matches configured SubscriptionID %q among %d line items — refusing to guess which one", want, len(items))
+	}
+}
+
+// subscriptionsv2URL builds the purchases.subscriptionsv2.get URL.
+//
+// The purchase token is a path parameter, not a query value — Google Play
+// tokens are opaque and routinely contain `/`, `+`, and `=`. Putting the
+// raw token in the path makes the request hit the wrong resource (Google
+// returns 404), which the client then surfaces as "we could not verify
+// your purchase." Path-escape each segment so those characters stay
+// inside the token, not as extra path components.
+func subscriptionsv2URL(base, packageName, purchaseToken string) string {
+	base = strings.TrimRight(base, "/")
+	return base + "/androidpublisher/v3/applications/" +
+		url.PathEscape(packageName) +
+		"/purchases/subscriptionsv2/tokens/" +
+		url.PathEscape(purchaseToken)
+}
+
+// wrapPlayHTTPError maps Google Play HTTP status codes onto ports sentinel
+// errors so HTTP handlers can classify without scraping error text. The
+// error carries only the status code — never the response body.
+//
+// 401/403 are provider credential or API-permission failures, not proof the
+// purchase token is bad — classify as unavailable so clients can retry once
+// service credentials are fixed.
+func wrapPlayHTTPError(status int) error {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderRateLimited, status)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderUnavailable, status)
+	case status >= 500 || status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderUnavailable, status)
+	default:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrInvalidPurchaseToken, status)
 	}
 }
 

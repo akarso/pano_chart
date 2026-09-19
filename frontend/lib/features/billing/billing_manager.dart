@@ -100,6 +100,15 @@ class BillingManager {
 
   StreamSubscription<List<PurchaseDetails>>? _purchaseSub;
 
+  /// Purchase tokens currently being verified — Play Billing often emits
+  /// the same token twice in one burst (purchased + restore). Without
+  /// this, both hit `/api/payments/verify` and the second can 429.
+  final Set<String> _inFlightTokens = {};
+
+  /// PurchaseDetails waiting for acknowledge while a verify for the same
+  /// token is already in flight. After a successful verify we ack them.
+  final Map<String, List<PurchaseDetails>> _pendingAckByToken = {};
+
   BillingManager({
     required SubscriptionApi api,
     required String userId,
@@ -193,46 +202,119 @@ class BillingManager {
   // ---- purchase update handler ----
 
   Future<void> _onPurchaseUpdated(List<PurchaseDetails> purchases) async {
+    // Deduplicate purchased/restored tokens within one stream batch so a
+    // sequential await cannot re-verify the same token after the first
+    // finishes and clears _inFlightTokens. Preserve every PurchaseDetails
+    // for acknowledgement.
+    final verifyByToken = <String, PurchaseDetails>{};
+    final ackExtrasByToken = <String, List<PurchaseDetails>>{};
+    final nonVerify = <PurchaseDetails>[];
+
     for (final purchase in purchases) {
       switch (purchase.status) {
         case PurchaseStatus.purchased:
         case PurchaseStatus.restored:
-          await _verifyAndComplete(purchase);
+          final token = purchase.verificationData.serverVerificationData;
+          if (token.isEmpty) {
+            nonVerify.add(purchase);
+            break;
+          }
+          final existing = verifyByToken[token];
+          if (existing == null) {
+            verifyByToken[token] = purchase;
+          } else {
+            (ackExtrasByToken[token] ??= []).add(purchase);
+          }
           break;
+        default:
+          nonVerify.add(purchase);
+          break;
+      }
+    }
+
+    for (final purchase in nonVerify) {
+      switch (purchase.status) {
         case PurchaseStatus.error:
           debugPrint('[BillingManager] Purchase error: ${purchase.error}');
-          _busy = false;
+          if (_inFlightTokens.isEmpty) {
+            _busy = false;
+          }
           _notify();
           break;
         case PurchaseStatus.canceled:
           debugPrint('[BillingManager] Purchase canceled');
-          _busy = false;
+          if (_inFlightTokens.isEmpty) {
+            _busy = false;
+          }
           _notify();
           break;
         case PurchaseStatus.pending:
           debugPrint('[BillingManager] Purchase pending');
           break;
+        case PurchaseStatus.purchased:
+        case PurchaseStatus.restored:
+          // Empty-token purchased/restored — still run verify path for error UX.
+          await _verifyAndComplete(purchase);
+          break;
       }
 
-      // Complete pending purchases to acknowledge delivery.
-      if (purchase.pendingCompletePurchase) {
+      if (purchase.pendingCompletePurchase &&
+          purchase.status != PurchaseStatus.purchased &&
+          purchase.status != PurchaseStatus.restored) {
         await _iap.completePurchase(purchase);
       }
+    }
+
+    for (final entry in verifyByToken.entries) {
+      final token = entry.key;
+      final extras = ackExtrasByToken[token];
+      if (extras != null) {
+        for (final details in extras) {
+          if (details.pendingCompletePurchase) {
+            (_pendingAckByToken[token] ??= []).add(details);
+          }
+        }
+      }
+      await _verifyAndComplete(entry.value);
     }
   }
 
   /// Sends the purchase token to the backend for verification,
   /// then refreshes subscription status.
   Future<void> _verifyAndComplete(PurchaseDetails purchase) async {
+    final token = purchase.verificationData.serverVerificationData;
+    if (token.isEmpty) {
+      _lastVerificationError =
+          'We could not verify your purchase. Please try "Restore purchases" — '
+          'if that doesn\'t work, contact support and we\'ll sort it out.';
+      // Play often delivers a batch; an empty entry must not clear busy
+      // while a real token is mid-verify.
+      if (_inFlightTokens.isEmpty) {
+        _busy = false;
+      }
+      _notify();
+      return;
+    }
+    if (!_inFlightTokens.add(token)) {
+      // Another verify for this token is already running. Queue this
+      // PurchaseDetails for acknowledge after that verify succeeds —
+      // returning without scheduling ack can leave pendingCompletePurchase
+      // stuck if Play does not re-emit.
+      if (purchase.pendingCompletePurchase) {
+        (_pendingAckByToken[token] ??= []).add(purchase);
+      }
+      return;
+    }
     try {
       await _api.verifyPurchase(
         provider: 'google_play',
-        purchaseToken: purchase.verificationData.serverVerificationData,
+        purchaseToken: token,
         userId: _userId,
       );
       await refreshStatus();
       if (_status.active) {
         _lastVerificationError = null;
+        await _acknowledgeAll(token, purchase);
         Analytics().subscriptionStarted(productId: purchase.productID);
       } else {
         // The backend call itself succeeded (no exception), but the
@@ -244,16 +326,82 @@ class BillingManager {
         _lastVerificationError =
             'Purchase completed, but we could not confirm your subscription yet. '
             'Please try "Restore purchases" in a moment, or contact support if this persists.';
+        _pendingAckByToken.remove(token);
       }
     } catch (e) {
       debugPrint('[BillingManager] Verification failed: $e');
-      _lastVerificationError =
-          'We could not verify your purchase. Please try "Restore purchases" — '
-          'if that doesn\'t work, contact support and we\'ll sort it out.';
+      // Do NOT treat "some subscription is already active" as proof that
+      // *this* token verified. An already-pro user with a bad/new token
+      // would otherwise acknowledge a failed delivery to Play and hide the
+      // error. Backend idempotency returns 200 for already-processed tokens
+      // of this user, so the happy restore path never needs this shortcut.
+      await refreshStatus();
+      _lastVerificationError = _verificationErrorMessage(e);
+      _pendingAckByToken.remove(token);
     } finally {
-      _busy = false;
+      _inFlightTokens.remove(token);
+      // Overlapping stream callbacks for different tokens must keep the UI
+      // busy until the aggregate in-flight set is empty.
+      if (_inFlightTokens.isEmpty) {
+        _busy = false;
+      }
       _notify();
     }
+  }
+
+  Future<void> _acknowledge(PurchaseDetails purchase) async {
+    if (purchase.pendingCompletePurchase) {
+      await _iap.completePurchase(purchase);
+    }
+  }
+
+  /// Acknowledges [direct] then any queued duplicates for [token]. Failed
+  /// acks stay queued so a later restore can retry; ack failures are not
+  /// reported as verification failures.
+  Future<void> _acknowledgeAll(String token, PurchaseDetails direct) async {
+    final failed = <PurchaseDetails>[];
+    if (!await _tryAcknowledge(direct) && direct.pendingCompletePurchase) {
+      failed.add(direct);
+    }
+    final queued = _pendingAckByToken.remove(token) ?? const <PurchaseDetails>[];
+    for (final details in queued) {
+      if (!await _tryAcknowledge(details) && details.pendingCompletePurchase) {
+        failed.add(details);
+      }
+    }
+    if (failed.isNotEmpty) {
+      _pendingAckByToken[token] = failed;
+      _lastVerificationError =
+          'Your subscription is active, but we could not finish confirming with '
+          'Google Play. Please try "Restore purchases".';
+    }
+  }
+
+  Future<bool> _tryAcknowledge(PurchaseDetails purchase) async {
+    try {
+      await _acknowledge(purchase);
+      return true;
+    } catch (e) {
+      debugPrint('[BillingManager] Acknowledge failed: $e');
+      return false;
+    }
+  }
+
+  /// Maps backend failures to something the user can act on. The previous
+  /// catch-all hid 429 (rate limit after a few retries) and 401 (stale
+  /// device secret) behind the same "could not verify" sentence.
+  static String _verificationErrorMessage(Object error) {
+    final text = error.toString();
+    if (text.contains('(429)')) {
+      return 'Too many verification attempts. Please wait a few minutes, '
+          'then try "Restore purchases".';
+    }
+    if (text.contains('(401)')) {
+      return 'We could not verify your account. Please restart the app '
+          'and try "Restore purchases".';
+    }
+    return 'We could not verify your purchase. Please try "Restore purchases" — '
+        'if that doesn\'t work, contact support and we\'ll sort it out.';
   }
 
   // ---- restore ----

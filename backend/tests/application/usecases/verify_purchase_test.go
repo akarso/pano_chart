@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -16,8 +17,7 @@ import (
 func makeVerifyPurchase(
 	provider *fakePaymentProvider,
 ) (usecases.VerifyPurchase, *fakePurchaseRepository, *fakeSubscriptionRepository) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 
 	registry := usecases.NewPaymentProviderRegistry()
 	registry.Register(provider)
@@ -98,7 +98,7 @@ func TestVerifyPurchase_UnknownProvider(t *testing.T) {
 		UserID:        "user1",
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not registered")
+	assert.ErrorIs(t, err, ports.ErrUnsupportedProvider)
 }
 
 func TestVerifyPurchase_ProviderError(t *testing.T) {
@@ -136,7 +136,7 @@ func TestVerifyPurchase_InvalidVerificationResult(t *testing.T) {
 	assert.Empty(t, purchases.saved)
 }
 
-func TestVerifyPurchase_DuplicateTransaction(t *testing.T) {
+func TestVerifyPurchase_DuplicateTransaction_IsIdempotent(t *testing.T) {
 	now := time.Now().UTC()
 	result, _ := domain.NewPaymentVerificationResult(
 		true, "test_pay", "tx_dup", "premium", "user1",
@@ -144,7 +144,7 @@ func TestVerifyPurchase_DuplicateTransaction(t *testing.T) {
 	)
 
 	provider := &fakePaymentProvider{name: "test_pay", result: result}
-	uc, _, _ := makeVerifyPurchase(provider)
+	uc, purchases, subs := makeVerifyPurchase(provider)
 
 	input := usecases.VerifyPurchaseInput{
 		Provider:      "test_pay",
@@ -155,8 +155,11 @@ func TestVerifyPurchase_DuplicateTransaction(t *testing.T) {
 	err := uc.Execute(context.Background(), input)
 	require.NoError(t, err)
 
-	// Second attempt with same transaction ID should fail.
+	// Restore / retry of the same transaction must not fail — Play
+	// Billing re-emits the token, and the previous "duplicate" 400 is
+	// exactly the "we could not verify your purchase" the client shows.
 	err = uc.Execute(context.Background(), input)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate transaction")
+	require.NoError(t, err)
+	assert.Len(t, purchases.saved, 1)
+	assert.Contains(t, subs.subs, "user1")
 }

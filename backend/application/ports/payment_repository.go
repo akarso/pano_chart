@@ -26,3 +26,18 @@ type SubscriptionRepository interface {
 	// Returns the subscription and true if found.
 	FindByUserID(ctx context.Context, userID string) (domain.Subscription, bool, error)
 }
+
+// VerifiedPurchaseApplier applies a verified purchase to the purchase ledger
+// and live entitlements in one atomic unit of work.
+//
+// The SQLite payment repository implements this. Unit-test fakes should too
+// so ActivateSubscription exercises the same ownership rules.
+type VerifiedPurchaseApplier interface {
+	// ApplyVerifiedPurchase updates the existing purchase row's owner and
+	// expiration to match result, upserts the caller's subscription, and
+	// expires the purchase's current owner when that owner differs from
+	// result.UserID(). The current owner MUST be read inside the write
+	// transaction (not from a pre-tx snapshot) so concurrent rebinds cannot
+	// leave a stale intermediate holder entitled.
+	ApplyVerifiedPurchase(ctx context.Context, result domain.PaymentVerificationResult) error
+}

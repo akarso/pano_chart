@@ -41,7 +41,7 @@ func (r *PaymentProviderRegistry) Get(name string) (ports.PaymentProviderPort, e
 
 	p, ok := r.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("payment provider %q not registered", name)
+		return nil, fmt.Errorf("%w: %q", ports.ErrUnsupportedProvider, name)
 	}
 	return p, nil
 }
