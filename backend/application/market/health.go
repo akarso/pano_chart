@@ -26,9 +26,19 @@ func ComputeTrendHealth(state string, price, recentHigh, recentLow, atr, recentR
 		return 0
 	}
 
-	// Crash penalty: a large adverse move suggests the trend is breaking.
-	if recentReturn < -1.5 {
-		health *= 0.3
+	// Adverse-move penalty: only punish moves *against* the labeled trend.
+	// A large negative window return is healthy for a downtrend (the trend
+	// itself), not a "crash" — applying the old signed-return penalty here
+	// collapsed clean downtrends into sideways on the tape (PR-088 CR).
+	switch state {
+	case "uptrend":
+		if recentReturn < -1.5 {
+			health *= 0.3
+		}
+	case "downtrend":
+		if recentReturn > 1.5 {
+			health *= 0.3
+		}
 	}
 
 	return clamp(health, 0, 1)
