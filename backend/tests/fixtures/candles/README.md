@@ -71,9 +71,10 @@ Package: `pano_chart/backend/tests/fixtures/candles` (`RequiredBars = 110`).
 
 ## Regenerating
 
-Fixtures are **deterministic synthetics** shaped like each archetype so CI stays
-offline and stable. Prefer live Binance windows for Track E when a synthetic
-cannot produce a differentiated calculator fingerprint:
+Current fixtures are **intentional synthetics** (`source: synthetic`) for offline
+CI: each archetype is shaped so domain calculators produce a differentiated
+fingerprint (see table above). Swapping in live Binance windows is encouraged
+for Track E when a real-market wick/volume structure is needed:
 
 1. Pull klines (e.g. `GET /api/v3/klines?symbol=BTCUSDT&interval=15m&limit=110`).
 2. Map each row to `{t: openTime/1000, o,h,l,c, v: quoteVolume}`.
@@ -82,6 +83,9 @@ cannot produce a differentiated calculator fingerprint:
    `go test ./tests/application/market/ -run GoldenTape`.
 5. Update the score-vector table above and tighten golden ranges only when the
    change is intentional.
+
+`fixtures.Load` builds candles with `domain.NewCandle` (full OHLC / alignment
+validation) — regenerated files that fail those checks will fail the suite.
 
 Breakout fixtures must exercise `DetectBreakout` (swing channel + BVS/CCS on
 the last bar). A ramp with elevated volume alone is not enough.

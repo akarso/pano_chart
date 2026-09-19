@@ -74,7 +74,11 @@ func Load(t *testing.T, name string) domain.CandleSeries {
 	candles := make([]domain.Candle, len(doc.Candles))
 	for i, b := range doc.Candles {
 		ts := time.Unix(b.T, 0).UTC()
-		candles[i] = domain.NewCandleUnsafe(sym, tf, ts, b.O, b.H, b.L, b.C, b.V)
+		c, err := domain.NewCandle(sym, tf, ts, b.O, b.H, b.L, b.C, b.V)
+		if err != nil {
+			t.Fatalf("fixtures.Load(%q): candle[%d]: %v", name, i, err)
+		}
+		candles[i] = c
 	}
 	series, err := domain.NewCandleSeries(sym, tf, candles)
 	if err != nil {

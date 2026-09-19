@@ -198,7 +198,7 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 	atr := simpleATR(series)
 
 	recentHigh, recentLow := recentExtremes(series)
-	recentReturn := recentReturnPct(series)
+	recentReturn := recentReturnATR(series, atr)
 
 	health := market.ComputeTrendHealth(regime, price, recentHigh, recentLow, atr, recentReturn)
 	return regime, health
@@ -333,8 +333,12 @@ func recentExtremes(series domain.CandleSeries) (float64, float64) {
 	return high, low
 }
 
-// recentReturnPct returns the percentage change over the last 5 candles.
-func recentReturnPct(series domain.CandleSeries) float64 {
+// recentReturnATR returns the last-5-candle price change in ATR units, the
+// unit ComputeTrendHealth expects for its adverse-move thresholds.
+func recentReturnATR(series domain.CandleSeries, atr float64) float64 {
+	if atr <= 0 {
+		return 0
+	}
 	n := series.Len()
 	lookback := 5
 	if n < lookback+1 {
@@ -345,10 +349,7 @@ func recentReturnPct(series domain.CandleSeries) float64 {
 	}
 	old, _ := series.At(n - 1 - lookback)
 	cur, _ := series.At(n - 1)
-	if old.Close() == 0 {
-		return 0
-	}
-	return (cur.Close() - old.Close()) / old.Close()
+	return (cur.Close() - old.Close()) / atr
 }
 
 // rangeFromSideways derives a range score from sideways scores.

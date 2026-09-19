@@ -18,6 +18,8 @@ type scoreBound struct {
 	Abs  bool    // compare |score| against Min/Max
 }
 
+// Every fixture asserts all five production calculators so unnamed
+// dimensions cannot regress silently while the suite stays green.
 func TestGoldenFixtures_ScoreRanges(t *testing.T) {
 	cases := []struct {
 		fixture string
@@ -28,6 +30,8 @@ func TestGoldenFixtures_ScoreRanges(t *testing.T) {
 			bounds: []scoreBound{
 				{Name: "Trend Predictability", Min: 0.6, Max: math.Inf(1), Abs: true},
 				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.3},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
 				{Name: "Gain/Loss", Min: 0.05, Max: 0.20},
 			},
 		},
@@ -36,6 +40,8 @@ func TestGoldenFixtures_ScoreRanges(t *testing.T) {
 			bounds: []scoreBound{
 				{Name: "Trend Predictability", Min: 0.5, Max: math.Inf(1), Abs: true},
 				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.3},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
 				{Name: "Gain/Loss", Min: 0.05, Max: 0.15},
 			},
 		},
@@ -44,74 +50,98 @@ func TestGoldenFixtures_ScoreRanges(t *testing.T) {
 			bounds: []scoreBound{
 				{Name: "Trend Predictability", Min: 0.6, Max: math.Inf(1), Abs: true},
 				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.3},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
 				{Name: "Gain/Loss", Min: -0.20, Max: -0.05},
 			},
 		},
 		{
 			fixture: "tight_range",
 			bounds: []scoreBound{
-				{Name: "Sideways Consistency", Min: 0.4, Max: math.Inf(1)},
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.3, Abs: true},
+				{Name: "Sideways Consistency", Min: 0.4, Max: math.Inf(1)},
 				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Gain/Loss", Min: -0.05, Max: 0.05},
 			},
 		},
 		{
 			fixture: "wide_range",
 			bounds: []scoreBound{
+				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.3, Abs: true},
 				{Name: "Sideways Consistency", Min: 0.4, Max: math.Inf(1)},
 				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
-				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.3, Abs: true},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Gain/Loss", Min: -0.05, Max: 0.05},
 			},
 		},
 		{
 			fixture: "compression_pre_breakout",
 			bounds: []scoreBound{
-				{Name: "Compression", Min: 0.3, Max: math.Inf(1)},
-				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.35},
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.3, Abs: true},
+				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.35},
+				{Name: "Compression", Min: 0.3, Max: math.Inf(1)},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.2},
+				{Name: "Gain/Loss", Min: -0.08, Max: 0.05},
 			},
 		},
 		{
 			fixture: "breakout_up_with_volume",
 			bounds: []scoreBound{
-				// Channel + piercing bar with volume (DetectBreakout BVS/CCS).
-				{Name: "Breakout", Min: 0.2, Max: math.Inf(1)},
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.35, Abs: true},
+				{Name: "Sideways Consistency", Min: 0.3, Max: math.Inf(1)},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
+				{Name: "Breakout", Min: 0.2, Max: math.Inf(1)},
+				{Name: "Gain/Loss", Min: -0.02, Max: 0.08},
 			},
 		},
 		{
 			fixture: "failed_breakout",
 			bounds: []scoreBound{
-				// Fake pierce that re-enters — Breakout must stay near zero.
-				{Name: "Breakout", Min: math.Inf(-1), Max: 0.05},
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.3, Abs: true},
+				{Name: "Sideways Consistency", Min: 0.4, Max: math.Inf(1)},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.05},
 				{Name: "Gain/Loss", Min: -0.05, Max: 0.05},
 			},
 		},
 		{
 			fixture: "v_reversal",
 			bounds: []scoreBound{
-				// Sharp V: net positive but not a clean linear trend.
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.35, Abs: true},
-				{Name: "Gain/Loss", Min: 0.02, Max: 0.15},
+				{Name: "Sideways Consistency", Min: math.Inf(-1), Max: 0.5},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
 				{Name: "Breakout", Min: math.Inf(-1), Max: 0.15},
+				{Name: "Gain/Loss", Min: 0.02, Max: 0.15},
 			},
 		},
 		{
 			fixture: "flat_dead",
 			bounds: []scoreBound{
 				{Name: "Trend Predictability", Min: math.Inf(-1), Max: 0.2, Abs: true},
-				{Name: "Gain/Loss", Min: -0.01, Max: 0.01},
 				{Name: "Sideways Consistency", Min: 0.3, Max: math.Inf(1)},
+				{Name: "Compression", Min: math.Inf(-1), Max: 0.25},
+				{Name: "Breakout", Min: math.Inf(-1), Max: 0.15},
+				{Name: "Gain/Loss", Min: -0.01, Max: 0.01},
 			},
 		},
 	}
 
+	const wantCalcs = 5
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
+			if len(tc.bounds) != wantCalcs {
+				t.Fatalf("fixture %q: want bounds for all %d calculators, got %d",
+					tc.fixture, wantCalcs, len(tc.bounds))
+			}
 			series := fixtures.Load(t, tc.fixture)
 			calcs := goldenCalculators(t, series)
+			seen := map[string]bool{}
 			for _, b := range tc.bounds {
+				if seen[b.Name] {
+					t.Fatalf("duplicate bound for %q", b.Name)
+				}
+				seen[b.Name] = true
 				calc, ok := calcs[b.Name]
 				if !ok {
 					t.Fatalf("unknown calculator %q", b.Name)
@@ -127,6 +157,11 @@ func TestGoldenFixtures_ScoreRanges(t *testing.T) {
 				if compare < b.Min || compare > b.Max {
 					t.Errorf("%s score=%g (compare=%g) want [%g, %g] abs=%v",
 						b.Name, got, compare, b.Min, b.Max, b.Abs)
+				}
+			}
+			for name := range calcs {
+				if !seen[name] {
+					t.Errorf("calculator %q constructed but not asserted", name)
 				}
 			}
 		})
