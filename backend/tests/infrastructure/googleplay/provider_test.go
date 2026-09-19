@@ -67,6 +67,41 @@ func TestProvider_VerifyPurchase_Valid(t *testing.T) {
 	assert.WithinDuration(t, expiry, result.ExpirationTime(), time.Second)
 }
 
+func TestProvider_VerifyPurchase_EncodesSpecialCharactersInToken(t *testing.T) {
+	// Google Play purchase tokens are opaque and often contain `/`, `+`,
+	// and `=`. Those MUST stay inside the last path segment — a raw `/`
+	// would make Google look up a different (non-existent) resource and
+	// 404, which the app reports as "we could not verify your purchase."
+	now := time.Now().UTC()
+	start := now.Add(-time.Hour)
+	expiry := now.Add(30 * 24 * time.Hour)
+	token := "GPA/abc+def=ghi"
+
+	var gotURI string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.URL.RequestURI()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(validPurchaseV2JSON("pano_pro_monthly", start, expiry)))
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "pano_pro_monthly",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	result, err := p.VerifyPurchase(context.Background(), token, "user1")
+	require.NoError(t, err)
+	assert.True(t, result.Valid())
+	// `/` must be percent-encoded so it is not parsed as another path
+	// segment. `+` and `=` are legal in a path segment and PathEscape
+	// leaves them alone.
+	assert.Contains(t, gotURI, "/tokens/GPA%2Fabc+def=ghi")
+	assert.NotContains(t, gotURI, "/tokens/GPA/")
+}
+
 func TestProvider_VerifyPurchase_FreeTrial(t *testing.T) {
 	// v2 has no separate "trial" subscriptionState — a trial period reads
 	// as SUBSCRIPTION_STATE_ACTIVE the same as a paid period.

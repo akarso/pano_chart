@@ -38,7 +38,7 @@ class RegimeData {
     return RegimeData(
       timeframe: json['timeframe'] as String,
       regime: json['regime'] as String,
-      prevalence: (json['prevalence'] as num).toDouble(),
+      prevalence: (json['prevalence'] as num).toDouble(), // glossary-ok
       bias: json['bias'] as String? ?? 'neutral',
       scores:
           RegimeScores.fromJson(json['scores'] as Map<String, dynamic>),

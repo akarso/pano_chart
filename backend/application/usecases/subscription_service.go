@@ -14,8 +14,11 @@ import (
 // payment provider.
 type SubscriptionService interface {
 	// ActivateSubscription records a verified purchase and upserts the
-	// user's subscription.  Returns an error if the verification result
-	// is not valid.
+	// user's subscription. Repeating the same provider transaction is
+	// idempotent (restore / retry / Play Billing duplicate events) and
+	// moves access to the calling user when a new device identity
+	// presents a still-valid token. Returns an error if the verification
+	// result is not valid.
 	ActivateSubscription(ctx context.Context, result domain.PaymentVerificationResult) error
 
 	// IsActive checks whether the user has an active (non-expired)
@@ -28,17 +31,25 @@ type SubscriptionService interface {
 
 type subscriptionService struct {
 	purchases     ports.PurchaseRepository
+	applier       ports.VerifiedPurchaseApplier
 	subscriptions ports.SubscriptionRepository
 }
 
-// NewSubscriptionService constructs a SubscriptionService backed by the
-// given repositories.
+// NewSubscriptionService constructs a SubscriptionService. purchases must
+// implement ports.VerifiedPurchaseApplier (SQLite and test fakes do) so
+// restore/rebind cannot silently skip ownership updates. Miswired adapters
+// panic at construction, not on the first duplicate verify.
 func NewSubscriptionService(
 	purchases ports.PurchaseRepository,
 	subscriptions ports.SubscriptionRepository,
 ) SubscriptionService {
+	applier, ok := purchases.(ports.VerifiedPurchaseApplier)
+	if !ok {
+		panic("NewSubscriptionService: purchases must implement VerifiedPurchaseApplier")
+	}
 	return &subscriptionService{
 		purchases:     purchases,
+		applier:       applier,
 		subscriptions: subscriptions,
 	}
 }
@@ -51,19 +62,31 @@ func (s *subscriptionService) ActivateSubscription(
 		return fmt.Errorf("cannot activate subscription: verification result is not valid")
 	}
 
-	// Guard against replay: reject if transaction already recorded.
-	_, exists, err := s.purchases.FindByTransactionID(
+	existing, exists, err := s.purchases.FindByTransactionID(
 		ctx, result.Provider(), result.ExternalTransactionID(),
 	)
 	if err != nil {
 		return fmt.Errorf("checking duplicate transaction: %w", err)
 	}
+
+	// Restore, retry, Play Billing duplicate stream events, and app
+	// reinstall (which mints a new device user ID) all re-present a
+	// transaction Google has already verified. Rejecting those as
+	// "duplicate" is what the client surfaces as "we could not verify
+	// your purchase" — after Google already took the money. Idempotently
+	// refresh the caller's entitlement instead. If a different device
+	// identity presents the same valid token, move access to that
+	// identity: the token is proof of Play ownership; our user ID is
+	// just a device credential.
+	//
+	// Purchase.user_id is the source of truth for who currently holds
+	// the transaction. ApplyVerifiedPurchase expires that holder (not a
+	// stale first owner), updates ownership + expiry, and upserts the
+	// new subscription atomically.
 	if exists {
-		return fmt.Errorf("duplicate transaction %s from provider %s",
-			result.ExternalTransactionID(), result.Provider())
+		return s.applier.ApplyVerifiedPurchase(ctx, existing.UserID(), result)
 	}
 
-	// Record the purchase.
 	purchase, err := domain.NewPurchase(
 		result.UserID(),
 		result.Provider(),
@@ -80,7 +103,13 @@ func (s *subscriptionService) ActivateSubscription(
 		return fmt.Errorf("saving purchase: %w", err)
 	}
 
-	// Upsert subscription.
+	return s.upsertSubscription(ctx, result)
+}
+
+func (s *subscriptionService) upsertSubscription(
+	ctx context.Context,
+	result domain.PaymentVerificationResult,
+) error {
 	sub, err := domain.NewSubscription(
 		result.UserID(),
 		result.Provider(),
@@ -94,7 +123,6 @@ func (s *subscriptionService) ActivateSubscription(
 	if err := s.subscriptions.Upsert(ctx, sub); err != nil {
 		return fmt.Errorf("upserting subscription: %w", err)
 	}
-
 	return nil
 }
 

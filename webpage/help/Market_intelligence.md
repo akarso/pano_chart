@@ -17,7 +17,7 @@ The Market Pulse headline classifies the overall crypto market by **scoring the 
 
 Separately, **participation** shows how individual tokens’ score mixes distribute across the four regimes. High trend participation means many tokens look structurally trendy; it can disagree with the headline when the tape is grinding up but most charts are choppy.
 
-Use participation to understand *breadth of structure*, not as a substitute for “is the market going up?”
+Use participation to understand how widely structure is shared across tokens, not as a substitute for “is the market going up?”
 
 ## Composite Price Index
 

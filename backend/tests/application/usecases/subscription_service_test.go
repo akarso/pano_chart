@@ -22,8 +22,7 @@ func validVerificationResult() domain.PaymentVerificationResult {
 }
 
 func TestSubscriptionService_ActivateSubscription_HappyPath(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	err := svc.ActivateSubscription(context.Background(), validVerificationResult())
@@ -34,8 +33,7 @@ func TestSubscriptionService_ActivateSubscription_HappyPath(t *testing.T) {
 }
 
 func TestSubscriptionService_ActivateSubscription_InvalidResult(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	now := time.Now().UTC()
@@ -47,25 +45,110 @@ func TestSubscriptionService_ActivateSubscription_InvalidResult(t *testing.T) {
 	assert.Empty(t, purchases.saved)
 }
 
-func TestSubscriptionService_ActivateSubscription_DuplicateTransaction(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+func TestSubscriptionService_ActivateSubscription_DuplicateTransaction_IsIdempotent(t *testing.T) {
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
-	result := validVerificationResult()
-
-	err := svc.ActivateSubscription(context.Background(), result)
+	first := validVerificationResult()
+	err := svc.ActivateSubscription(context.Background(), first)
 	require.NoError(t, err)
 
-	// Second attempt with same transaction should fail.
-	err = svc.ActivateSubscription(context.Background(), result)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate transaction")
+	// Restore / retry of the same Google order must succeed and refresh
+	// expiry — rejecting it is what the app reports as "we could not
+	// verify your purchase" after Play already charged the user.
+	later := time.Now().UTC().Add(60 * 24 * time.Hour)
+	replay, err := domain.NewPaymentVerificationResult(
+		true, first.Provider(), first.ExternalTransactionID(), first.ProductID(), first.UserID(),
+		first.PurchaseTime(), later,
+	)
+	require.NoError(t, err)
+
+	err = svc.ActivateSubscription(context.Background(), replay)
+	require.NoError(t, err)
+	assert.Len(t, purchases.saved, 1, "must not insert a second purchase row")
+
+	sub, found, err := svc.GetSubscription(context.Background(), "user1")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.WithinDuration(t, later, sub.ExpirationTime(), time.Second)
+
+	p, ok, err := purchases.FindByTransactionID(context.Background(), first.Provider(), first.ExternalTransactionID())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "user1", p.UserID())
+	assert.WithinDuration(t, later, p.ExpirationTime(), time.Second)
+}
+
+func TestSubscriptionService_ActivateSubscription_RebindToNewDeviceIdentity(t *testing.T) {
+	purchases, subs := newLinkedPaymentFakes()
+	svc := usecases.NewSubscriptionService(purchases, subs)
+
+	original := validVerificationResult()
+	require.NoError(t, svc.ActivateSubscription(context.Background(), original))
+
+	// Reinstall / 401 reclaim mints a new device user ID. The Play token
+	// is still valid for the same Google account — access must follow
+	// the token, not stay glued to the first device identity.
+	moved, err := domain.NewPaymentVerificationResult(
+		true, original.Provider(), original.ExternalTransactionID(), original.ProductID(), "user-reinstall",
+		original.PurchaseTime(), original.ExpirationTime(),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.ActivateSubscription(context.Background(), moved))
+
+	oldActive, err := svc.IsActive(context.Background(), "user1")
+	require.NoError(t, err)
+	assert.False(t, oldActive)
+
+	newActive, err := svc.IsActive(context.Background(), "user-reinstall")
+	require.NoError(t, err)
+	assert.True(t, newActive)
+
+	p, ok, err := purchases.FindByTransactionID(context.Background(), original.Provider(), original.ExternalTransactionID())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "user-reinstall", p.UserID(), "purchase ownership must follow the rebind")
+}
+
+func TestSubscriptionService_ActivateSubscription_ChainedRebinds_OnlyLatestActive(t *testing.T) {
+	purchases, subs := newLinkedPaymentFakes()
+	svc := usecases.NewSubscriptionService(purchases, subs)
+
+	original := validVerificationResult()
+	require.NoError(t, svc.ActivateSubscription(context.Background(), original))
+
+	moveTo := func(userID string) {
+		t.Helper()
+		moved, err := domain.NewPaymentVerificationResult(
+			true, original.Provider(), original.ExternalTransactionID(), original.ProductID(), userID,
+			original.PurchaseTime(), original.ExpirationTime(),
+		)
+		require.NoError(t, err)
+		require.NoError(t, svc.ActivateSubscription(context.Background(), moved))
+	}
+
+	moveTo("user2")
+	moveTo("user3")
+
+	for _, uid := range []string{"user1", "user2"} {
+		active, err := svc.IsActive(context.Background(), uid)
+		require.NoError(t, err)
+		assert.False(t, active, "%s must not remain entitled after later rebinds", uid)
+	}
+
+	active3, err := svc.IsActive(context.Background(), "user3")
+	require.NoError(t, err)
+	assert.True(t, active3)
+
+	p, ok, err := purchases.FindByTransactionID(context.Background(), original.Provider(), original.ExternalTransactionID())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "user3", p.UserID())
 }
 
 func TestSubscriptionService_IsActive_HappyPath(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	err := svc.ActivateSubscription(context.Background(), validVerificationResult())
@@ -77,8 +160,7 @@ func TestSubscriptionService_IsActive_HappyPath(t *testing.T) {
 }
 
 func TestSubscriptionService_IsActive_NoSubscription(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	active, err := svc.IsActive(context.Background(), "unknown_user")
@@ -87,8 +169,7 @@ func TestSubscriptionService_IsActive_NoSubscription(t *testing.T) {
 }
 
 func TestSubscriptionService_IsActive_Expired(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	now := time.Now().UTC()
@@ -104,8 +185,7 @@ func TestSubscriptionService_IsActive_Expired(t *testing.T) {
 }
 
 func TestSubscriptionService_GetSubscription_Found(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	err := svc.ActivateSubscription(context.Background(), validVerificationResult())
@@ -118,8 +198,7 @@ func TestSubscriptionService_GetSubscription_Found(t *testing.T) {
 }
 
 func TestSubscriptionService_GetSubscription_NotFound(t *testing.T) {
-	purchases := newFakePurchaseRepository()
-	subs := newFakeSubscriptionRepository()
+	purchases, subs := newLinkedPaymentFakes()
 	svc := usecases.NewSubscriptionService(purchases, subs)
 
 	_, found, err := svc.GetSubscription(context.Background(), "nobody")
