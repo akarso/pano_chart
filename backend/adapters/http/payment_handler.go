@@ -112,8 +112,9 @@ func NewVerifyPurchaseRoute(uc usecases.VerifyPurchase, store ports.CredentialSt
 
 // classifyVerifyError maps provider / use-case errors to stable client codes.
 // Prefer ports sentinel errors (errors.Is). Only explicit token-validation
-// failures become invalid_token/400; unexpected provider, DB, and unknown
-// errors surface as server failures (500/502).
+// failures become invalid_token/400; unsupported provider names are client
+// validation (4xx); unexpected DB/unknown errors surface as 500; provider
+// outages (including auth/credential failures) as 502.
 func classifyVerifyError(err error) (code string, status int) {
 	switch {
 	case errors.Is(err, ports.ErrProviderRateLimited):
@@ -122,6 +123,8 @@ func classifyVerifyError(err error) (code string, status int) {
 		return "provider_unavailable", http.StatusBadGateway
 	case errors.Is(err, ports.ErrInvalidPurchaseToken):
 		return "invalid_token", http.StatusBadRequest
+	case errors.Is(err, ports.ErrUnsupportedProvider):
+		return "unsupported_provider", http.StatusBadRequest
 	default:
 		return "internal_error", http.StatusInternalServerError
 	}

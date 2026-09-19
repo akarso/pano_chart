@@ -298,9 +298,27 @@ func TestProvider_VerifyPurchase_APIError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "403")
 	assert.False(t, result.Valid())
-	assert.ErrorIs(t, err, ports.ErrInvalidPurchaseToken)
-	assert.NotErrorIs(t, err, ports.ErrProviderUnavailable)
+	assert.ErrorIs(t, err, ports.ErrProviderUnavailable)
+	assert.NotErrorIs(t, err, ports.ErrInvalidPurchaseToken)
 	assert.NotErrorIs(t, err, ports.ErrProviderRateLimited)
+}
+
+func TestProvider_VerifyPurchase_API401IsUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer srv.Close()
+
+	p := googleplay.NewProvider(googleplay.Config{
+		PackageName:    "com.test.app",
+		SubscriptionID: "sub",
+		AccessToken:    "tok",
+		BaseURL:        srv.URL,
+	}, srv.Client())
+
+	_, err := p.VerifyPurchase(context.Background(), "tok1", "u1")
+	assert.ErrorIs(t, err, ports.ErrProviderUnavailable)
 }
 
 func TestProvider_VerifyPurchase_API5xxIsUnavailable(t *testing.T) {

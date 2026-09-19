@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 )
 
@@ -25,7 +26,7 @@ func TestPaymentProviderRegistry_GetUnknown(t *testing.T) {
 
 	_, err := reg.Get("nonexistent")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not registered")
+	assert.ErrorIs(t, err, ports.ErrUnsupportedProvider)
 }
 
 func TestPaymentProviderRegistry_DuplicatePanics(t *testing.T) {

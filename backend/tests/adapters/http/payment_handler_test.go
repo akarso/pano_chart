@@ -295,11 +295,11 @@ func TestVerifyPurchaseHandler_InvalidBody(t *testing.T) {
 }
 
 func TestVerifyPurchaseHandler_UseCaseError(t *testing.T) {
-	uc := &fakeVerifyPurchaseUC{err: fmt.Errorf("provider not registered")}
+	uc := &fakeVerifyPurchaseUC{err: fmt.Errorf("db deadlock")}
 	handler := adhttp.NewVerifyPurchaseHandler(uc)
 
 	body, _ := json.Marshal(map[string]string{
-		"provider":      "unknown",
+		"provider":      "google_play",
 		"purchaseToken": "tok",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
@@ -314,8 +314,32 @@ func TestVerifyPurchaseHandler_UseCaseError(t *testing.T) {
 	var result map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
 	assert.Equal(t, "internal_error", result["error"])
-	assert.NotContains(t, w.Body.String(), "provider not registered",
+	assert.NotContains(t, w.Body.String(), "db deadlock",
 		"raw provider error must not leak to the client")
+}
+
+func TestVerifyPurchaseHandler_UnsupportedProviderMapsTo400(t *testing.T) {
+	uc := &fakeVerifyPurchaseUC{
+		err: fmt.Errorf("%w: %q", ports.ErrUnsupportedProvider, "unknown"),
+	}
+	handler := adhttp.NewVerifyPurchaseHandler(uc)
+
+	body, _ := json.Marshal(map[string]string{
+		"provider":      "unknown",
+		"purchaseToken": "tok",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/payments/verify", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	var result map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
+	assert.Equal(t, "unsupported_provider", result["error"])
 }
 
 func TestVerifyPurchaseHandler_InvalidTokenMapsTo400(t *testing.T) {

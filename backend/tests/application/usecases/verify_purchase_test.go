@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -97,7 +98,7 @@ func TestVerifyPurchase_UnknownProvider(t *testing.T) {
 		UserID:        "user1",
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not registered")
+	assert.ErrorIs(t, err, ports.ErrUnsupportedProvider)
 }
 
 func TestVerifyPurchase_ProviderError(t *testing.T) {

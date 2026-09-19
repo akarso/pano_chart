@@ -18,4 +18,9 @@ var (
 	// token (or the token/result is known-invalid). Clients must not retry
 	// with the same token without user action.
 	ErrInvalidPurchaseToken = errors.New("invalid purchase token")
+
+	// ErrUnsupportedProvider means the request named a payment provider
+	// that is not registered. This is a client validation error (4xx), not
+	// a server outage.
+	ErrUnsupportedProvider = errors.New("unsupported payment provider")
 )

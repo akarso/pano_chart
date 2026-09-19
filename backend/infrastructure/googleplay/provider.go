@@ -284,10 +284,16 @@ func subscriptionsv2URL(base, packageName, purchaseToken string) string {
 // wrapPlayHTTPError maps Google Play HTTP status codes onto ports sentinel
 // errors so HTTP handlers can classify without scraping error text. The
 // error carries only the status code — never the response body.
+//
+// 401/403 are provider credential or API-permission failures, not proof the
+// purchase token is bad — classify as unavailable so clients can retry once
+// service credentials are fixed.
 func wrapPlayHTTPError(status int) error {
 	switch {
 	case status == http.StatusTooManyRequests:
 		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderRateLimited, status)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderUnavailable, status)
 	case status >= 500 || status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
 		return fmt.Errorf("%w: google play API returned %d", ports.ErrProviderUnavailable, status)
 	default:
