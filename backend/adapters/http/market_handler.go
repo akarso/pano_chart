@@ -24,6 +24,8 @@ type marketStateResponse struct {
 	State          string           `json:"state"`
 	Confidence     float64          `json:"confidence"`
 	Breadth        marketBreadthDTO `json:"breadth"`
+	Structure      marketBreadthDTO `json:"structure,omitempty"`
+	RegimeSource   string           `json:"regimeSource,omitempty"`
 	SymbolCount    int              `json:"symbolCount"`
 	Bias           string           `json:"bias"`
 	EffectiveTrend float64          `json:"effectiveTrend"`
@@ -62,11 +64,18 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		BreakdownRate:  roundTo(summary.BreakdownRate, 4),
 		Label:          summary.Label,
 		DataQuality:    string(summary.DataQuality),
+		RegimeSource:   summary.RegimeSource,
 		Breadth: marketBreadthDTO{
 			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 			Compression: roundTo(summary.Breadth.Compression, 4),
 			Expansion:   roundTo(summary.Breadth.Expansion, 4),
 			Trend:       roundTo(summary.Breadth.Trend, 4),
+		},
+		Structure: marketBreadthDTO{
+			Sideways:    roundTo(summary.Structure.Sideways, 4),
+			Compression: roundTo(summary.Structure.Compression, 4),
+			Expansion:   roundTo(summary.Structure.Expansion, 4),
+			Trend:       roundTo(summary.Structure.Trend, 4),
 		},
 	}
 

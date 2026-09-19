@@ -12,6 +12,8 @@ class RegimeData {
   final double breakdownRate;
   final String label;
   final String dataQuality;
+  /// How the headline regime was chosen — e.g. composite_volume_weighted.
+  final String regimeSource;
 
   const RegimeData({
     required this.timeframe,
@@ -24,6 +26,7 @@ class RegimeData {
     this.breakdownRate = 0.0,
     this.label = '',
     this.dataQuality = 'ok',
+    this.regimeSource = '',
   });
 
   /// Whether this reading reflects a real market read, as opposed to a
@@ -45,6 +48,7 @@ class RegimeData {
       breakdownRate: (json['breakdownRate'] as num?)?.toDouble() ?? 0.0,
       label: json['label'] as String? ?? '',
       dataQuality: json['dataQuality'] as String? ?? 'ok',
+      regimeSource: json['regimeSource'] as String? ?? '',
     );
   }
 }
