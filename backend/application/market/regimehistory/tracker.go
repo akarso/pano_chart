@@ -47,7 +47,7 @@ func candleBoundary(timeframe string, ts int64) int64 {
 //
 // Duplicate calls within the same candle boundary are no-ops (same regime)
 // or trigger a transition (regime changed mid-candle).
-func (t *Tracker) Update(timeframe string, newRegime mkt.Regime, timestamp int64) error {
+func (t *Tracker) Update(timeframe string, newRegime mkt.Regime, _ string, timestamp int64) error {
 	boundary := candleBoundary(timeframe, timestamp)
 
 	t.mu.Lock()

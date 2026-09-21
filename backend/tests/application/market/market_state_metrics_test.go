@@ -208,7 +208,7 @@ type fakeRegimeObserver struct {
 	calls []mkt.Regime
 }
 
-func (f *fakeRegimeObserver) Update(_ string, regime mkt.Regime, _ int64) error {
+func (f *fakeRegimeObserver) Update(_ string, regime mkt.Regime, _ string, _ int64) error {
 	f.calls = append(f.calls, regime)
 	return nil
 }
