@@ -18,10 +18,10 @@ import (
 const (
 	// EvalInterval is how often the job wakes (ROADMAP PR-091).
 	EvalInterval = 5 * time.Minute
-	// MaxPerTick caps successful resolves per tick.
+	// MaxPerTick caps MarkResolved writes across invalid drain + ready grading.
 	MaxPerTick = 200
-	// readyFetchCap over-fetches ready rows so retryable skips (incomplete
-	// path) do not starve other ready signals within the same tick.
+	// readyFetchCap over-fetches ready rows so retryable skips do not starve
+	// other ready signals within the same tick.
 	readyFetchCap = MaxPerTick * 5
 	// tapeLimitCap bounds CalculateTape; beyond this a delayed market-wide
 	// window is treated as permanently unavailable.
@@ -30,8 +30,6 @@ const (
 	// grading. Tracker retains indefinitely; 500 covers multi-year 1d and
 	// weeks of 15m transitions — raise if RegimeAt misses on long horizons.
 	regimeHistoryLimit = 500
-	// invalidDrainCap bounds never-ready (bad TF) poison marks per tick.
-	invalidDrainCap = 50
 )
 
 var (
@@ -120,88 +118,152 @@ func (e *Evaluator) Run(ctx context.Context) {
 	}
 }
 
-// Tick resolves up to MaxPerTick ready signals and drains invalid-TF rows.
+// Tick resolves up to MaxPerTick signals (invalid-TF drain + ready grading
+// share one budget).
 func (e *Evaluator) Tick(ctx context.Context) int {
 	if e == nil || e.repo == nil {
 		return 0
 	}
 	now := e.now().UTC()
-	e.drainInvalid(ctx, now)
+	budget := MaxPerTick
 
-	sigs, err := e.repo.UnresolvedReady(ctx, now, readyFetchCap)
-	if err != nil {
-		log.Printf("[signal-eval] unresolved ready: %v", err)
-		return 0
+	n := e.resolveInvalid(ctx, now, budget)
+	budget -= n
+	if budget <= 0 || ctx.Err() != nil {
+		e.logResolved(n)
+		return n
 	}
 
-	// One CalculateTape per timeframe for this tick (max limit needed).
-	tapeCache := e.prefetchTapes(ctx, sigs, now)
+	m := e.resolveReady(ctx, now, budget)
+	total := n + m
+	e.logResolved(total)
+	return total
+}
 
+func (e *Evaluator) logResolved(n int) {
+	if n > 0 {
+		log.Printf("[signal-eval] resolved %d signal(s)", n)
+	}
+}
+
+// resolveInvalid marks unknown-timeframe rows as Rule=invalid, up to budget.
+func (e *Evaluator) resolveInvalid(ctx context.Context, now time.Time, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	sigs, err := e.repo.UnresolvedInvalidTF(ctx, budget)
+	if err != nil {
+		log.Printf("[signal-eval] unresolved invalid tf: %v", err)
+		return 0
+	}
 	resolved := 0
 	for _, sig := range sigs {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || resolved >= budget {
 			break
 		}
-		if resolved >= MaxPerTick {
-			break
+		oc := domainsignal.Outcome{
+			SignalID:   sig.ID,
+			ResolvedAt: now,
+			Rule:       domainsignal.RuleInvalid,
 		}
-		outcome, err := e.gradeOne(ctx, sig, now, tapeCache)
-		if err != nil {
-			if errors.Is(err, errIncompletePath) ||
-				errors.Is(err, errInsufficientATR) ||
-				errors.Is(err, errRegimeUnavailable) ||
-				errors.Is(err, errTapeUnavailable) ||
-				errors.Is(err, errNoCandles) {
-				// Retryable: leave unresolved, try next ready row.
-				continue
-			}
-			if errors.Is(err, errPermanentTapeMiss) {
-				_ = e.repo.MarkResolved(ctx, sig.ID, domainsignal.Outcome{
-					SignalID:   sig.ID,
-					ResolvedAt: now,
-					Rule:       domainsignal.RulePathUnavailable,
-				})
-				resolved++
-				continue
-			}
-			log.Printf("[signal-eval] id=%s label=%s: %v", sig.ID, sig.Label, err)
-			continue
-		}
-		if err := e.repo.MarkResolved(ctx, sig.ID, outcome); err != nil {
-			log.Printf("[signal-eval] mark %s: %v", sig.ID, err)
+		if err := e.repo.MarkResolved(ctx, sig.ID, oc); err != nil {
+			log.Printf("[signal-eval] mark invalid %s: %v", sig.ID, err)
 			continue
 		}
 		resolved++
 	}
-	if resolved > 0 {
-		log.Printf("[signal-eval] resolved %d signal(s)", resolved)
+	return resolved
+}
+
+// resolveReady grades horizon-elapsed signals, up to budget MarkResolved writes.
+func (e *Evaluator) resolveReady(ctx context.Context, now time.Time, budget int) int {
+	if budget <= 0 {
+		return 0
+	}
+	fetch := readyFetchCap
+	if fetch < budget {
+		fetch = budget
+	}
+	sigs, err := e.repo.UnresolvedReady(ctx, now, fetch)
+	if err != nil {
+		log.Printf("[signal-eval] unresolved ready: %v", err)
+		return 0
+	}
+	tapeCache := e.prefetchTapes(ctx, sigs, now)
+
+	resolved := 0
+	for _, sig := range sigs {
+		if ctx.Err() != nil || resolved >= budget {
+			break
+		}
+		if e.persistGrade(ctx, sig, now, tapeCache) {
+			resolved++
+		}
 	}
 	return resolved
 }
 
-func (e *Evaluator) drainInvalid(ctx context.Context, now time.Time) {
-	sigs, err := e.repo.Unresolved(ctx, now, invalidDrainCap)
+// persistGrade grades one signal and writes the outcome when definitive.
+// Returns true when MarkResolved ran (counts toward the tick budget).
+func (e *Evaluator) persistGrade(
+	ctx context.Context,
+	sig domainsignal.Signal,
+	now time.Time,
+	tapeCache map[string]metrics.CompositeTape,
+) bool {
+	outcome, err := e.gradeOne(ctx, sig, now, tapeCache)
 	if err != nil {
-		return
+		return e.handleGradeError(ctx, sig, now, err)
 	}
-	for _, sig := range sigs {
-		if _, ok := domainsignal.HorizonEnd(sig); ok {
-			continue
-		}
-		_ = e.repo.MarkResolved(ctx, sig.ID, domainsignal.Outcome{
+	if err := e.repo.MarkResolved(ctx, sig.ID, outcome); err != nil {
+		log.Printf("[signal-eval] mark %s: %v", sig.ID, err)
+		return false
+	}
+	return true
+}
+
+func (e *Evaluator) handleGradeError(
+	ctx context.Context,
+	sig domainsignal.Signal,
+	now time.Time,
+	err error,
+) bool {
+	if isRetryableGradeError(err) {
+		return false
+	}
+	if errors.Is(err, errPermanentTapeMiss) {
+		oc := domainsignal.Outcome{
 			SignalID:   sig.ID,
 			ResolvedAt: now,
-			Rule:       domainsignal.RuleInvalid,
-		})
+			Rule:       domainsignal.RulePathUnavailable,
+		}
+		if markErr := e.repo.MarkResolved(ctx, sig.ID, oc); markErr != nil {
+			log.Printf("[signal-eval] mark %s: %v", sig.ID, markErr)
+			return false
+		}
+		return true
 	}
+	log.Printf("[signal-eval] id=%s label=%s: %v", sig.ID, sig.Label, err)
+	return false
+}
+
+func isRetryableGradeError(err error) bool {
+	return errors.Is(err, errIncompletePath) ||
+		errors.Is(err, errInsufficientATR) ||
+		errors.Is(err, errRegimeUnavailable) ||
+		errors.Is(err, errTapeUnavailable) ||
+		errors.Is(err, errNoCandles)
 }
 
 func (e *Evaluator) prefetchTapes(ctx context.Context, sigs []domainsignal.Signal, now time.Time) map[string]metrics.CompositeTape {
 	if e.tape == nil {
 		return nil
 	}
-	need := map[string]int{} // tf → max bars
+	need := map[string]int{}
 	for _, sig := range sigs {
+		if !domainsignal.NeedsPath(sig.Label) {
+			continue
+		}
 		if strings.TrimSpace(sig.Symbol) != "" {
 			continue
 		}
@@ -217,7 +279,7 @@ func (e *Evaluator) prefetchTapes(ctx context.Context, sigs []domainsignal.Signa
 	out := make(map[string]metrics.CompositeTape, len(need))
 	for tf, bars := range need {
 		if bars > tapeLimitCap {
-			continue // permanent miss handled per-signal
+			continue
 		}
 		tape, err := e.tape.CalculateTape(ctx, tf, bars)
 		if err != nil {
@@ -230,7 +292,6 @@ func (e *Evaluator) prefetchTapes(ctx context.Context, sigs []domainsignal.Signa
 }
 
 func tapeBarsNeeded(emitted, now time.Time, dur time.Duration, horizonBars int) int {
-	// Cover [emitted, horizonEnd) plus lookback for SimpleATR(14).
 	span := now.Sub(emitted.UTC())
 	bars := int(span/dur) + horizonBars + 16
 	if bars < horizonBars+16 {
@@ -240,6 +301,39 @@ func tapeBarsNeeded(emitted, now time.Time, dur time.Duration, horizonBars int) 
 }
 
 func (e *Evaluator) gradeOne(
+	ctx context.Context,
+	sig domainsignal.Signal,
+	now time.Time,
+	tapeCache map[string]metrics.CompositeTape,
+) (domainsignal.Outcome, error) {
+	if !domainsignal.NeedsPath(sig.Label) {
+		return e.gradeWithoutPath(sig, now)
+	}
+	return e.gradeWithPath(ctx, sig, now, tapeCache)
+}
+
+// gradeWithoutPath handles transition:* (regime history) and unsupported labels.
+func (e *Evaluator) gradeWithoutPath(sig domainsignal.Signal, now time.Time) (domainsignal.Outcome, error) {
+	label := strings.ToLower(strings.TrimSpace(sig.Label))
+	regimeAt := ""
+	if strings.HasPrefix(label, "transition:") {
+		end, ok := domainsignal.HorizonEnd(sig)
+		if !ok {
+			// Unknown TF belongs in resolveInvalid; treat as retryable here.
+			return domainsignal.Outcome{}, errIncompletePath
+		}
+		var err error
+		regimeAt, err = e.lookupRegime(sig.Timeframe, end)
+		if err != nil {
+			return domainsignal.Outcome{}, err
+		}
+	}
+	outcome := domainsignal.Grade(sig, domainsignal.PathStats{}, regimeAt)
+	outcome.ResolvedAt = now
+	return outcome, nil
+}
+
+func (e *Evaluator) gradeWithPath(
 	ctx context.Context,
 	sig domainsignal.Signal,
 	now time.Time,
@@ -258,7 +352,6 @@ func (e *Evaluator) gradeOne(
 	if len(closes) < horizonBars {
 		return domainsignal.Outcome{}, errIncompletePath
 	}
-	// Exact horizon window: drop any inclusive endTime extras after clip.
 	if len(closes) > horizonBars {
 		closes = closes[:horizonBars]
 		highs = highs[:horizonBars]
@@ -277,17 +370,9 @@ func (e *Evaluator) gradeOne(
 	sig.Price = price
 	sig.ATR = atr
 
-	regimeAt := ""
-	if strings.HasPrefix(strings.ToLower(sig.Label), "transition:") {
-		regimeAt, err = e.lookupRegime(sig.Timeframe, end)
-		if err != nil {
-			return domainsignal.Outcome{}, err
-		}
-	}
-
 	dir := domainsignal.DirectionFromLabel(sig.Label)
 	stats := domainsignal.ComputePathStats(price, atr, dir, closes, highs, lows)
-	outcome := domainsignal.Grade(sig, stats, regimeAt)
+	outcome := domainsignal.Grade(sig, stats, "")
 	outcome.ResolvedAt = now
 	return outcome, nil
 }
@@ -355,9 +440,7 @@ func (e *Evaluator) loadTapePath(
 	if len(all) == 0 {
 		return nil, nil, nil, 0, 0, errNoCandles
 	}
-	oldest := all[0].Timestamp()
-	if oldest.After(from) {
-		// Latest-N tape does not reach EmittedAt — will not recover via CalculateTape.
+	if all[0].Timestamp().After(from) {
 		return nil, nil, nil, 0, 0, errPermanentTapeMiss
 	}
 
@@ -401,7 +484,6 @@ func extractOHLCClipped(series domain.CandleSeries, from, to time.Time) (closes,
 	return closes, highs, lows
 }
 
-// simpleATR mirrors usecases.SimpleATR on a raw candle slice (emit-time helper).
 func simpleATR(candles []domain.Candle, n int) float64 {
 	length := len(candles)
 	if length < 2 || n <= 0 {

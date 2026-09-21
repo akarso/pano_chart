@@ -63,6 +63,23 @@ func (m *memRepo) UnresolvedReady(_ context.Context, now time.Time, limit int) (
 	return out, nil
 }
 
+func (m *memRepo) UnresolvedInvalidTF(_ context.Context, limit int) ([]domainsignal.Signal, error) {
+	var out []domainsignal.Signal
+	for _, s := range m.sigs {
+		if _, ok := m.outcomes[s.ID]; ok {
+			continue
+		}
+		if _, ok := domainsignal.HorizonEnd(s); ok {
+			continue
+		}
+		out = append(out, s)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *memRepo) MarkResolved(_ context.Context, id string, o domainsignal.Outcome) error {
 	if o.SignalID == "" {
 		o.SignalID = id
@@ -247,29 +264,60 @@ func TestEvaluator_starvationNotReadyDoesNotBlockReady(t *testing.T) {
 func TestEvaluator_invalidTFDrained(t *testing.T) {
 	repo := newMemRepo()
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// Older valid-TF rows stuck without candles must not hide invalid TF.
+	for i := 0; i < 60; i++ {
+		_ = repo.Append(context.Background(), domainsignal.Signal{
+			ID: fmt.Sprintf("stuck-%d", i), Kind: domainsignal.KindBadge,
+			Symbol: "BTCUSDT", Timeframe: "1h", Label: "trend_up",
+			Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 2,
+		})
+	}
 	_ = repo.Append(context.Background(), domainsignal.Signal{
 		ID: "bad-tf", Kind: domainsignal.KindBadge, Symbol: "BTCUSDT", Timeframe: "3h",
 		Label: "trend_up", Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 5,
 	})
-	ev := appsignal.NewEvaluator(repo, &fakeCandles{})
-	ev.SetNow(func() time.Time { return emitted.Add(time.Hour) })
+	ev := appsignal.NewEvaluator(repo, &fakeCandles{series: map[string]domain.CandleSeries{}})
+	ev.SetNow(func() time.Time { return emitted.Add(3 * time.Hour) })
 	_ = ev.Tick(context.Background())
 	oc, ok := repo.outcomes["bad-tf"]
 	if !ok || oc.Rule != domainsignal.RuleInvalid {
-		t.Fatalf("want invalid drain, got %+v ok=%v", oc, ok)
+		t.Fatalf("want invalid drain behind stuck valids, got %+v ok=%v", oc, ok)
+	}
+}
+
+func TestEvaluator_sharedBudgetCapsInvalidPlusReady(t *testing.T) {
+	repo := newMemRepo()
+	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < appsignal.MaxPerTick; i++ {
+		_ = repo.Append(context.Background(), domainsignal.Signal{
+			ID: fmt.Sprintf("bad-%d", i), Kind: domainsignal.KindBadge,
+			Symbol: "X", Timeframe: "3h", Label: "gain",
+			EmittedAt: emitted, HorizonBars: 1,
+		})
+	}
+	// Ready unsupported that would resolve without path — must wait if budget spent.
+	_ = repo.Append(context.Background(), domainsignal.Signal{
+		ID: "gain-ready", Kind: domainsignal.KindBadge, Symbol: "BTCUSDT", Timeframe: "1h",
+		Label: "gain", Price: 1, ATR: 1, EmittedAt: emitted, HorizonBars: 1,
+	})
+	ev := appsignal.NewEvaluator(repo, &fakeCandles{})
+	ev.SetNow(func() time.Time { return emitted.Add(2 * time.Hour) })
+	n := ev.Tick(context.Background())
+	if n != appsignal.MaxPerTick {
+		t.Fatalf("resolved=%d want %d", n, appsignal.MaxPerTick)
+	}
+	if _, ok := repo.outcomes["gain-ready"]; ok {
+		t.Fatal("ready row must not exceed shared MaxPerTick with invalid drain")
 	}
 }
 
 func TestEvaluator_regimeUnsupported(t *testing.T) {
 	repo := newMemRepo()
-	tf := domain.Timeframe1h
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	start := emitted.Add(-2 * time.Hour)
-	series := makeSeries("COMPOSITE", tf, start, []float64{98, 99, 100, 100.5, 101})
-	tape := &fakeTape{tape: metrics.CompositeTape{MedianSeries: series, PreferredSource: "composite_median"}}
+	tape := &fakeTape{} // must not be required / called
 	_ = repo.Append(context.Background(), domainsignal.Signal{
 		ID: "reg-exp", Kind: domainsignal.KindRegime, Timeframe: "1h",
-		Label: "regime:expansion", Score: 1, Price: 100, ATR: 1,
+		Label: "regime:expansion", Score: 1,
 		EmittedAt: emitted, HorizonBars: 2,
 	})
 	ev := appsignal.NewEvaluator(repo, &fakeCandles{})
@@ -277,6 +325,9 @@ func TestEvaluator_regimeUnsupported(t *testing.T) {
 	ev.SetNow(func() time.Time { return emitted.Add(2 * time.Hour) })
 	if n := ev.Tick(context.Background()); n != 1 {
 		t.Fatalf("got %d", n)
+	}
+	if tape.calls != 0 {
+		t.Fatalf("unsupported must not load tape, calls=%d", tape.calls)
 	}
 	oc := repo.outcomes["reg-exp"]
 	if oc.Rule != domainsignal.RuleUnsupported || oc.Success {
@@ -309,16 +360,9 @@ func (f *fakeRegimes) GetHistory(string, int) (mkt.RegimeHistory, error) {
 
 func TestEvaluator_marketWideTransition(t *testing.T) {
 	repo := newMemRepo()
-	tf := domain.Timeframe1h
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	horizon := 2
-	start := emitted.Add(-2 * time.Hour)
-	closes := []float64{98, 99, 100, 100.5, 101}
-	series := makeSeries("COMPOSITE", tf, start, closes)
-	tape := &fakeTape{tape: metrics.CompositeTape{
-		MedianSeries: series, PreferredSource: "composite_median",
-	}}
-	// Open period covering horizon end (half-open: End exclusive).
+	tape := &fakeTape{} // transition must not require tape
 	regimes := &fakeRegimes{hist: mkt.RegimeHistory{
 		Periods: []mkt.RegimePeriod{
 			{Regime: mkt.RegimeSideways, StartTimestamp: emitted.Unix(), EndTimestamp: nil},
@@ -328,7 +372,7 @@ func TestEvaluator_marketWideTransition(t *testing.T) {
 	_ = repo.Append(context.Background(), domainsignal.Signal{
 		ID: "t1", Kind: domainsignal.KindTransition, Timeframe: "1h",
 		Label: "transition:sideways", Score: 0.6,
-		Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: horizon,
+		EmittedAt: emitted, HorizonBars: horizon,
 	})
 
 	ev := appsignal.NewEvaluator(repo, &fakeCandles{})
@@ -338,8 +382,8 @@ func TestEvaluator_marketWideTransition(t *testing.T) {
 	if n := ev.Tick(context.Background()); n != 1 {
 		t.Fatalf("resolved=%d tapeCalls=%d", n, tape.calls)
 	}
-	if tape.calls != 1 {
-		t.Fatalf("expected one CalculateTape per TF per tick, got %d", tape.calls)
+	if tape.calls != 0 {
+		t.Fatalf("transition must not load tape, calls=%d", tape.calls)
 	}
 	oc := repo.outcomes["t1"]
 	if !oc.Success || oc.Rule != domainsignal.RuleTransition {
@@ -349,18 +393,13 @@ func TestEvaluator_marketWideTransition(t *testing.T) {
 
 func TestEvaluator_transitionMissingHistoryStaysUnresolved(t *testing.T) {
 	repo := newMemRepo()
-	tf := domain.Timeframe1h
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	start := emitted.Add(-2 * time.Hour)
-	series := makeSeries("COMPOSITE", tf, start, []float64{98, 99, 100, 100.5, 101})
-	tape := &fakeTape{tape: metrics.CompositeTape{MedianSeries: series, PreferredSource: "composite_median"}}
 	_ = repo.Append(context.Background(), domainsignal.Signal{
 		ID: "t-miss", Kind: domainsignal.KindTransition, Timeframe: "1h",
 		Label: "transition:trend", Score: 0.6,
-		Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 2,
+		EmittedAt: emitted, HorizonBars: 2,
 	})
 	ev := appsignal.NewEvaluator(repo, &fakeCandles{})
-	ev.SetTapeProvider(tape)
 	ev.SetRegimeHistory(&fakeRegimes{}) // empty periods
 	ev.SetNow(func() time.Time { return emitted.Add(2 * time.Hour) })
 	if n := ev.Tick(context.Background()); n != 0 {
@@ -490,5 +529,33 @@ func TestSQLite_UnresolvedReadySkipsNotReady(t *testing.T) {
 	}
 	if len(ready) != 1 || ready[0].ID != "h1" {
 		t.Fatalf("ready=%v", ready)
+	}
+}
+
+func TestSQLite_UnresolvedInvalidTF(t *testing.T) {
+	dbPath := t.TempDir() + "/inv.sqlite"
+	repo, err := infrasignal.NewSQLiteRepository(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 30; i++ {
+		_ = repo.Append(context.Background(), domainsignal.Signal{
+			ID: fmt.Sprintf("ok-%d", i), Kind: domainsignal.KindBadge,
+			Symbol: "BTCUSDT", Timeframe: "1h", Label: "trend_up",
+			Price: 1, ATR: 1, EmittedAt: emitted, HorizonBars: 20,
+		})
+	}
+	_ = repo.Append(context.Background(), domainsignal.Signal{
+		ID: "bad", Kind: domainsignal.KindBadge, Symbol: "X", Timeframe: "3h",
+		Label: "gain", EmittedAt: emitted, HorizonBars: 1,
+	})
+	inv, err := repo.UnresolvedInvalidTF(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv) != 1 || inv[0].ID != "bad" {
+		t.Fatalf("invalid=%v", inv)
 	}
 }

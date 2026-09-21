@@ -101,6 +101,23 @@ func NeedsATR(label string) bool {
 	}
 }
 
+// NeedsPath reports whether grading requires a forward candle/tape window.
+// False for transition:* (regime history only) and unsupported labels
+// (gain, regime:expansion, …) so missing market data cannot wedge them.
+func NeedsPath(label string) bool {
+	l := normalizeLabel(label)
+	if strings.HasPrefix(l, "transition:") {
+		return false
+	}
+	switch l {
+	case "trend_up", "trend_down", "sideways", "range", "compression",
+		"breakout_up", "breakout_down", "regime:trend", "regime:sideways":
+		return true
+	default:
+		return false
+	}
+}
+
 // ComputePathStats derives forward return and MFE/MAE (ATR units) from OHLC path.
 // direction: +1 long, −1 short, 0 → upside=favorable / downside=adverse.
 // When atr <= 0, ForwardReturn / range still fill but MFE/MAE stay 0.

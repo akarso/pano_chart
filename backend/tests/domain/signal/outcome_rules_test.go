@@ -222,6 +222,18 @@ func TestDirectionFromLabel(t *testing.T) {
 	}
 }
 
+func TestNeedsPath(t *testing.T) {
+	if domainsignal.NeedsPath("trend_up") != true {
+		t.Fatal()
+	}
+	if domainsignal.NeedsPath("transition:sideways") {
+		t.Fatal("transition is path-independent")
+	}
+	if domainsignal.NeedsPath("gain") || domainsignal.NeedsPath("regime:expansion") {
+		t.Fatal("unsupported labels are path-independent")
+	}
+}
+
 func TestGrade_preservesPathMetrics(t *testing.T) {
 	sig := domainsignal.Signal{ID: "abc", Label: "trend_up", EmittedAt: time.Unix(1, 0)}
 	stats := domainsignal.PathStats{ForwardReturn: 0.1, MaxFavorable: 3, MaxAdverse: 1}

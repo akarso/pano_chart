@@ -329,6 +329,27 @@ func (r *SQLiteRepository) UnresolvedReady(ctx context.Context, now time.Time, l
 	return scanSignals(rows)
 }
 
+// UnresolvedInvalidTF returns unresolved rows with an unknown timeframe string.
+func (r *SQLiteRepository) UnresolvedInvalidTF(ctx context.Context, limit int) ([]domainsignal.Signal, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
+		        s.context, s.emitted_at, s.horizon_bars
+		 FROM signals s
+		 LEFT JOIN outcomes o ON o.signal_id = s.id
+		 WHERE o.signal_id IS NULL
+		   AND (%s) IS NULL
+		 ORDER BY s.emitted_at ASC
+		 LIMIT ?`, tfDurationNSExpr)
+	rows, err := r.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query unresolved invalid tf: %w", err)
+	}
+	defer rows.Close()
+	return scanSignals(rows)
+}
+
 // MarkResolved upserts an outcome for a signal.
 // Prefer outcome.SignalID when set; otherwise use id. Both must agree if both set.
 func (r *SQLiteRepository) MarkResolved(ctx context.Context, id string, outcome domainsignal.Outcome) error {

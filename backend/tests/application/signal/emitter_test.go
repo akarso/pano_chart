@@ -628,6 +628,9 @@ func (f *failOnceRepo) Unresolved(context.Context, time.Time, int) ([]domainsign
 func (f *failOnceRepo) UnresolvedReady(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
 	return nil, nil
 }
+func (f *failOnceRepo) UnresolvedInvalidTF(context.Context, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
 func (f *failOnceRepo) MarkResolved(context.Context, string, domainsignal.Outcome) error {
 	return nil
 }
@@ -648,6 +651,9 @@ func (f *failAlwaysRepo) Unresolved(context.Context, time.Time, int) ([]domainsi
 	return nil, nil
 }
 func (f *failAlwaysRepo) UnresolvedReady(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
+func (f *failAlwaysRepo) UnresolvedInvalidTF(context.Context, int) ([]domainsignal.Signal, error) {
 	return nil, nil
 }
 func (f *failAlwaysRepo) MarkResolved(context.Context, string, domainsignal.Outcome) error {
