@@ -16,6 +16,11 @@ var ErrSymbolNotFound = errors.New("symbol not found")
 type SymbolStats struct {
 	TotalScore float64
 	Scores     map[string]float64
+	// DirectionBias is set when Scores["Trend Predictability"] already came
+	// from ScoreWithDirection (warm store overlay). dominantRegime then uses
+	// this bias instead of calling ScoreWithDirection a second time.
+	// Empty on the cold scorer path.
+	DirectionBias string
 }
 
 // SymbolScorer scores a single symbol series.

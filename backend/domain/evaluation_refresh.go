@@ -23,3 +23,23 @@ func EvaluationStoreTTL(tf Timeframe) time.Duration {
 	}
 	return ttl
 }
+
+// EvaluationStaleAfter is how old a store Put may be before readers fall back
+// to live compute (PR-089b): exactly 2 × refresh interval.
+func EvaluationStaleAfter(tf Timeframe) time.Duration {
+	return 2 * EvaluationRefreshInterval(tf)
+}
+
+// EvaluationStoreFresh reports whether a store timestamp is usable at now:
+// age in [0, EvaluationStaleAfter]. Negative age (future / clock skew /
+// malformed at) is not fresh.
+func EvaluationStoreFresh(at, now time.Time, tf Timeframe) bool {
+	if at.IsZero() {
+		return false
+	}
+	age := now.Sub(at)
+	if age < 0 {
+		return false
+	}
+	return age <= EvaluationStaleAfter(tf)
+}
