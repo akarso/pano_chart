@@ -222,6 +222,29 @@ func TestEvaluator_retryablePastGraceBecomesPathUnavailable(t *testing.T) {
 	}
 }
 
+func TestEvaluator_candleFetchErrorPastGraceBecomesPathUnavailable(t *testing.T) {
+	repo := newMemRepo()
+	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	_ = repo.Append(context.Background(), domainsignal.Signal{
+		ID: "fetch-err", Kind: domainsignal.KindBadge, Symbol: "ETHUSDT", Timeframe: "1h",
+		Label: "trend_up", Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 2,
+	})
+	candles := &fakeCandles{err: fmt.Errorf("binance timeout")}
+	ev := appsignal.NewEvaluator(repo, candles)
+	ev.SetNow(func() time.Time { return emitted.Add(2*time.Hour + time.Minute) })
+	if n := ev.Tick(context.Background()); n != 0 {
+		t.Fatalf("within grace must not resolve, got %d", n)
+	}
+	ev.SetNow(func() time.Time { return emitted.Add(2*time.Hour + 11*time.Minute) })
+	if n := ev.Tick(context.Background()); n != 1 {
+		t.Fatalf("past grace must drain fetch error, got %d", n)
+	}
+	oc := repo.outcomes["fetch-err"]
+	if oc.Rule != domainsignal.RulePathUnavailable {
+		t.Fatalf("%+v", oc)
+	}
+}
+
 func TestEvaluator_partialCandlesNotResolved(t *testing.T) {
 	repo := newMemRepo()
 	tf := domain.Timeframe1h

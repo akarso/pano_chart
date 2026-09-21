@@ -3,6 +3,7 @@ package signal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"strings"
@@ -43,6 +44,7 @@ var (
 	errRegimeUnavailable = errors.New("regime history unavailable")
 	errTapeUnavailable   = errors.New("tape window unavailable")
 	errPermanentTapeMiss = errors.New("tape window permanently unavailable")
+	errCandleFetch       = errors.New("candle fetch failed")
 )
 
 // TapeSource supplies composite tapes for market-wide signals.
@@ -278,7 +280,8 @@ func isRetryableGradeError(err error) bool {
 		errors.Is(err, errInsufficientATR) ||
 		errors.Is(err, errRegimeUnavailable) ||
 		errors.Is(err, errTapeUnavailable) ||
-		errors.Is(err, errNoCandles)
+		errors.Is(err, errNoCandles) ||
+		errors.Is(err, errCandleFetch)
 }
 
 func (e *Evaluator) prefetchTapes(ctx context.Context, sigs []domainsignal.Signal, now time.Time) map[string]metrics.CompositeTape {
@@ -417,7 +420,7 @@ func (e *Evaluator) loadPath(
 		return e.loadTapePath(sig.Timeframe, from, to, now, price, atr, tapeCache)
 	}
 	if e.candles == nil {
-		return nil, nil, nil, 0, 0, errors.New("candle repository nil")
+		return nil, nil, nil, 0, 0, fmt.Errorf("%w: repository nil", errCandleFetch)
 	}
 	sym, symErr := domain.NewSymbol(sig.Symbol)
 	if symErr != nil {
@@ -429,7 +432,7 @@ func (e *Evaluator) loadPath(
 	}
 	series, serErr := e.candles.GetSeries(ctx, sym, tf, from, to)
 	if serErr != nil {
-		return nil, nil, nil, 0, 0, serErr
+		return nil, nil, nil, 0, 0, fmt.Errorf("%w: %v", errCandleFetch, serErr)
 	}
 	closes, highs, lows = extractOHLCClipped(series, from, to)
 	return closes, highs, lows, price, atr, nil
