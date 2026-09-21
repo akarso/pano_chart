@@ -20,6 +20,7 @@ type RegimeWriter struct {
 	lookup  RegimeHistoryLookup
 	mu      sync.Mutex
 	last    map[string]mkt.Regime
+	tfMu    map[string]*sync.Mutex // per-TF: compare → emit → commit
 }
 
 // NewRegimeWriter constructs the observer. emitter may be nil (no-op).
@@ -27,6 +28,7 @@ func NewRegimeWriter(emitter *Emitter) *RegimeWriter {
 	return &RegimeWriter{
 		emitter: emitter,
 		last:    make(map[string]mkt.Regime),
+		tfMu:    make(map[string]*sync.Mutex),
 	}
 }
 
@@ -50,8 +52,21 @@ func (w *RegimeWriter) Seed(timeframe string, regime mkt.Regime) {
 	w.mu.Unlock()
 }
 
+func (w *RegimeWriter) mutexFor(timeframe string) *sync.Mutex {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	m, ok := w.tfMu[timeframe]
+	if !ok {
+		m = &sync.Mutex{}
+		w.tfMu[timeframe] = m
+	}
+	return m
+}
+
 // Update implements market.RegimeObserver.
-// last[tf] advances only after a successful Emit so Append failures retry.
+// Per timeframe, compare → Emit → commit of last is one critical section so
+// concurrent Updates cannot double-emit or commit out of order. last[tf]
+// advances only after a successful Emit so Append failures retry.
 func (w *RegimeWriter) Update(timeframe string, regime mkt.Regime, bias string, timestamp int64) error {
 	if w == nil || !w.emitter.Enabled() {
 		return nil
@@ -72,6 +87,10 @@ func (w *RegimeWriter) Update(timeframe string, regime mkt.Regime, bias string, 
 			w.mu.Unlock()
 		}
 	}
+
+	tfMu := w.mutexFor(timeframe)
+	tfMu.Lock()
+	defer tfMu.Unlock()
 
 	w.mu.Lock()
 	prev, seen := w.last[timeframe]

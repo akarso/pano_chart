@@ -345,6 +345,42 @@ func TestRegimeWriter_EmitsOnlyOnChange(t *testing.T) {
 	}
 }
 
+func TestRegimeWriter_SameTFSerialized(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	em := appsignal.NewEmitter(repo)
+	w := appsignal.NewRegimeWriter(em)
+	w.Seed("1h", "trend")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = w.Update("1h", "sideways", "neutral", 1_700_000_000)
+		}()
+	}
+	wg.Wait()
+
+	rows, err := repo.Query(context.Background(), domainsignal.Filter{Kind: domainsignal.KindRegime, Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("concurrent same-TF change must emit once, got %d", len(rows))
+	}
+	if rows[0].Signal.Label != "regime:sideways" {
+		t.Fatalf("label=%s", rows[0].Signal.Label)
+	}
+}
+
 func TestRegimeWriter_AppendFailureDoesNotAdvanceLast(t *testing.T) {
 	fail := &failAlwaysRepo{err: errors.New("disk full")}
 	em := appsignal.NewEmitter(fail)
