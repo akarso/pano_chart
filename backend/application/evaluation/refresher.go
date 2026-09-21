@@ -3,7 +3,9 @@ package evaluation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +22,10 @@ var DefaultTimeframes = []string{"15m", "1h", "4h", "1d"}
 // errRefreshSkipped means another instance holds the lock — not a failure.
 var errRefreshSkipped = errors.New("eval refresh skipped: lock not acquired")
 
+// errStoreFresh means Redis already has a Put within the refresh interval —
+// shared across replicas so losers do not re-score after the lock is released.
+var errStoreFresh = errors.New("eval refresh skipped: store still fresh")
+
 const (
 	pollInterval = 15 * time.Second
 	maxBackoff   = 15 * time.Minute
@@ -32,6 +38,17 @@ const (
 	lockTTLPadding   = 30 * time.Second
 	defaultLockKeyPx = "eval:refresh:"
 )
+
+// RefreshEnabledFromEnv interprets PC_EVAL_REFRESH. Unset/empty → enabled
+// (ROADMAP default on). Explicit 0/false/no/off → disabled.
+func RefreshEnabledFromEnv(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
 
 // RankingsRunner is the rankings pipeline the refresher writes from.
 type RankingsRunner interface {
@@ -146,7 +163,7 @@ func (r *Refresher) Tick(ctx context.Context) {
 		err := r.refreshOne(ctx, tf)
 		// Stamp lastPut with completion wall time, not Tick-start now.
 		r.release(tf, r.now(), err)
-		if err != nil && !errors.Is(err, errRefreshSkipped) {
+		if err != nil && !errors.Is(err, errRefreshSkipped) && !errors.Is(err, errStoreFresh) {
 			log.Printf("[eval] refresh tf=%s: %v", tf, err)
 		}
 		return
@@ -203,7 +220,7 @@ func (r *Refresher) release(tf string, completedAt time.Time, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.inFlight, tf)
-	if errors.Is(err, errRefreshSkipped) {
+	if errors.Is(err, errRefreshSkipped) || errors.Is(err, errStoreFresh) {
 		r.skipCount[tf]++
 		return
 	}
@@ -224,6 +241,12 @@ func (r *Refresher) release(tf string, completedAt time.Time, err error) {
 	delete(r.failUntil, tf)
 	r.lastPut[tf] = completedAt
 	r.putCount[tf]++
+}
+
+func (r *Refresher) adoptStoreTime(tf string, at time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastPut[tf] = at
 }
 
 func (r *Refresher) refreshOne(ctx context.Context, tf string) error {
@@ -253,12 +276,28 @@ func (r *Refresher) refreshOne(ctx context.Context, tf string) error {
 		}()
 	}
 
+	// Shared freshness: after the lock, read store at so a replica that lost
+	// the previous race does not re-score within the same interval.
+	if _, at, getErr := r.store.Get(ctx, tf); getErr == nil {
+		if r.now().Sub(at) < RefreshInterval(tf) {
+			r.adoptStoreTime(tf, at)
+			return errStoreFresh
+		}
+	} else if !errors.Is(getErr, ports.ErrEvaluationNotFound) {
+		return getErr
+	}
+
 	results, err := r.rankings.Execute(ctx, usecases.GetRankingsRequest{
 		Timeframe: parsed,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		return err
+	}
+	if len(results) == 0 {
+		// Do not Put [] — that would DEL the live symbol hash and wipe the
+		// last good evaluations on a transient empty universe / total score miss.
+		return fmt.Errorf("rankings returned empty result for %s", tf)
 	}
 	completedAt := r.now()
 	evals := appmarket.SnapshotsFromRankings(results, tf, completedAt)

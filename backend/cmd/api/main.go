@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -479,12 +478,11 @@ func main() {
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
 	// --- Evaluation store writer (PR-089a) ---
-	// Opt-in full-universe scorer (PC_EVAL_REFRESH=1|true|on). Default off:
-	// enabling is a live load change. Uses uncached getRankingsUC (intentional
-	// cold score — rankings cache TTL is shorter than writer intervals).
-	// Redis SET NX lock per timeframe so horizontal replicas do not multiply
-	// scoring. Wired after socialCtx/backgroundWG for graceful cancel.
-	if evalRefreshEnabled(os.Getenv("PC_EVAL_REFRESH")) {
+	// Default on (ROADMAP); set PC_EVAL_REFRESH=0|false|off to disable.
+	// Uses uncached getRankingsUC (intentional full score when due). Redis
+	// SET NX lock + store freshness check so replicas score each TF once
+	// per interval. Wired after socialCtx/backgroundWG for graceful cancel.
+	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
 		evalStore := infraeval.NewRedisEvaluationStore(redisClient)
 		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
 		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
@@ -493,9 +491,9 @@ func main() {
 			defer backgroundWG.Done()
 			evalRefresher.Run(socialCtx)
 		}()
-		log.Println("[main] Evaluation store refresher started (PC_EVAL_REFRESH on)")
+		log.Println("[main] Evaluation store refresher started (PC_EVAL_REFRESH default on)")
 	} else {
-		log.Println("[main] Evaluation store refresher disabled (set PC_EVAL_REFRESH=1 to enable)")
+		log.Println("[main] Evaluation store refresher disabled (PC_EVAL_REFRESH=0)")
 	}
 
 	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
@@ -757,16 +755,7 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 	})
 }
 
-// evalRefreshEnabled is opt-in only (default off). Accepts 1/true/yes/on.
-func evalRefreshEnabled(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
+// hostnameOr returns the machine hostname, or fallback when unavailable.
 func hostnameOr(fallback string) string {
 	if h, err := os.Hostname(); err == nil && h != "" {
 		return h

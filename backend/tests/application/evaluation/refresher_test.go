@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appeval "pano_chart/backend/application/evaluation"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -54,15 +55,22 @@ func (f *fakeRankings) callCount() int {
 }
 
 type fakeStore struct {
-	mu   sync.Mutex
-	puts []putCall
-	err  error
+	mu     sync.Mutex
+	puts   []putCall
+	byTF   map[string]storeEntry
+	err    error
+	getErr error
 }
 
 type putCall struct {
 	tf string
 	n  int
 	at time.Time
+}
+
+type storeEntry struct {
+	evals []domain.EvaluationSnapshot
+	at    time.Time
 }
 
 func (f *fakeStore) Put(_ context.Context, tf string, evals []domain.EvaluationSnapshot, computedAt time.Time) error {
@@ -72,11 +80,25 @@ func (f *fakeStore) Put(_ context.Context, tf string, evals []domain.EvaluationS
 		return f.err
 	}
 	f.puts = append(f.puts, putCall{tf: tf, n: len(evals), at: computedAt})
+	if f.byTF == nil {
+		f.byTF = make(map[string]storeEntry)
+	}
+	cp := append([]domain.EvaluationSnapshot(nil), evals...)
+	f.byTF[tf] = storeEntry{evals: cp, at: computedAt}
 	return nil
 }
 
-func (f *fakeStore) Get(context.Context, string) ([]domain.EvaluationSnapshot, time.Time, error) {
-	return nil, time.Time{}, nil
+func (f *fakeStore) Get(_ context.Context, tf string) ([]domain.EvaluationSnapshot, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return nil, time.Time{}, f.getErr
+	}
+	e, ok := f.byTF[tf]
+	if !ok {
+		return nil, time.Time{}, ports.ErrEvaluationNotFound
+	}
+	return e.evals, e.at, nil
 }
 
 func (f *fakeStore) GetSymbol(context.Context, string, string) (domain.EvaluationSnapshot, time.Time, error) {
@@ -284,6 +306,92 @@ func TestRefresher_DefaultLockTTLFloor(t *testing.T) {
 	want1d := appeval.RefreshInterval("1d") + 30*time.Second
 	if got := appeval.DefaultLockTTL("1d"); got != want1d {
 		t.Fatalf("DefaultLockTTL(1d): want %v, got %v", want1d, got)
+	}
+}
+
+func TestRefreshEnabledFromEnv(t *testing.T) {
+	cases := []struct {
+		v    string
+		want bool
+	}{
+		{"", true},
+		{"1", true},
+		{"true", true},
+		{"0", false},
+		{"false", false},
+		{"off", false},
+		{"no", false},
+		{" OFF ", false},
+	}
+	for _, tc := range cases {
+		if got := appeval.RefreshEnabledFromEnv(tc.v); got != tc.want {
+			t.Errorf("RefreshEnabledFromEnv(%q)=%v want %v", tc.v, got, tc.want)
+		}
+	}
+}
+
+func TestRefresher_StoreFreshSkipsRescore(t *testing.T) {
+	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
+		"15m": {sampleRanked("BTCUSDT")},
+	}}
+	store := &fakeStore{}
+	lock := newRecordingLock()
+
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	now := t0
+	lock.now = func() time.Time { return now }
+
+	leader := appeval.NewRefresher(rank, store, []string{"15m"})
+	leader.SetLock(lock, "leader")
+	leader.SetNow(func() time.Time { return now })
+	leader.Tick(context.Background())
+	if store.putLen() != 1 || rank.callCount() != 1 {
+		t.Fatalf("leader: puts=%d calls=%d", store.putLen(), rank.callCount())
+	}
+
+	// Peer with empty lastPut acquires lock moments later; store is still fresh.
+	peer := appeval.NewRefresher(rank, store, []string{"15m"})
+	peer.SetLock(lock, "peer")
+	peer.SetNow(func() time.Time { return now.Add(time.Second) })
+	peer.Tick(context.Background())
+
+	if rank.callCount() != 1 {
+		t.Fatalf("peer must not re-score while store fresh, calls=%d", rank.callCount())
+	}
+	if store.putLen() != 1 {
+		t.Fatalf("peer must not Put again, puts=%d", store.putLen())
+	}
+}
+
+func TestRefresher_EmptyRankingsDoesNotWipeStore(t *testing.T) {
+	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
+		"15m": {sampleRanked("BTCUSDT")},
+	}}
+	store := &fakeStore{}
+	r := appeval.NewRefresher(rank, store, []string{"15m"})
+
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	now := t0
+	r.SetNow(func() time.Time { return now })
+	r.Tick(context.Background())
+	if store.putLen() != 1 {
+		t.Fatal("seed put required")
+	}
+
+	// Interval elapsed; rankings now empty (transient failure).
+	now = t0.Add(appeval.RefreshInterval("15m"))
+	rank.byTF["15m"] = nil
+	r.Tick(context.Background())
+
+	if store.putLen() != 1 {
+		t.Fatalf("empty rankings must not Put, puts=%d", store.putLen())
+	}
+	got, _, err := store.Get(context.Background(), "15m")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("last good evals must remain: n=%d err=%v", len(got), err)
+	}
+	if r.PutCounts()["15m"] != 1 {
+		t.Fatal("empty result must not count as successful Put")
 	}
 }
 
