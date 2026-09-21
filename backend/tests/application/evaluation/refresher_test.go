@@ -15,15 +15,20 @@ import (
 )
 
 type fakeRankings struct {
-	mu      sync.Mutex
-	calls   []string
-	byTF    map[string][]usecases.RankedResult
-	err     error
-	delay   time.Duration
-	blockCh chan struct{} // if set, wait until closed (or ctx done)
+	mu        sync.Mutex
+	calls     []string
+	byTF      map[string][]usecases.RankedResult
+	err       error
+	delay     time.Duration
+	blockCh   chan struct{} // if set, wait until closed (or ctx done)
+	enteredCh chan struct{} // closed once when Execute begins (before block/delay)
+	entered   sync.Once
 }
 
 func (f *fakeRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error) {
+	if f.enteredCh != nil {
+		f.entered.Do(func() { close(f.enteredCh) })
+	}
 	if f.blockCh != nil {
 		select {
 		case <-f.blockCh:
@@ -256,9 +261,11 @@ func TestRefresher_LeaderRefreshesAgainAfterRelease(t *testing.T) {
 
 func TestRefresher_LockHeldPreventsSecondInstance(t *testing.T) {
 	block := make(chan struct{})
+	entered := make(chan struct{})
 	rank := &fakeRankings{
-		byTF:    map[string][]usecases.RankedResult{"15m": {sampleRanked("BTCUSDT")}},
-		blockCh: block,
+		byTF:      map[string][]usecases.RankedResult{"15m": {sampleRanked("BTCUSDT")}},
+		blockCh:   block,
+		enteredCh: entered,
 	}
 	store := &fakeStore{}
 	lock := newRecordingLock()
@@ -276,7 +283,7 @@ func TestRefresher_LockHeldPreventsSecondInstance(t *testing.T) {
 		r1.Tick(context.Background())
 		close(done)
 	}()
-	time.Sleep(20 * time.Millisecond) // r1 holds lock, blocked in Execute
+	<-entered // r1 holds lock, blocked in Execute
 
 	r2 := appeval.NewRefresher(rank, store, []string{"15m"})
 	r2.SetLock(lock, "b")
@@ -502,9 +509,11 @@ func TestRefresher_ConcurrentTickSameTF(t *testing.T) {
 
 func TestRefresher_ContextCancelDuringExecute(t *testing.T) {
 	block := make(chan struct{})
+	entered := make(chan struct{})
 	rank := &fakeRankings{
-		byTF:    map[string][]usecases.RankedResult{"15m": {sampleRanked("BTCUSDT")}},
-		blockCh: block,
+		byTF:      map[string][]usecases.RankedResult{"15m": {sampleRanked("BTCUSDT")}},
+		blockCh:   block,
+		enteredCh: entered,
 	}
 	store := &fakeStore{}
 	lock := newRecordingLock()
@@ -519,8 +528,7 @@ func TestRefresher_ContextCancelDuringExecute(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait until Execute is blocked, then cancel.
-	time.Sleep(20 * time.Millisecond)
+	<-entered // Execute has started and is blocked
 	cancel()
 	close(block)
 	<-done

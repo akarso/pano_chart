@@ -2,6 +2,7 @@ package symbol_universe
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -51,6 +52,25 @@ func (r *GoRedisClient) Expire(ctx context.Context, key string, ttl time.Duratio
 
 func (r *GoRedisClient) SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
 	return r.cli.SetNX(ctx, key, value, ttl).Result()
+}
+
+func (r *GoRedisClient) MGet(ctx context.Context, keys ...string) ([]string, error) {
+	vals, err := r.cli.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		if v == nil {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("mget %q: unexpected type %T", keys[i], v)
+		}
+		out[i] = s
+	}
+	return out, nil
 }
 
 func (r *GoRedisClient) Eval(ctx context.Context, script string, keys []string, args ...interface{}) (interface{}, error) {

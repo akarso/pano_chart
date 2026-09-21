@@ -67,6 +67,19 @@ func (f *fakeRedis) HGet(_ context.Context, key, field string) (string, error) {
 	return v, nil
 }
 
+func (f *fakeRedis) MGet(_ context.Context, keys ...string) ([]string, error) {
+	if f.failGet {
+		return nil, errors.New("redis transport error")
+	}
+	out := make([]string, len(keys))
+	for i, key := range keys {
+		if v, ok := f.strings[key]; ok {
+			out[i] = v
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeRedis) SetNX(_ context.Context, key, value string, ttl time.Duration) (bool, error) {
 	if f.failNX {
 		return false, errors.New("redis nx fail")
@@ -92,6 +105,29 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 			return int64(1), nil
 		}
 		return int64(0), nil
+	}
+	// getSymbolScript: KEYS = sym, at; ARGV = symbol
+	if len(keys) == 2 && strings.Contains(script, "HGET") {
+		if f.failGet {
+			return nil, errors.New("redis transport error")
+		}
+		sym := ""
+		if len(args) > 0 {
+			sym, _ = args[0].(string)
+		}
+		var snap interface{}
+		if h := f.hashes[keys[0]]; h != nil {
+			if v, ok := h[sym]; ok {
+				snap = v
+			} else {
+				snap = nil
+			}
+		}
+		var at interface{}
+		if v, ok := f.strings[keys[1]]; ok {
+			at = v
+		}
+		return []interface{}{snap, at}, nil
 	}
 	// Put script: KEYS = array, at, sym, symTmp
 	if len(keys) != 4 || len(args) < 3 {

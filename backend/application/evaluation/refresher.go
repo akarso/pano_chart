@@ -254,54 +254,76 @@ func (r *Refresher) refreshOne(ctx context.Context, tf string) error {
 	if err != nil {
 		return err
 	}
-
-	lockKey := defaultLockKeyPx + tf
-	if r.lock != nil {
-		ok, lockErr := r.lock.TryAcquire(ctx, lockKey, r.lockTTLFor(tf), r.holderID)
-		if lockErr != nil {
-			return lockErr
-		}
-		if !ok {
-			return errRefreshSkipped
-		}
-		// Release must not inherit a cancelled parent (shutdown mid-Execute):
-		// otherwise compare-and-del never runs and the 30m floor blocks
-		// restart/replicas from refreshing that TF.
-		defer func() {
-			releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			if relErr := r.lock.Release(releaseCtx, lockKey, r.holderID); relErr != nil {
-				log.Printf("[eval] release lock tf=%s: %v", tf, relErr)
-			}
-		}()
+	release, err := r.acquireRefreshLock(ctx, tf)
+	if err != nil {
+		return err
 	}
+	if release != nil {
+		defer release()
+	}
+	if err := r.skipIfStoreFresh(ctx, tf); err != nil {
+		return err
+	}
+	return r.scoreAndPersist(ctx, parsed)
+}
 
-	// Shared freshness: after the lock, read store at so a replica that lost
-	// the previous race does not re-score within the same interval.
-	if _, at, getErr := r.store.Get(ctx, tf); getErr == nil {
+// acquireRefreshLock takes the per-TF lease. On success, release is non-nil and
+// must be deferred; it uses an uncancellable context so shutdown cancel cannot
+// strand the 30m floor.
+func (r *Refresher) acquireRefreshLock(ctx context.Context, tf string) (release func(), err error) {
+	if r.lock == nil {
+		return nil, nil
+	}
+	lockKey := defaultLockKeyPx + tf
+	ok, lockErr := r.lock.TryAcquire(ctx, lockKey, r.lockTTLFor(tf), r.holderID)
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	if !ok {
+		return nil, errRefreshSkipped
+	}
+	return func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if relErr := r.lock.Release(releaseCtx, lockKey, r.holderID); relErr != nil {
+			log.Printf("[eval] release lock tf=%s: %v", tf, relErr)
+		}
+	}, nil
+}
+
+// skipIfStoreFresh returns errStoreFresh when Redis already has a Put within
+// the refresh interval (shared across replicas after the lock is released).
+func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
+	_, at, getErr := r.store.Get(ctx, tf)
+	if getErr == nil {
 		if r.now().Sub(at) < RefreshInterval(tf) {
 			r.adoptStoreTime(tf, at)
 			return errStoreFresh
 		}
-	} else if !errors.Is(getErr, ports.ErrEvaluationNotFound) {
-		return getErr
+		return nil
 	}
+	if errors.Is(getErr, ports.ErrEvaluationNotFound) {
+		return nil
+	}
+	return getErr
+}
 
+// scoreAndPersist runs rankings and writes non-empty results to the store.
+func (r *Refresher) scoreAndPersist(ctx context.Context, tf domain.Timeframe) error {
 	results, err := r.rankings.Execute(ctx, usecases.GetRankingsRequest{
-		Timeframe: parsed,
+		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		return err
 	}
 	if len(results) == 0 {
-		// Do not Put [] — that would DEL the live symbol hash and wipe the
-		// last good evaluations on a transient empty universe / total score miss.
+		// Do not Put [] — that would wipe the last good evaluations.
 		return fmt.Errorf("rankings returned empty result for %s", tf)
 	}
 	completedAt := r.now()
-	evals := appmarket.SnapshotsFromRankings(results, tf, completedAt)
-	if err := r.store.Put(ctx, tf, evals, completedAt); err != nil {
+	evals := appmarket.SnapshotsFromRankings(results, tf.String(), completedAt)
+	if err := r.store.Put(ctx, tf.String(), evals, completedAt); err != nil {
 		return err
 	}
 	log.Printf("[eval] put tf=%s n=%d", tf, len(evals))
