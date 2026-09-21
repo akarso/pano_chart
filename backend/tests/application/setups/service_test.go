@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/setups"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
@@ -603,5 +604,365 @@ func TestSetupService_SeasonalityProviderError_DegradesGracefullyToNeutral(t *te
 	}
 	if result.SeasonalityFit != 0.5 {
 		t.Errorf("expected neutral SeasonalityFit 0.5 on provider error, got %f", result.SeasonalityFit)
+	}
+}
+
+// --- Evaluation store (PR-089b) ---
+
+type fakeEvalStore struct {
+	snap    domain.EvaluationSnapshot
+	at      time.Time
+	getErr  error
+	calls   int
+	lastSym string
+	lastTF  string
+}
+
+func (f *fakeEvalStore) Put(context.Context, string, []domain.EvaluationSnapshot, time.Time) error {
+	return nil
+}
+
+func (f *fakeEvalStore) Get(context.Context, string) ([]domain.EvaluationSnapshot, time.Time, error) {
+	return nil, time.Time{}, ports.ErrEvaluationNotFound
+}
+
+func (f *fakeEvalStore) GetSymbol(_ context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
+	f.calls++
+	f.lastTF = tf
+	f.lastSym = symbol
+	if f.getErr != nil {
+		return domain.EvaluationSnapshot{}, time.Time{}, f.getErr
+	}
+	if symbol != f.snap.Symbol {
+		return domain.EvaluationSnapshot{}, time.Time{}, ports.ErrEvaluationNotFound
+	}
+	return f.snap, f.at, nil
+}
+
+type countingScorer struct {
+	fakeScorer
+	calls int
+}
+
+func (c *countingScorer) Score(series domain.CandleSeries) (usecases.SymbolStats, error) {
+	c.calls++
+	return c.fakeScorer.Score(series)
+}
+
+func storeSnapForSeries(t *testing.T, series domain.CandleSeries) domain.EvaluationSnapshot {
+	t.Helper()
+	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	trend, _, err := calc.ScoreWithDirection(series)
+	if err != nil {
+		t.Fatalf("ScoreWithDirection: %v", err)
+	}
+	return domain.EvaluationSnapshot{
+		Symbol:            "BTCUSDT",
+		TrendScore:        trend,
+		CompressionScore:  0.1,
+		SidewaysScore:     0.1,
+		BreakoutUpScore:   0.55,
+		BreakoutDownScore: 0.12,
+		AlgoVersion:       domain.AlgoVersion,
+		// Deliberately wrong sparkline Bias — must not drive Regime.
+		Bias: "down",
+	}
+}
+
+func TestSetupService_FreshStoreSkipsScorer(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeDirectionalSeries(50, true)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: storeSnapForSeries(t, series),
+		at:   now.Add(-time.Minute),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("expected scorer not called on fresh store, got %d", scorer.calls)
+	}
+	if store.calls != 1 {
+		t.Fatalf("expected one GetSymbol, got %d", store.calls)
+	}
+	if result.Regime != "uptrend" {
+		t.Errorf("expected uptrend from live ScoreWithDirection, got %q", result.Regime)
+	}
+	if result.BreakoutUp <= 0 {
+		t.Errorf("expected store BreakoutUp to drive breakout confidence, got %f", result.BreakoutUp)
+	}
+}
+
+func TestSetupService_MixedCaseSymbolHitsStore(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeDirectionalSeries(50, true)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: storeSnapForSeries(t, series),
+		at:   now.Add(-time.Minute),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "btcusdt", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if store.lastSym != "BTCUSDT" {
+		t.Fatalf("GetSymbol must use uppercase Symbol.String(), got %q", store.lastSym)
+	}
+	if store.lastTF != "4h" {
+		t.Fatalf("GetSymbol timeframe=%q", store.lastTF)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("lowercase path must hit store, scorer calls=%d", scorer.calls)
+	}
+}
+
+func TestSetupService_StoreWarmColdRegimeAgree(t *testing.T) {
+	// Same candle window: store-sourced scores with live trend overlay must
+	// match cold scorer path Regime.
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeDirectionalSeries(50, false) // downtrend
+	live := trendDominantStatsFor(t, series)
+	snap := storeSnapForSeries(t, series)
+	snap.TrendScore = live.Scores["Trend Predictability"]
+
+	warmRepo := &fakeCandleRepo{series: series}
+	warmScorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	warmStore := &fakeEvalStore{snap: snap, at: now.Add(-time.Minute)}
+	warm := setups.NewSetupService(warmRepo, warmScorer, setups.NewEngine())
+	warm.SetEvaluationStore(warmStore)
+	warm.SetNow(func() time.Time { return now })
+
+	coldRepo := &fakeCandleRepo{series: series}
+	cold := setups.NewSetupService(coldRepo, &fakeScorer{stats: live}, setups.NewEngine())
+
+	warmRes, err := warm.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("warm: %v", err)
+	}
+	coldRes, err := cold.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("cold: %v", err)
+	}
+	if warmRes.Regime != coldRes.Regime {
+		t.Fatalf("warm Regime %q != cold Regime %q", warmRes.Regime, coldRes.Regime)
+	}
+	if warmRes.Regime != "downtrend" {
+		t.Fatalf("expected downtrend for falling series, got %q", warmRes.Regime)
+	}
+	if warmScorer.calls != 0 {
+		t.Fatalf("warm path must skip scorer, got %d", warmScorer.calls)
+	}
+}
+
+func TestSetupService_StoreHighTrendLiveLowNotTrendDominant(t *testing.T) {
+	// Stale store TrendScore must not keep Regime in uptrend when live
+	// ScoreWithDirection on flat candles is near zero.
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeSeries(50) // flat closes → live trend ≈ 0
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol:            "BTCUSDT",
+			TrendScore:        0.95,
+			CompressionScore:  0.1,
+			SidewaysScore:     0.1,
+			BreakoutUpScore:   0.1,
+			BreakoutDownScore: 0.1,
+			AlgoVersion:       domain.AlgoVersion,
+		},
+		at: now.Add(-time.Minute),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("expected store hit, scorer calls=%d", scorer.calls)
+	}
+	if result.Regime == "uptrend" || result.Regime == "downtrend" {
+		t.Fatalf("expected non-trend regime after live overlay, got %q", result.Regime)
+	}
+}
+
+func TestSetupService_ExactStaleBoundaryIsFresh(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	tf := domain.NewTimeframeUnsafe("4h")
+	staleAfter := domain.EvaluationStaleAfter(tf)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol: "BTCUSDT", TrendScore: 0.2, CompressionScore: 0.8,
+			AlgoVersion: domain.AlgoVersion,
+		},
+		at: now.Add(-staleAfter),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("age==StaleAfter must be fresh, scorer calls=%d", scorer.calls)
+	}
+}
+
+func TestSetupService_StaleStoreFallsBackToScorer(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	tf := domain.NewTimeframeUnsafe("4h")
+	staleAfter := domain.EvaluationStaleAfter(tf)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion,
+		},
+		at: now.Add(-(staleAfter + time.Second)),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("expected scorer fallback on stale store, got %d calls", scorer.calls)
+	}
+}
+
+func TestSetupService_AlgoVersionMismatchFallsBack(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: "stale-algo",
+		},
+		at: now.Add(-time.Second),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("algo mismatch must fall back, scorer calls=%d", scorer.calls)
+	}
+}
+
+func TestSetupService_EmptyAlgoVersionFallsBack(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: "",
+		},
+		at: now.Add(-time.Second),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("empty AlgoVersion must fall back, scorer calls=%d", scorer.calls)
+	}
+}
+
+func TestSetupService_StoreMissFallsBackToScorer(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{getErr: ports.ErrEvaluationNotFound}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("expected scorer on miss, got %d", scorer.calls)
+	}
+}
+
+func TestSetupService_StoreTransportErrorFallsBackToScorer(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{getErr: errors.New("redis down")}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate should degrade on store transport error: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("expected scorer fallback, got %d", scorer.calls)
+	}
+}
+
+func TestSetupService_StoreScoresDriveCompressionSetup(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol:           "BTCUSDT",
+			CompressionScore: 0.95,
+			TrendScore:       0.1,
+			SidewaysScore:    0.1,
+			AlgoVersion:      domain.AlgoVersion,
+		},
+		at: now.Add(-time.Minute),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if result.Regime != "compression" {
+		t.Errorf("expected compression regime from store scores, got %q", result.Regime)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("expected store hit, scorer calls=%d", scorer.calls)
 	}
 }

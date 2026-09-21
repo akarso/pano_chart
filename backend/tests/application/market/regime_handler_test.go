@@ -3,14 +3,17 @@ package market_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	adhttp "pano_chart/backend/adapters/http"
 	appmarket "pano_chart/backend/application/market"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -245,5 +248,45 @@ func TestRegimeAndStateHandlers_AgreeOnSameSummary(t *testing.T) {
 	}
 	if regimeResp.Bias != stateResp.Bias {
 		t.Errorf("bias disagrees between endpoints: regime=%q state=%q", regimeResp.Bias, stateResp.Bias)
+	}
+}
+
+func TestRegimeHandler_StoreUnavailableStableError(t *testing.T) {
+	calc := &fakeRegimeCalc{
+		err: fmt.Errorf("%w: redis: connection refused", ports.ErrEvaluationStoreUnavailable),
+	}
+	handler := adhttp.NewMarketRegimeHandler(calc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/regime?timeframe=1h", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body != `{"error":"evaluation store unavailable"}` {
+		t.Fatalf("stable client message, got %q", body)
+	}
+	if strings.Contains(body, "redis") {
+		t.Fatalf("must not leak transport strings: %q", body)
+	}
+}
+
+func TestRegimeHandler_OtherErrorIsInternal(t *testing.T) {
+	calc := &fakeRegimeCalc{
+		err: errors.New("redis: AUTH failed secret=hunter2"),
+	}
+	handler := adhttp.NewMarketRegimeHandler(calc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/regime", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body != `{"error":"internal error"}` {
+		t.Fatalf("expected internal error, got %q", body)
+	}
+	if strings.Contains(body, "redis") || strings.Contains(body, "hunter2") {
+		t.Fatalf("must not leak error strings: %q", body)
 	}
 }

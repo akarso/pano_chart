@@ -3,8 +3,10 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 
+	"pano_chart/backend/application/ports"
 	mkt "pano_chart/backend/domain/market"
 )
 
@@ -73,7 +75,11 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 	summary, err := h.calculator.CalculateWithCandleMetrics(r.Context(), tf)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		msg := "internal error"
+		if errors.Is(err, ports.ErrEvaluationStoreUnavailable) {
+			msg = "evaluation store unavailable"
+		}
+		http.Error(w, `{"error":"`+msg+`"}`, http.StatusInternalServerError)
 		return
 	}
 

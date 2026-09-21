@@ -318,10 +318,16 @@ func main() {
 	verifyPurchaseUC := usecases.NewVerifyPurchase(providerRegistry, subscriptionSvc)
 	log.Printf("[main] Payment infrastructure initialized (db=%s)\n", paymentDBPath)
 
+	// --- Evaluation store (PR-089a writer / PR-089b readers) ---
+	// Always constructed so Market Pulse and setups can read; the refresher
+	// below populates it when PC_EVAL_REFRESH is enabled (default on).
+	evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+
 	// --- Market state service (canonical regime/breadth classification —
 	// see PR-073: this replaced a second, independently-evolved softmax
 	// pipeline that could disagree with this one about the same market) ---
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
+	evalProvider.SetStore(evalStore)
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
 	log.Println("[main] Market state service initialized")
@@ -394,6 +400,7 @@ func main() {
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
 	setupService.SetMarketProvider(marketService)
 	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
+	setupService.SetEvaluationStore(evalStore)
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
@@ -481,9 +488,8 @@ func main() {
 	// Default on (ROADMAP); set PC_EVAL_REFRESH=0|false|off to disable.
 	// Uses uncached getRankingsUC (intentional full score when due). Redis
 	// SET NX lock + store freshness check so replicas score each TF once
-	// per interval. Wired after socialCtx/backgroundWG for graceful cancel.
+	// per interval. Readers (provider/setups) already hold evalStore above.
 	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
-		evalStore := infraeval.NewRedisEvaluationStore(redisClient)
 		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
 		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
 		backgroundWG.Add(1)
