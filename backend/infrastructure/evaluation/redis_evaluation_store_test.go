@@ -96,43 +96,62 @@ func (f *fakeRedis) Eval(_ context.Context, script string, keys []string, args .
 	if f.failEval {
 		return nil, errors.New("redis eval fail")
 	}
-	// Release lock script: GET+DEL if holder matches.
-	if strings.Contains(script, "GET") && strings.Contains(script, "DEL") && len(keys) == 1 {
-		holder, _ := args[0].(string)
-		if f.nx[keys[0]] == holder {
-			delete(f.nx, keys[0])
-			delete(f.ttls, keys[0])
-			return int64(1), nil
-		}
-		return int64(0), nil
-	}
-	// getSymbolScript: KEYS = sym, at; ARGV = symbol
-	if len(keys) == 2 && strings.Contains(script, "HGET") {
-		if f.failGet {
-			return nil, errors.New("redis transport error")
-		}
-		sym := ""
-		if len(args) > 0 {
-			sym, _ = args[0].(string)
-		}
-		var snap interface{}
-		if h := f.hashes[keys[0]]; h != nil {
-			if v, ok := h[sym]; ok {
-				snap = v
-			} else {
-				snap = nil
-			}
-		}
-		var at interface{}
-		if v, ok := f.strings[keys[1]]; ok {
-			at = v
-		}
-		return []interface{}{snap, at}, nil
-	}
-	// Put script: KEYS = array, at, sym, symTmp
-	if len(keys) != 4 || len(args) < 3 {
+	switch {
+	case isReleaseLockScript(script, keys):
+		return f.evalReleaseLock(keys[0], args)
+	case isGetSymbolScript(script, keys):
+		return f.evalGetSymbol(keys, args)
+	case isPutEvalScript(keys, args):
+		return f.evalPut(keys, args)
+	default:
 		return nil, errors.New("bad eval args")
 	}
+}
+
+func isReleaseLockScript(script string, keys []string) bool {
+	return len(keys) == 1 && strings.Contains(script, "GET") && strings.Contains(script, "DEL")
+}
+
+func isGetSymbolScript(script string, keys []string) bool {
+	return len(keys) == 2 && strings.Contains(script, "HGET")
+}
+
+func isPutEvalScript(keys []string, args []interface{}) bool {
+	return len(keys) == 4 && len(args) >= 3
+}
+
+func (f *fakeRedis) evalReleaseLock(key string, args []interface{}) (interface{}, error) {
+	holder, _ := args[0].(string)
+	if f.nx[key] == holder {
+		delete(f.nx, key)
+		delete(f.ttls, key)
+		return int64(1), nil
+	}
+	return int64(0), nil
+}
+
+func (f *fakeRedis) evalGetSymbol(keys []string, args []interface{}) (interface{}, error) {
+	if f.failGet {
+		return nil, errors.New("redis transport error")
+	}
+	sym := ""
+	if len(args) > 0 {
+		sym, _ = args[0].(string)
+	}
+	var snap interface{}
+	if h := f.hashes[keys[0]]; h != nil {
+		if v, ok := h[sym]; ok {
+			snap = v
+		}
+	}
+	var at interface{}
+	if v, ok := f.strings[keys[1]]; ok {
+		at = v
+	}
+	return []interface{}{snap, at}, nil
+}
+
+func (f *fakeRedis) evalPut(keys []string, args []interface{}) (interface{}, error) {
 	arrayKey, atKey, symKey, tmpKey := keys[0], keys[1], keys[2], keys[3]
 	arrayJSON, _ := args[0].(string)
 	atUnix, _ := args[1].(string)
