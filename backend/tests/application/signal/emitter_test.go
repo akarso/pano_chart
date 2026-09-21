@@ -131,6 +131,87 @@ func TestSQLiteRepository_ChronologicalOrderAcrossSubsecond(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepository_MigratesLegacyTextTimestampsWithOutcomes(t *testing.T) {
+	// Populated legacy TEXT schema + FK-enforced outcomes must upgrade without
+	// failing when dropping renamed parent/child tables.
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		t.Fatal(err)
+	}
+	for _, ddl := range []string{
+		`CREATE TABLE signals (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			symbol TEXT NOT NULL DEFAULT '',
+			timeframe TEXT NOT NULL,
+			label TEXT NOT NULL,
+			score REAL NOT NULL,
+			price REAL NOT NULL DEFAULT 0,
+			atr REAL NOT NULL DEFAULT 0,
+			context TEXT NOT NULL DEFAULT '{}',
+			emitted_at TEXT NOT NULL,
+			horizon_bars INTEGER NOT NULL DEFAULT 20
+		)`,
+		`CREATE TABLE outcomes (
+			signal_id TEXT PRIMARY KEY,
+			resolved_at TEXT NOT NULL,
+			forward_return REAL NOT NULL,
+			max_favorable REAL NOT NULL,
+			max_adverse REAL NOT NULL,
+			success INTEGER NOT NULL,
+			rule TEXT NOT NULL,
+			FOREIGN KEY(signal_id) REFERENCES signals(id)
+		)`,
+	} {
+		if _, err := db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := time.Date(2026, 3, 1, 12, 0, 0, 123456789, time.UTC)
+	if _, err := db.Exec(`INSERT INTO signals
+		(id, kind, symbol, timeframe, label, score, price, atr, context, emitted_at, horizon_bars)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-1", "badge", "BTCUSDT", "1h", "trend_up", 0.9, 100.0, 1.0, "{}",
+		at.Format(time.RFC3339Nano), 20,
+	); err != nil {
+		t.Fatal(err)
+	}
+	resolved := at.Add(time.Hour)
+	if _, err := db.Exec(`INSERT INTO outcomes
+		(signal_id, resolved_at, forward_return, max_favorable, max_adverse, success, rule)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-1", resolved.Format(time.RFC3339Nano), 0.01, 1.0, 0.2, 1, "badge trend_up",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
+	if err != nil {
+		t.Fatalf("legacy migration failed: %v", err)
+	}
+
+	rows, err := repo.Query(context.Background(), domainsignal.Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 migrated row, got %d", len(rows))
+	}
+	if rows[0].Signal.ID != "legacy-1" || rows[0].Outcome == nil || !rows[0].Outcome.Success {
+		t.Fatalf("migrated=%#v", rows[0])
+	}
+	if !rows[0].Signal.EmittedAt.Equal(at) {
+		t.Fatalf("emitted_at=%v want %v", rows[0].Signal.EmittedAt, at)
+	}
+	if !rows[0].Outcome.ResolvedAt.Equal(resolved) {
+		t.Fatalf("resolved_at=%v want %v", rows[0].Outcome.ResolvedAt, resolved)
+	}
+}
+
 func TestEmitter_DedupWithinCandle(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

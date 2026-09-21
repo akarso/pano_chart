@@ -241,10 +241,10 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 		return err
 	}
 
-	if _, err := tx.Exec(`DROP TABLE signals_old`); err != nil {
+	if _, err := tx.Exec(`DROP TABLE outcomes_old`); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DROP TABLE outcomes_old`); err != nil {
+	if _, err := tx.Exec(`DROP TABLE signals_old`); err != nil {
 		return err
 	}
 	return tx.Commit()
