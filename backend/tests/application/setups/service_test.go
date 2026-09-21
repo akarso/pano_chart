@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,9 +12,11 @@ import (
 	"pano_chart/backend/application/setups"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	mkt "pano_chart/backend/domain/market"
 	domainrisk "pano_chart/backend/domain/risk"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 // --- Fakes ---
@@ -1055,5 +1058,103 @@ func TestSetupService_StoreScoresDriveCompressionSetup(t *testing.T) {
 	}
 	if scorer.calls != 0 {
 		t.Fatalf("expected store hit, scorer calls=%d", scorer.calls)
+	}
+}
+
+// --- Signal writers (PR-090) ---
+
+type capturingSetupEmitter struct {
+	mu   sync.Mutex
+	sigs []domainsignal.Signal
+}
+
+func (c *capturingSetupEmitter) Emit(_ context.Context, s domainsignal.Signal) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sigs = append(c.sigs, s)
+	return true
+}
+
+func TestSetupService_NilEmitterNoop(t *testing.T) {
+	svc := setups.NewSetupService(
+		&fakeCandleRepo{series: makeSeries(50)},
+		&fakeScorer{stats: highCompressionStats()},
+		setups.NewEngine(),
+	)
+	if _, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupService_EmitsMappedLabelWhenConfident(t *testing.T) {
+	cap := &capturingSetupEmitter{}
+	svc := setups.NewSetupService(
+		&fakeCandleRepo{series: tightCompressionSeries(50)},
+		&fakeScorer{stats: highCompressionStats()},
+		setups.NewEngine(),
+	)
+	svc.SetSignalEmitter(cap)
+	svc.SetMarketProvider(highEffectiveMarket{})
+	svc.SetFragilityProvider(&fakeFragilityProvider{frag: domainrisk.Fragility{Score: 0.05}})
+	svc.SetSeasonalityProvider(&fakeSeasonalityProvider{spikeProb: 0.05})
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Confidence < 0.5 {
+		t.Fatalf("fixture must reach Confidence≥0.5, got %.3f (regime=%s TH=%.2f ME=%.2f VF=%.2f SF=%.2f C=%.2f)",
+			result.Confidence, result.Regime, result.TrendHealth, result.MarketEffective,
+			result.VolatilityFit, result.SeasonalityFit, result.Crowding)
+	}
+	if len(cap.sigs) != 1 {
+		t.Fatalf("expected 1 setup signal, got %d (confidence=%.2f best=%s)", len(cap.sigs), result.Confidence, result.BestSetup)
+	}
+	s := cap.sigs[0]
+	if s.Kind != domainsignal.KindSetup {
+		t.Fatalf("kind=%s", s.Kind)
+	}
+	switch s.Label {
+	case "compression", "breakout_up", "breakout_down", "range", "trend_up", "trend_down":
+		// PR-091 vocabulary
+	default:
+		t.Fatalf("unexpected setup label %q (raw BestSetup=%s)", s.Label, result.BestSetup)
+	}
+	if s.Price <= 0 || s.ATR <= 0 {
+		t.Fatalf("price/atr must be positive: price=%v atr=%v", s.Price, s.ATR)
+	}
+}
+
+type highEffectiveMarket struct{}
+
+func (highEffectiveMarket) Calculate(context.Context, string) (mkt.Summary, error) {
+	return mkt.Summary{EffectiveTrend: 0.55, State: mkt.StateCompression}, nil
+}
+
+// tightCompressionSeries builds a low-range series so VolatilityFit stays high
+// for compression (needed to clear the Confidence ≥ 0.5 emit gate).
+func tightCompressionSeries(n int) domain.CandleSeries {
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf, _ := domain.NewTimeframe("4h")
+	candles := make([]domain.Candle, n)
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, base.Add(time.Duration(i)*4*time.Hour),
+			100, 100.2, 99.8, 100, 1000,
+		)
+	}
+	s, _ := domain.NewCandleSeries(sym, tf, candles)
+	return s
+}
+
+func highCompressionStats() usecases.SymbolStats {
+	return usecases.SymbolStats{
+		TotalScore: 2.5,
+		Scores: map[string]float64{
+			"Compression":          0.9,
+			"Trend Predictability": 0.2,
+			"Sideways":             0.2,
+		},
 	}
 }

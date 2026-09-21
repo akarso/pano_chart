@@ -6,11 +6,13 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/application/market/transition"
 	mkt "pano_chart/backend/domain/market"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 // ---------- helpers ----------
@@ -335,3 +337,77 @@ func TestMarketTransitionHandler_error(t *testing.T) {
 		t.Errorf("status: got %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
+
+// ---------- signal writers (PR-090) ----------
+
+type capturingEmitter struct {
+	mu   sync.Mutex
+	sigs []domainsignal.Signal
+}
+
+func (c *capturingEmitter) Emit(_ context.Context, s domainsignal.Signal) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sigs = append(c.sigs, s)
+	return true
+}
+
+func (c *capturingEmitter) all() []domainsignal.Signal {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]domainsignal.Signal, len(c.sigs))
+	copy(out, c.sigs)
+	return out
+}
+
+func TestTransitionService_NilEmitterNoop(t *testing.T) {
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{State: mkt.StateCompression, VolatilityExpansion: 1.0},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	if _, err := svc.Calculate(context.Background(), "1h"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTransitionService_EmitsWhenTargetAtLeastHalf(t *testing.T) {
+	// High pressure from compression → Trend 0.6, Expansion 0.4 (both gates differ).
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateCompression,
+			Breadth:             mkt.Breadth{Compression: 1.0},
+			VolatilityExpansion: 1.5,
+		},
+	}
+	cap := &capturingEmitter{}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedAge(30))
+	svc.SetSignalEmitter(cap)
+
+	if _, err := svc.Calculate(context.Background(), "4h"); err != nil {
+		t.Fatal(err)
+	}
+	sigs := cap.all()
+	if len(sigs) == 0 {
+		t.Fatal("expected at least one transition signal")
+	}
+	for _, s := range sigs {
+		if s.Kind != domainsignal.KindTransition {
+			t.Fatalf("kind=%s", s.Kind)
+		}
+		if s.Score < 0.5 {
+			t.Fatalf("emitted below gate: %#v", s)
+		}
+	}
+	labels := map[string]bool{}
+	for _, s := range sigs {
+		labels[s.Label] = true
+	}
+	if !labels["transition:trend"] {
+		t.Fatalf("expected transition:trend, got %v", labels)
+	}
+}
+
+type fixedAge int
+
+func (f fixedAge) CurrentAge(string) (int, error) { return int(f), nil }

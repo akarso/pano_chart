@@ -9,6 +9,7 @@ import (
 
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 type fakeRedis struct {
@@ -292,5 +293,52 @@ func TestScoresPreservedThroughCache(t *testing.T) {
 	}
 	if items[0].Symbol != "BTCUSDT" {
 		t.Errorf("expected cached symbol BTCUSDT, got %s", items[0].Symbol)
+	}
+}
+
+type capturingBadgeEmitter struct {
+	n int
+}
+
+func (c *capturingBadgeEmitter) Emit(_ context.Context, _ domainsignal.Signal) bool {
+	c.n++
+	return true
+}
+
+func TestCacheHitEmitsBadgeSignals(t *testing.T) {
+	fr := &fakeRedis{store: map[string]string{}}
+	badged := []usecases.RankedResult{
+		{
+			Symbol:            domain.NewSymbolUnsafe("BTCUSDT"),
+			TotalScore:        0.9,
+			MaxPercentile:     1,
+			BadgeComponent:    "trend",
+			Sparkline:         []float64{100, 110},
+			SignalPrice:       110,
+			SignalATR:         2,
+			DominantComponent: "trend",
+		},
+	}
+	uc := &fakeRankingsUC{result: badged}
+	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings")
+	cap := &capturingBadgeEmitter{}
+	cache.SetSignalEmitter(cap)
+
+	req := usecases.GetRankingsRequest{
+		Timeframe: domain.NewTimeframeUnsafe("1m"),
+		Sort:      usecases.SortByTotal,
+	}
+	// Miss: underlying UC would normally emit; fake does not — decorator only
+	// emits on hit. Warm the cache, then hit.
+	_, _ = cache.Execute(context.Background(), req)
+	if cap.n != 0 {
+		t.Fatalf("miss path should not double-emit from decorator, got %d", cap.n)
+	}
+	_, err := cache.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap.n != 1 {
+		t.Fatalf("cache hit must emit badge signals, got %d", cap.n)
 	}
 }

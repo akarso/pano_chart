@@ -3,11 +3,13 @@ package usecases
 import (
 	"context"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 // --- Per-component percentile tests ---
@@ -356,5 +358,162 @@ func TestGetRankings_NoBadgesForSingleSymbol(t *testing.T) {
 	if results[0].BadgeComponent != "" {
 		t.Errorf("single symbol should have no badge, got %q",
 			results[0].BadgeComponent)
+	}
+}
+
+// --- Badge signal writers (PR-090) ---
+
+type capturingBadgeEmitter struct {
+	mu   sync.Mutex
+	sigs []domainsignal.Signal
+}
+
+func (c *capturingBadgeEmitter) Emit(_ context.Context, s domainsignal.Signal) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sigs = append(c.sigs, s)
+	return true
+}
+
+func TestGetRankings_NilSignalEmitterNoop(t *testing.T) {
+	btc := domain.NewSymbolUnsafe("BTCUSDT")
+	eth := domain.NewSymbolUnsafe("ETHUSDT")
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	candles := func(sym domain.Symbol, start float64, rising bool) domain.CandleSeries {
+		cs := make([]domain.Candle, 20)
+		for i := 0; i < 20; i++ {
+			px := start + float64(i)
+			if !rising {
+				px = start - float64(i)
+			}
+			cs[i] = mustNewCandleAt(sym, tf, base.Add(time.Duration(i)*time.Hour), px)
+		}
+		s, _ := domain.NewCandleSeries(sym, tf, cs)
+		return s
+	}
+
+	cr := NewFakeCandleRepository(map[domain.Symbol]domain.CandleSeries{
+		btc: candles(btc, 50000, true),
+		eth: candles(eth, 3000, false),
+	}, nil)
+	weights := []usecases.ScoreWeight{
+		{Calculator: &stubCalculator{name: "Trend Predictability", scores: map[string]float64{"BTCUSDT": 0.9, "ETHUSDT": 0.8}}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Sideways Consistency", scores: map[string]float64{"BTCUSDT": 0.1, "ETHUSDT": 0.1}}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Gain/Loss", scores: map[string]float64{"BTCUSDT": 0.2, "ETHUSDT": 0.2}}, Weight: 1},
+	}
+	uc := usecases.NewGetRankings(
+		&fakeUniverse{symbols: []domain.Symbol{btc, eth}},
+		usecases.NewDefaultRankSymbols(weights),
+		&fakeVolumes{vols: map[string]float64{"BTCUSDT": 1, "ETHUSDT": 1}},
+		cr, "http://fake/ei", "http://fake/t",
+		20, usecases.SidewaysAlgoV1, weights, 4, nil,
+	)
+	// nil emitter by default
+	if _, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{Timeframe: tf, Sort: usecases.SortByTotal}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetRankings_EmitsBadgeLabelsAndRangeContext(t *testing.T) {
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	mk := func(sym domain.Symbol, start float64, n int, step float64) domain.CandleSeries {
+		cs := make([]domain.Candle, n)
+		for i := 0; i < n; i++ {
+			px := start + float64(i)*step
+			cs[i] = mustNewCandleAt(sym, tf, base.Add(time.Duration(i)*time.Hour), px)
+		}
+		s, _ := domain.NewCandleSeries(sym, tf, cs)
+		return s
+	}
+
+	// 15 symbols → topN = ceil(15*0.2) = 3 badges.
+	const n = 15
+	symbols := make([]domain.Symbol, n)
+	candlesMap := map[domain.Symbol]domain.CandleSeries{}
+	volMap := map[string]float64{}
+	trendScores := map[string]float64{}
+	sidewaysScores := map[string]float64{}
+	gainScores := map[string]float64{}
+
+	for i := 0; i < n; i++ {
+		name := "SYM" + string(rune('A'+i)) + "USDT"
+		sym := domain.NewSymbolUnsafe(name)
+		symbols[i] = sym
+		volMap[name] = 100
+		gainScores[name] = 0.2
+		switch i {
+		case 0: // rising trend leader
+			candlesMap[sym] = mk(sym, 100, 20, 1)
+			trendScores[name], sidewaysScores[name] = 1.0, 0.1
+		case 1: // falling trend
+			candlesMap[sym] = mk(sym, 200, 20, -1)
+			trendScores[name], sidewaysScores[name] = 0.95, 0.1
+		case 2: // sideways leader
+			candlesMap[sym] = mk(sym, 50, 20, 0)
+			trendScores[name], sidewaysScores[name] = 0.1, 1.0
+		default:
+			candlesMap[sym] = mk(sym, 100, 20, 0.01)
+			trendScores[name] = 0.1 + float64(i)*0.01
+			sidewaysScores[name] = 0.1
+		}
+	}
+
+	weights := []usecases.ScoreWeight{
+		{Calculator: &stubCalculator{name: "Trend Predictability", scores: trendScores}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Sideways Consistency", scores: sidewaysScores}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Gain/Loss", scores: gainScores}, Weight: 1},
+	}
+
+	cap := &capturingBadgeEmitter{}
+	uc := usecases.NewGetRankings(
+		&fakeUniverse{symbols: symbols},
+		usecases.NewDefaultRankSymbols(weights),
+		&fakeVolumes{vols: volMap},
+		NewFakeCandleRepository(candlesMap, nil),
+		"http://fake/ei", "http://fake/t",
+		20, usecases.SidewaysAlgoV1, weights, 4, nil,
+	)
+	uc.SetSignalEmitter(cap)
+
+	if _, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{Timeframe: tf, Sort: usecases.SortByTotal}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cap.sigs) != 3 {
+		t.Fatalf("expected 3 badge signals, got %d", len(cap.sigs))
+	}
+
+	bySym := map[string]domainsignal.Signal{}
+	for _, s := range cap.sigs {
+		bySym[s.Symbol] = s
+		if s.Kind != domainsignal.KindBadge {
+			t.Fatalf("kind=%s", s.Kind)
+		}
+		if s.Price <= 0 || s.ATR <= 0 {
+			t.Fatalf("%s: want series ATR, price=%v atr=%v", s.Symbol, s.Price, s.ATR)
+		}
+	}
+
+	if s, ok := bySym["SYMAUSDT"]; !ok || s.Label != "trend_up" {
+		t.Fatalf("SYMAUSDT want trend_up, got %#v", s)
+	}
+	if s, ok := bySym["SYMBUSDT"]; !ok || s.Label != "trend_down" {
+		t.Fatalf("SYMBUSDT want trend_down, got %#v (all=%v)", s, bySym)
+	}
+	if s, ok := bySym["SYMCUSDT"]; !ok || s.Label != "sideways" {
+		t.Fatalf("SYMCUSDT want sideways, got %#v", s)
+	} else {
+		if s.Context["range_low"] == 0 && s.Context["range_high"] == 0 {
+			// flat series at 50 — both equal is fine, but keys must exist
+		}
+		if _, ok := s.Context["range_low"]; !ok {
+			t.Fatal("sideways missing range_low")
+		}
+		if _, ok := s.Context["range_high"]; !ok {
+			t.Fatal("sideways missing range_high")
+		}
 	}
 }

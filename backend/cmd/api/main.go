@@ -25,8 +25,10 @@ import (
 	"pano_chart/backend/application/market/transition"
 	apprisk "pano_chart/backend/application/risk"
 	"pano_chart/backend/application/setups"
+	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/scoring"
 	infraauth "pano_chart/backend/infrastructure/auth"
 	infraeval "pano_chart/backend/infrastructure/evaluation"
@@ -39,6 +41,7 @@ import (
 	"pano_chart/backend/infrastructure/payment"
 	"pano_chart/backend/infrastructure/rankings"
 	infrascoring "pano_chart/backend/infrastructure/scoring"
+	infrasignal "pano_chart/backend/infrastructure/signal"
 	"pano_chart/backend/infrastructure/snapshot"
 	"pano_chart/backend/infrastructure/symbol_universe"
 
@@ -210,6 +213,24 @@ func main() {
 		}
 	}()
 
+	// --- Signal log (PR-090) — best-effort; never block API boot ---
+	signalDBPath := os.Getenv("PC_SIGNAL_DB")
+	if signalDBPath == "" {
+		signalDBPath = "./signals.sqlite"
+	}
+	var signalRepo *infrasignal.SQLiteRepository
+	var signalEmitter *appsignal.Emitter
+	repo, err := infrasignal.NewSQLiteRepository(signalDBPath)
+	if err != nil {
+		log.Printf("[main] WARNING: signal DB unavailable (%v) — writers disabled", err)
+		// Leave signalEmitter nil so RegimeWriter / services stay no-op
+		// (do not wire NewEmitter(nil) — Emit would return false forever).
+	} else {
+		signalRepo = repo
+		signalEmitter = appsignal.NewEmitter(signalRepo)
+		log.Printf("[main] Signal log initialized (db=%s)\n", signalDBPath)
+	}
+
 	// --- Rankings v2 use case ---
 	getRankingsUC := usecases.NewGetRankings(
 		cachedUniverse,
@@ -224,6 +245,7 @@ func main() {
 		rankingWorkers,
 		snapshotLogger,
 	)
+	getRankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Rankings cache TTL ---
 	rankingsCacheTTL := 3 * time.Minute // default
@@ -241,6 +263,7 @@ func main() {
 
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")
+	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
 	configPath := scoring.ConfigPath()
@@ -359,7 +382,25 @@ func main() {
 		log.Fatalf("Failed to open regime history DB: %v", err)
 	}
 	regimeTracker := regimehistory.NewTracker(regimeHistoryRepo)
-	marketService.SetObserver(regimeTracker)
+	var signalRegimeWriter *appsignal.RegimeWriter
+	if signalEmitter != nil {
+		signalRegimeWriter = appsignal.NewRegimeWriter(signalEmitter)
+		signalRegimeWriter.SetHistoryLookup(func(tf string) (mkt.Regime, bool) {
+			latest, latestErr := regimeHistoryRepo.GetLatest(tf)
+			if latestErr != nil || latest == nil {
+				return "", false
+			}
+			return latest.Regime, true
+		})
+		// Seed every supported TF that already has history so restarts do not
+		// fake a change on first Calculate.
+		for _, seedTF := range domain.AllTimeframes() {
+			if latest, latestErr := regimeHistoryRepo.GetLatest(seedTF.String()); latestErr == nil && latest != nil {
+				signalRegimeWriter.Seed(seedTF.String(), latest.Regime)
+			}
+		}
+	}
+	marketService.SetObserver(appmarket.ComposeObservers(regimeTracker, signalRegimeWriter))
 	regimeHistoryService := regimehistory.NewService(regimeHistoryRepo)
 	regimeHistoryHandler := adhttp.NewMarketRegimeHistoryHandler(regimeHistoryService)
 	log.Printf("[main] Regime history tracker initialized (db=%s)\n", regimeHistoryDBPath)
@@ -382,6 +423,7 @@ func main() {
 	transitionEngine := transition.NewTransitionEngine()
 	transitionService := transition.NewTransitionService(marketService, transitionEngine)
 	transitionService.SetAgeProvider(regimeHistoryService)
+	transitionService.SetSignalEmitter(signalEmitter)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
 
@@ -401,6 +443,7 @@ func main() {
 	setupService.SetMarketProvider(marketService)
 	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupService.SetEvaluationStore(evalStore)
+	setupService.SetSignalEmitter(signalEmitter)
 	setupHandler := adhttp.NewSetupHandler(setupService)
 	log.Println("[main] Setup quality engine initialized")
 
@@ -742,6 +785,9 @@ func main() {
 	// request rather than a crash).
 	_ = paymentRepo.Close()
 	_ = regimeHistoryRepo.Close()
+	if signalRepo != nil {
+		_ = signalRepo.Close()
+	}
 	_ = socialAccountStore.Close()
 	_ = socialSubStore.Close()
 	_ = deviceStore.Close()

@@ -30,9 +30,10 @@ type TapeProvider interface {
 }
 
 // RegimeObserver is notified after every Calculate call. The Tracker from
-// the regimehistory package satisfies this interface.
+// the regimehistory package satisfies this interface. bias is the market
+// Bias string ("up"/"down"/"neutral") for signal logging (PR-090).
 type RegimeObserver interface {
-	Update(timeframe string, regime mkt.Regime, timestamp int64) error
+	Update(timeframe string, regime mkt.Regime, bias string, timestamp int64) error
 }
 
 // candleMetricsWindow is the candle window used for VolatilityExpansion /
@@ -258,7 +259,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 	}
 
 	if s.observer != nil && ctx.Err() == nil {
-		if err := s.observer.Update(timeframe, mkt.Regime(dominant), time.Now().Unix()); err != nil {
+		if err := s.observer.Update(timeframe, mkt.Regime(dominant), bias, time.Now().Unix()); err != nil {
 			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
 		}
 	}

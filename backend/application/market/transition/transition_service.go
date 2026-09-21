@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"pano_chart/backend/application/ports"
 	mkt "pano_chart/backend/domain/market"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 // RegimeProvider abstracts market-state computation so the transition
@@ -28,7 +30,8 @@ type AgeProvider interface {
 type TransitionService struct {
 	regimeProvider RegimeProvider
 	engine         *TransitionEngine
-	ageProvider    AgeProvider // optional — falls back to default when nil
+	ageProvider    AgeProvider         // optional — falls back to default when nil
+	signalEmitter  ports.SignalEmitter // optional — PR-090
 }
 
 // NewTransitionService wires the service.
@@ -42,6 +45,11 @@ func NewTransitionService(rp RegimeProvider, eng *TransitionEngine) *TransitionS
 // SetAgeProvider attaches a regime-history-based age provider.
 func (s *TransitionService) SetAgeProvider(ap AgeProvider) {
 	s.ageProvider = ap
+}
+
+// SetSignalEmitter attaches an optional signal logger (PR-090).
+func (s *TransitionService) SetSignalEmitter(e ports.SignalEmitter) {
+	s.signalEmitter = e
 }
 
 // Calculate fetches the current regime summary and returns transition
@@ -72,6 +80,8 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		regimeAge,
 	)
 
+	s.emitTransitionSignals(ctx, summary.Timeframe, probs)
+
 	horizon := fmt.Sprintf("%d candles", regimeAge)
 	if h := HumanDuration(summary.Timeframe, regimeAge); h != "" {
 		horizon = fmt.Sprintf("%d candles (~%s)", regimeAge, h)
@@ -83,4 +93,36 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		Probabilities: probs,
 		Horizon:       horizon,
 	}, nil
+}
+
+func (s *TransitionService) emitTransitionSignals(ctx context.Context, timeframe string, probs mkt.TransitionProbabilities) {
+	if s.signalEmitter == nil {
+		return
+	}
+	targets := []struct {
+		label string
+		p     float64
+	}{
+		{"transition:trend", probs.Trend},
+		{"transition:sideways", probs.Sideways},
+		{"transition:compression", probs.Compression},
+		{"transition:expansion", probs.Expansion},
+	}
+	for _, t := range targets {
+		if t.p < 0.5 {
+			continue
+		}
+		s.signalEmitter.Emit(ctx, domainsignal.Signal{
+			Kind:      domainsignal.KindTransition,
+			Timeframe: timeframe,
+			Label:     t.label,
+			Score:     t.p,
+			Context: map[string]float64{
+				"trend":       probs.Trend,
+				"sideways":    probs.Sideways,
+				"compression": probs.Compression,
+				"expansion":   probs.Expansion,
+			},
+		})
+	}
 }

@@ -10,12 +10,14 @@ import (
 
 	"pano_chart/backend/application/market"
 	"pano_chart/backend/application/ports"
+	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/risk"
 	"pano_chart/backend/domain/scoring"
 	"pano_chart/backend/domain/setup"
+	domainsignal "pano_chart/backend/domain/signal"
 )
 
 // MarketProvider returns the current market summary for a timeframe.
@@ -53,6 +55,7 @@ type SetupService struct {
 	fragilityProvider   FragilityProvider     // optional; nil means crowding = 0
 	seasonalityProvider SeasonalityProvider   // optional; nil means SeasonalityFit = neutral 0.5
 	evalStore           ports.EvaluationStore // optional; nil → always re-score
+	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
 	now                 func() time.Time
 }
 
@@ -94,6 +97,11 @@ func (s *SetupService) SetSeasonalityProvider(sp SeasonalityProvider) {
 // When present and fresh, scores come from GetSymbol instead of SymbolScorer.
 func (s *SetupService) SetEvaluationStore(store ports.EvaluationStore) {
 	s.evalStore = store
+}
+
+// SetSignalEmitter attaches an optional signal logger (PR-090).
+func (s *SetupService) SetSignalEmitter(e ports.SignalEmitter) {
+	s.signalEmitter = e
 }
 
 // SetNow overrides the clock used for store freshness (tests).
@@ -186,7 +194,55 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 		stats.Scores["Breakout Down"],
 	)
 
+	s.emitSetupSignal(ctx, result, series)
 	return result, nil
+}
+
+func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupScores, series domain.CandleSeries) {
+	if s.signalEmitter == nil || result.Confidence < 0.5 {
+		return
+	}
+	price, atr := seriesPriceATR(series)
+	label := appsignal.SetupLabel(string(result.BestSetup), result.Regime, result.BreakoutUp, result.BreakoutDown)
+	ctxNums := map[string]float64{
+		"setup_score":      result.Score,
+		"trend_health":     result.TrendHealth,
+		"breakout_up":      result.BreakoutUp,
+		"breakout_down":    result.BreakoutDown,
+		"crowding":         result.Crowding,
+		"volatility_fit":   result.VolatilityFit,
+		"seasonality_fit":  result.SeasonalityFit,
+		"market_effective": result.MarketEffective,
+	}
+	if label == "range" || label == "compression" {
+		hi, lo := recentExtremes(series)
+		ctxNums["range_low"] = lo
+		ctxNums["range_high"] = hi
+	}
+	s.signalEmitter.Emit(ctx, domainsignal.Signal{
+		Kind:      domainsignal.KindSetup,
+		Symbol:    result.Symbol,
+		Timeframe: result.Timeframe,
+		Label:     label,
+		Score:     result.Confidence,
+		Price:     price,
+		ATR:       atr,
+		Context:   ctxNums,
+	})
+}
+
+func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
+	n := series.Len()
+	if n == 0 {
+		return 0, 0
+	}
+	last, err := series.At(n - 1)
+	if err != nil {
+		return 0, 0
+	}
+	price = last.Close()
+	atr = usecases.SimpleATR(series, 14)
+	return price, atr
 }
 
 // resolveScores prefers a fresh EvaluationStore snapshot; otherwise scores
