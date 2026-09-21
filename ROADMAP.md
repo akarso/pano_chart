@@ -22,33 +22,34 @@ on the broader round.
 
 ### PR-114 — Events cache: error backoff (FinanceFlow retry storm)
 
-**Layer:** application. **Depends on:** nothing. **Priority:** ship before / alongside Track A.
+**Layer:** application + HTTP. **Depends on:** nothing. **Priority:** ship before / alongside Track A.
 
 **Objective.** Stop the notification scheduler (`MacroCheckInterval = 1m`) from billing
 FinanceFlow on every tick when the upstream is failing after a normal cache TTL miss.
+Also prevent cancelled public `/api/v1/events` clients from installing an empty hold that
+suppresses the scheduler.
 
 **Context.**
 - `application/usecases/get_events.go` — in-memory cache, upcoming TTL 30m, past TTL 6h.
 - `application/notifications/scheduler.go` — `checkMacroEvents` every 1 minute →
   `eventsAdapter` → `GetEvents.Execute` (US, short lead window).
-- Cache key is date-granular (`country|from|to`), so a warm cache yields ~48 scheduler
-  upstream calls/day. Observed production: some days ~50, some days ~1440.
+- Observed production: some days ~50 calls, some days ~1440 after a mid-day blip.
 
-**Bug.** On provider error, code served stale data but did **not** refresh freshness.
-Next minute: miss → fail → stale → miss… for the rest of the day.
+**Spec (contract).**
+1. Upstream error (not cancel/deadline): arm **15m** `errorHoldUntil`. Soft-hit until then.
+2. After hold elapses: **force revalidation** (`getCached` → nil). Never fall through to
+   success TTL on an error-path entry (empty or stale). Ceiling ≈ `24×60/15 ≈ 96`
+   scheduler calls/day/key during a full-day outage — not 1440, not “15m then 30m more.”
+3. `context.Canceled` / `DeadlineExceeded`: no hold install/extend.
+4. Singleflight per cache key; max 256 in-memory keys (evict oldest).
+5. HTTP: max 31-day span; countries allowlisted (US / Euro Area / China).
 
-**Spec.**
-1. Add `errorHoldUntil` on the cache entry and `errorBackoff` default **15m** on `GetEvents`.
-2. `getCached`: if `now < errorHoldUntil`, return the entry (soft hit).
-3. On `FetchEvents` error with stale present: set `errorHoldUntil = now + errorBackoff`,
-   return stale.
-4. On error with no cache: `putCache` empty list with the same hold (avoid empty 1/min storm).
-5. On success: `putCache` clears any hold.
+**Tests.** `tests/application/usecases/get_events_backoff_test.go` (fake clock + short
+backoff): hold expiry refetch; success clears hold; cancel no empty insert; past-range
+cold fail retries at backoff not 6h; singleflight. Handler tests for span/country rejection.
 
-**Tests.** See `get_events_backoff_test.go` (expired TTL + fail backs off; cold fail backs off empty).
-
-**Definition of Done.** Spec tests pass; bad-day ceiling ≈ `24×60/15 ≈ 96` scheduler calls
-during a full-day outage, not 1440.
+**Definition of Done.** Spec tests pass; PR doc (`backend/docs/v2/PR-114.md`) matches this
+contract (prefer the PR doc for implementation detail; keep this section short).
 
 ---
 

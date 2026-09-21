@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // EventsUseCase defines the boundary for the events use case.
@@ -32,11 +35,15 @@ type cacheEntry struct {
 	dateFrom  time.Time
 	dateTo    time.Time
 	// errorHoldUntil, when set and still in the future, keeps the entry
-	// serving without re-fetching even if the normal TTL has elapsed.
-	// Set after a FinanceFlow failure so the 1-minute notification scheduler
-	// does not retry-storm the upstream (PR-114).
+	// serving without re-fetching. After it elapses getCached returns nil
+	// (force revalidation) — the entry is never treated as a successful
+	// fetch for the normal upcoming/past TTL. See PR-114.
 	errorHoldUntil time.Time
 }
+
+// DefaultEventsCacheMaxEntries bounds in-memory cache keys (public HTTP can
+// invent many country|from|to combinations under error holds).
+const DefaultEventsCacheMaxEntries = 256
 
 // GetEvents is the use case that fetches, caches, and filters economic events.
 type GetEvents struct {
@@ -44,14 +51,15 @@ type GetEvents struct {
 
 	mu    sync.RWMutex
 	cache map[string]*cacheEntry
+	sf    singleflight.Group
 
-	upcomingTTL time.Duration // TTL for date ranges that include future dates
-	pastTTL     time.Duration // TTL for fully-past date ranges
-	// errorBackoff is how long to keep serving a stale (or empty) entry after a
-	// provider failure without re-calling FinanceFlow. Without this, a miss
-	// after TTL + a failing upstream becomes a 1/min retry storm for the rest
-	// of the day (notification scheduler MacroCheckInterval) — see PR-114.
+	upcomingTTL  time.Duration
+	pastTTL      time.Duration
 	errorBackoff time.Duration
+	maxEntries   int
+
+	// now is injectable for tests; nil → time.Now.
+	now func() time.Time
 }
 
 // NewGetEvents constructs the use case with reasonable cache TTLs.
@@ -62,7 +70,33 @@ func NewGetEvents(provider ports.EventProviderPort) *GetEvents {
 		upcomingTTL:  30 * time.Minute,
 		pastTTL:      6 * time.Hour,
 		errorBackoff: 15 * time.Minute,
+		maxEntries:   DefaultEventsCacheMaxEntries,
 	}
+}
+
+// SetErrorBackoff overrides the post-failure hold duration. Used by tests;
+// zero or negative values are ignored.
+func (g *GetEvents) SetErrorBackoff(d time.Duration) {
+	if d > 0 {
+		g.errorBackoff = d
+	}
+}
+
+// SetNow overrides the clock (tests). Pass nil to restore time.Now.
+func (g *GetEvents) SetNow(fn func() time.Time) {
+	g.now = fn
+}
+
+func (g *GetEvents) clock() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+// eventsFlightResult is the singleflight payload for Execute.
+type eventsFlightResult struct {
+	events []domain.Event
 }
 
 // Execute fetches events, using cache when possible.
@@ -71,33 +105,95 @@ func NewGetEvents(provider ports.EventProviderPort) *GetEvents {
 func (g *GetEvents) Execute(ctx context.Context, req GetEventsRequest) ([]domain.Event, error) {
 	key := cacheKey(req.DateFrom, req.DateTo, req.Country)
 
-	// Try cache first
 	if entry := g.getCached(key, req.DateFrom, req.DateTo); entry != nil {
-		log.Printf("[Events] cache hit for %s", key)
+		g.logCacheHit(key, entry)
 		return filterEvents(entry, req.Impact), nil
 	}
 
-	log.Printf("[Events] cache miss for %s, fetching…", key)
-	events, err := g.provider.FetchEvents(ctx, req.DateFrom, req.DateTo, req.Country)
-	if err != nil {
-		log.Printf("[Events] fetch error: %v, falling back to stale cache", err)
+	ch := g.sf.DoChan(key, func() (interface{}, error) {
+		// Double-check after winning the flight.
+		if entry := g.getCached(key, req.DateFrom, req.DateTo); entry != nil {
+			return eventsFlightResult{events: entry.events}, nil
+		}
+
+		// Detach from any single caller's cancel so one aborted HTTP client
+		// cannot abort (or poison) a shared FinanceFlow fetch for siblings.
+		workCtx := context.WithoutCancel(ctx)
+
+		log.Printf("[Events] cache miss for %s, fetching…", key)
+		events, err := g.provider.FetchEvents(workCtx, req.DateFrom, req.DateTo, req.Country)
+		if err != nil {
+			return g.handleFetchError(key, req, err)
+		}
+
+		g.putCache(key, events, req.DateFrom, req.DateTo)
+		return eventsFlightResult{events: events}, nil
+	})
+
+	select {
+	case <-ctx.Done():
+		// Caller cancelled — do not install/extend holds. Serve stale if any.
 		if entry := g.getStaleCached(key); entry != nil {
-			g.holdOnError(key)
-			log.Printf("[Events] error backoff for %s (%s)", key, g.errorBackoff)
+			log.Printf("[Events] caller canceled for %s, serving stale without hold", key)
 			return filterEvents(entry, req.Impact), nil
 		}
-		// No prior data: cache empty under error backoff so we still avoid
-		// a 1/min retry storm until the upstream recovers.
-		g.putCacheWithErrorHold(key, nil, req.DateFrom, req.DateTo)
-		log.Printf("[Events] error backoff (empty) for %s (%s)", key, g.errorBackoff)
+		log.Printf("[Events] caller canceled for %s, empty (no hold)", key)
 		return []domain.Event{}, nil
+	case res := <-ch:
+		if res.Err != nil {
+			// Unexpected: handleFetchError returns soft results, not errors.
+			log.Printf("[Events] flight error for %s: %v", key, res.Err)
+			return []domain.Event{}, nil
+		}
+		fr := res.Val.(eventsFlightResult)
+		return filterEventsSlice(fr.events, req.Impact), nil
 	}
-
-	g.putCache(key, events, req.DateFrom, req.DateTo)
-	return filterEventsSlice(events, req.Impact), nil
 }
 
-// getCached returns cached events if the entry exists and hasn't expired.
+func (g *GetEvents) handleFetchError(key string, req GetEventsRequest, err error) (interface{}, error) {
+	// Never install or extend holds for local cancellation / deadlines —
+	// those are client-side, not FinanceFlow pain (PR-114 review).
+	if isCallerAbort(err) {
+		log.Printf("[Events] fetch aborted (no hold) for %s: %v", key, err)
+		if entry := g.getStaleCached(key); entry != nil {
+			return eventsFlightResult{events: entry.events}, nil
+		}
+		return eventsFlightResult{}, nil
+	}
+
+	log.Printf("[Events] upstream fetch error for %s: %v", key, err)
+	if entry := g.getStaleCached(key); entry != nil {
+		if g.holdOnError(key, req.DateFrom, req.DateTo) {
+			log.Printf("[Events] error-hold soft-hit armed for %s (%s)", key, g.errorBackoff)
+		} else {
+			log.Printf("[Events] serving fresher cache after failed fetch (no hold) for %s", key)
+		}
+		return eventsFlightResult{events: entry.events}, nil
+	}
+
+	g.putCacheWithErrorHold(key, nil, req.DateFrom, req.DateTo)
+	log.Printf("[Events] empty negative-cache hold for %s (%s)", key, g.errorBackoff)
+	return eventsFlightResult{}, nil
+}
+
+func isCallerAbort(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (g *GetEvents) logCacheHit(key string, entry *cacheEntry) {
+	now := g.clock()
+	if !entry.errorHoldUntil.IsZero() && now.Before(entry.errorHoldUntil) {
+		if len(entry.events) == 0 {
+			log.Printf("[Events] empty negative-cache soft-hit for %s", key)
+		} else {
+			log.Printf("[Events] error-hold soft-hit for %s", key)
+		}
+		return
+	}
+	log.Printf("[Events] cache hit for %s", key)
+}
+
+// getCached returns cached events if the entry is still valid.
 func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
@@ -107,28 +203,26 @@ func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntr
 		return nil
 	}
 
-	now := time.Now()
-	if !entry.errorHoldUntil.IsZero() && now.Before(entry.errorHoldUntil) {
-		return entry
+	now := g.clock()
+	if !entry.errorHoldUntil.IsZero() {
+		if now.Before(entry.errorHoldUntil) {
+			return entry
+		}
+		// Hold elapsed → force revalidation (do not fall through to normal TTL).
+		return nil
 	}
 
-	ttl := g.ttlFor(dateFrom, dateTo)
+	ttl := g.ttlForAt(dateFrom, dateTo, now)
 	if now.Sub(entry.fetchedAt) > ttl {
 		return nil
 	}
 	return entry
 }
 
-// getStaleCached returns cached events regardless of TTL (for error fallback).
 func (g *GetEvents) getStaleCached(key string) *cacheEntry {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-
-	entry, ok := g.cache[key]
-	if !ok {
-		return nil
-	}
-	return entry
+	return g.cache[key]
 }
 
 func (g *GetEvents) putCache(key string, events []domain.Event, dateFrom, dateTo time.Time) {
@@ -137,48 +231,88 @@ func (g *GetEvents) putCache(key string, events []domain.Event, dateFrom, dateTo
 
 	g.cache[key] = &cacheEntry{
 		events:    events,
-		fetchedAt: time.Now(),
+		fetchedAt: g.clock(),
 		dateFrom:  dateFrom,
 		dateTo:    dateTo,
-		// clear any prior error hold on success
+		// errorHoldUntil left zero — clears any prior hold by replacement
 	}
+	g.evictIfNeededLocked()
 }
 
 func (g *GetEvents) putCacheWithErrorHold(key string, events []domain.Event, dateFrom, dateTo time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	now := time.Now()
+	now := g.clock()
+	// fetchedAt is already past any normal TTL so after errorHoldUntil
+	// elapses, getCached returns nil (retry at errorBackoff, not pastTTL).
 	g.cache[key] = &cacheEntry{
 		events:         events,
-		fetchedAt:      now,
+		fetchedAt:      now.Add(-g.pastTTL - time.Second),
 		dateFrom:       dateFrom,
 		dateTo:         dateTo,
 		errorHoldUntil: now.Add(g.errorBackoff),
 	}
+	g.evictIfNeededLocked()
 }
 
-// holdOnError extends an existing entry with an error backoff window so
-// subsequent scheduler ticks are soft hits without calling FinanceFlow.
-func (g *GetEvents) holdOnError(key string) {
+// holdOnError arms an error hold on an existing entry. Returns false if the
+// entry looks like a racing successful refresh (warm, no hold) — in that
+// case we must not block proactive refresh for errorBackoff.
+func (g *GetEvents) holdOnError(key string, dateFrom, dateTo time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if entry, ok := g.cache[key]; ok {
-		entry.errorHoldUntil = time.Now().Add(g.errorBackoff)
+
+	entry, ok := g.cache[key]
+	if !ok {
+		return false
+	}
+	now := g.clock()
+	ttl := g.ttlForAt(dateFrom, dateTo, now)
+	if entry.errorHoldUntil.IsZero() && now.Sub(entry.fetchedAt) <= ttl {
+		// Fresher success won the race — leave it alone.
+		return false
+	}
+	entry.errorHoldUntil = now.Add(g.errorBackoff)
+	// Ensure post-hold path cannot soft-hit via normal TTL.
+	entry.fetchedAt = now.Add(-ttl - time.Second)
+	return true
+}
+
+func (g *GetEvents) evictIfNeededLocked() {
+	max := g.maxEntries
+	if max <= 0 {
+		max = DefaultEventsCacheMaxEntries
+	}
+	for len(g.cache) > max {
+		var oldestKey string
+		var oldest time.Time
+		first := true
+		for k, e := range g.cache {
+			score := e.fetchedAt
+			if e.errorHoldUntil.After(score) {
+				score = e.errorHoldUntil
+			}
+			if first || score.Before(oldest) {
+				oldest = score
+				oldestKey = k
+				first = false
+			}
+		}
+		if oldestKey == "" {
+			return
+		}
+		delete(g.cache, oldestKey)
 	}
 }
 
-// ttlFor returns the appropriate TTL for a date range.
-// If the range extends into the future, use the shorter upcoming TTL.
-func (g *GetEvents) ttlFor(dateFrom, dateTo time.Time) time.Duration {
-	now := time.Now().UTC()
-	if dateTo.After(now) {
+func (g *GetEvents) ttlForAt(dateFrom, dateTo, now time.Time) time.Duration {
+	if dateTo.After(now.UTC()) {
 		return g.upcomingTTL
 	}
 	return g.pastTTL
 }
 
-// cacheKey builds a deterministic key from the query parameters.
 func cacheKey(dateFrom, dateTo time.Time, country string) string {
 	c := strings.ToLower(strings.TrimSpace(country))
 	if c == "" {
@@ -191,25 +325,13 @@ func cacheKey(dateFrom, dateTo time.Time, country string) string {
 	)
 }
 
-// filterEvents applies optional impact filtering.
 func filterEvents(entry *cacheEntry, impact string) []domain.Event {
 	if entry == nil {
 		return []domain.Event{}
 	}
-	if impact == "" {
-		return entry.events
-	}
-	target := domain.ParseEventImpact(impact)
-	filtered := make([]domain.Event, 0)
-	for _, e := range entry.events {
-		if e.Impact() == target {
-			filtered = append(filtered, e)
-		}
-	}
-	return filtered
+	return filterEventsSlice(entry.events, impact)
 }
 
-// filterEventsSlice applies optional impact filtering to a raw slice.
 func filterEventsSlice(events []domain.Event, impact string) []domain.Event {
 	if impact == "" {
 		return events
