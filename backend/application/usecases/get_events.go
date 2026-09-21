@@ -233,10 +233,14 @@ func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntr
 		}
 		// Hold elapsed → force revalidation. Keep non-empty entries so a
 		// subsequent fail can re-arm holdOnError on the last known events.
+		// Bump lastAccess: revalidation counts as use so LRU does not thrash
+		// the hot scheduler key while it is between hold windows.
 		entry.errorHoldUntil = time.Time{}
 		if len(entry.events) == 0 {
 			delete(g.cache, key)
+			return nil
 		}
+		entry.lastAccess = now
 		return nil
 	}
 
