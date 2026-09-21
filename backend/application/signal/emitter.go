@@ -75,8 +75,10 @@ func (e *Emitter) Emit(ctx context.Context, s domainsignal.Signal) bool {
 	if s.ID == "" {
 		s.ID = uuid.NewString()
 	}
-	// Symbol-scoped signals need a usable price/ATR for PR-091 MFE/MAE.
-	if s.Symbol != "" && (s.Price <= 0 || s.ATR <= 0) {
+	// Symbol-scoped signals need a usable price for forward return.
+	// ATR may be 0 for a flat series (normalization unavailable for PR-091);
+	// still persist so the call can be graded on price-based rules.
+	if s.Symbol != "" && s.Price <= 0 {
 		return false
 	}
 

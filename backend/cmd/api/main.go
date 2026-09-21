@@ -263,6 +263,7 @@ func main() {
 
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")
+	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
 	configPath := scoring.ConfigPath()

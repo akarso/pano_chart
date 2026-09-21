@@ -428,7 +428,15 @@ func assignBadges(results []RankedResult) {
 }
 
 func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, results []RankedResult) {
-	if g.signalEmitter == nil {
+	EmitBadgeSignals(ctx, g.signalEmitter, timeframe, results)
+}
+
+// EmitBadgeSignals records KindBadge for each result with a non-empty badge.
+// Safe with a nil emitter. Used by GetRankings and by RedisCachedRankings on
+// cache hits so user-facing badge calls are logged every candle, not only
+// on cache miss.
+func EmitBadgeSignals(ctx context.Context, emitter ports.SignalEmitter, timeframe string, results []RankedResult) {
+	if emitter == nil {
 		return
 	}
 	for _, r := range results {
@@ -436,6 +444,10 @@ func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, re
 			continue
 		}
 		label := appsignal.BadgeLabel(r.BadgeComponent, r.Sparkline)
+		price := r.SignalPrice
+		if price <= 0 && len(r.Sparkline) > 0 {
+			price = r.Sparkline[len(r.Sparkline)-1]
+		}
 		ctxNums := map[string]float64{
 			"total_score": r.TotalScore,
 			"percentile":  r.Percentile,
@@ -445,14 +457,14 @@ func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, re
 			ctxNums["range_low"] = lo
 			ctxNums["range_high"] = hi
 		}
-		g.signalEmitter.Emit(ctx, domainsignal.Signal{
+		emitter.Emit(ctx, domainsignal.Signal{
 			Kind:      domainsignal.KindBadge,
 			Symbol:    r.Symbol.String(),
 			Timeframe: timeframe,
 			Label:     label,
 			Score:     r.MaxPercentile,
-			Price:     r.SignalPrice,
-			ATR:       r.SignalATR,
+			Price:     price,
+			ATR:       r.SignalATR, // 0 = flat / unavailable; still persisted
 			Context:   ctxNums,
 		})
 	}

@@ -14,6 +14,8 @@ import (
 )
 
 // SQLiteRepository persists signals and outcomes.
+// Timestamps are stored as UTC unix nanoseconds (INTEGER) so ORDER BY / range
+// filters are chronological (RFC3339Nano text is variable-width and unsafe).
 type SQLiteRepository struct {
 	db *sql.DB
 }
@@ -79,7 +81,7 @@ func (r *SQLiteRepository) migrate() error {
 		price REAL NOT NULL DEFAULT 0,
 		atr REAL NOT NULL DEFAULT 0,
 		context TEXT NOT NULL DEFAULT '{}',
-		emitted_at TEXT NOT NULL,
+		emitted_at INTEGER NOT NULL,
 		horizon_bars INTEGER NOT NULL DEFAULT 20
 	)`
 	if _, err := r.db.Exec(signals); err != nil {
@@ -87,7 +89,7 @@ func (r *SQLiteRepository) migrate() error {
 	}
 	outcomes := `CREATE TABLE IF NOT EXISTS outcomes (
 		signal_id TEXT PRIMARY KEY,
-		resolved_at TEXT NOT NULL,
+		resolved_at INTEGER NOT NULL,
 		forward_return REAL NOT NULL,
 		max_favorable REAL NOT NULL,
 		max_adverse REAL NOT NULL,
@@ -97,6 +99,9 @@ func (r *SQLiteRepository) migrate() error {
 	)`
 	if _, err := r.db.Exec(outcomes); err != nil {
 		return fmt.Errorf("creating outcomes: %w", err)
+	}
+	if err := r.migrateTimestampsToUnixNano(); err != nil {
+		return err
 	}
 	for _, ddl := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_signals_emitted_at ON signals(emitted_at)`,
@@ -108,6 +113,141 @@ func (r *SQLiteRepository) migrate() error {
 		}
 	}
 	return nil
+}
+
+// migrateTimestampsToUnixNano rebuilds tables if a prior schema stored
+// emitted_at / resolved_at as TEXT (variable-width RFC3339Nano).
+func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
+	var typ string
+	err := r.db.QueryRow(`SELECT type FROM pragma_table_info('signals') WHERE name = 'emitted_at'`).Scan(&typ)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("pragma signals.emitted_at: %w", err)
+	}
+	if strings.EqualFold(strings.TrimSpace(typ), "INTEGER") {
+		return nil
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`ALTER TABLE signals RENAME TO signals_old`); err != nil {
+		return fmt.Errorf("rename signals: %w", err)
+	}
+	if _, err := tx.Exec(`ALTER TABLE outcomes RENAME TO outcomes_old`); err != nil {
+		return fmt.Errorf("rename outcomes: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE TABLE signals (
+		id TEXT PRIMARY KEY,
+		kind TEXT NOT NULL,
+		symbol TEXT NOT NULL DEFAULT '',
+		timeframe TEXT NOT NULL,
+		label TEXT NOT NULL,
+		score REAL NOT NULL,
+		price REAL NOT NULL DEFAULT 0,
+		atr REAL NOT NULL DEFAULT 0,
+		context TEXT NOT NULL DEFAULT '{}',
+		emitted_at INTEGER NOT NULL,
+		horizon_bars INTEGER NOT NULL DEFAULT 20
+	)`); err != nil {
+		return fmt.Errorf("recreate signals: %w", err)
+	}
+	if _, err := tx.Exec(`CREATE TABLE outcomes (
+		signal_id TEXT PRIMARY KEY,
+		resolved_at INTEGER NOT NULL,
+		forward_return REAL NOT NULL,
+		max_favorable REAL NOT NULL,
+		max_adverse REAL NOT NULL,
+		success INTEGER NOT NULL,
+		rule TEXT NOT NULL,
+		FOREIGN KEY(signal_id) REFERENCES signals(id)
+	)`); err != nil {
+		return fmt.Errorf("recreate outcomes: %w", err)
+	}
+
+	oldRows, err := tx.Query(`SELECT id, kind, symbol, timeframe, label, score, price, atr,
+		context, emitted_at, horizon_bars FROM signals_old`)
+	if err != nil {
+		return fmt.Errorf("read signals_old: %w", err)
+	}
+	defer oldRows.Close()
+	for oldRows.Next() {
+		var (
+			s                      domainsignal.Signal
+			kind, ctxJSON, emitted string
+		)
+		if err := oldRows.Scan(
+			&s.ID, &kind, &s.Symbol, &s.Timeframe, &s.Label, &s.Score, &s.Price, &s.ATR,
+			&ctxJSON, &emitted, &s.HorizonBars,
+		); err != nil {
+			return fmt.Errorf("scan signals_old: %w", err)
+		}
+		at, parseErr := time.Parse(time.RFC3339Nano, emitted)
+		if parseErr != nil {
+			at, parseErr = time.Parse(time.RFC3339, emitted)
+		}
+		if parseErr != nil {
+			return fmt.Errorf("parse emitted_at %q: %w", emitted, parseErr)
+		}
+		if _, err := tx.Exec(`INSERT INTO signals
+			(id, kind, symbol, timeframe, label, score, price, atr, context, emitted_at, horizon_bars)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			s.ID, kind, s.Symbol, s.Timeframe, s.Label, s.Score, s.Price, s.ATR, ctxJSON,
+			at.UTC().UnixNano(), s.HorizonBars,
+		); err != nil {
+			return fmt.Errorf("insert migrated signal: %w", err)
+		}
+	}
+	if err := oldRows.Err(); err != nil {
+		return err
+	}
+
+	outRows, err := tx.Query(`SELECT signal_id, resolved_at, forward_return, max_favorable,
+		max_adverse, success, rule FROM outcomes_old`)
+	if err != nil {
+		return fmt.Errorf("read outcomes_old: %w", err)
+	}
+	defer outRows.Close()
+	for outRows.Next() {
+		var (
+			id, resolved, rule string
+			fwd, fav, adv      float64
+			success            int
+		)
+		if err := outRows.Scan(&id, &resolved, &fwd, &fav, &adv, &success, &rule); err != nil {
+			return fmt.Errorf("scan outcomes_old: %w", err)
+		}
+		at, parseErr := time.Parse(time.RFC3339Nano, resolved)
+		if parseErr != nil {
+			at, parseErr = time.Parse(time.RFC3339, resolved)
+		}
+		if parseErr != nil {
+			return fmt.Errorf("parse resolved_at %q: %w", resolved, parseErr)
+		}
+		if _, err := tx.Exec(`INSERT INTO outcomes
+			(signal_id, resolved_at, forward_return, max_favorable, max_adverse, success, rule)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id, at.UTC().UnixNano(), fwd, fav, adv, success, rule,
+		); err != nil {
+			return fmt.Errorf("insert migrated outcome: %w", err)
+		}
+	}
+	if err := outRows.Err(); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DROP TABLE signals_old`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE outcomes_old`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Append inserts a signal row.
@@ -125,7 +265,7 @@ func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) er
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, string(s.Kind), s.Symbol, s.Timeframe, s.Label,
 		s.Score, s.Price, s.ATR, string(ctxJSON),
-		s.EmittedAt.UTC().Format(time.RFC3339Nano), s.HorizonBars,
+		s.EmittedAt.UTC().UnixNano(), s.HorizonBars,
 	)
 	if err != nil {
 		return fmt.Errorf("insert signal: %w", err)
@@ -146,7 +286,7 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 		 WHERE o.signal_id IS NULL AND s.emitted_at < ?
 		 ORDER BY s.emitted_at ASC
 		 LIMIT ?`,
-		before.UTC().Format(time.RFC3339Nano), limit,
+		before.UTC().UnixNano(), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved: %w", err)
@@ -184,7 +324,7 @@ func (r *SQLiteRepository) MarkResolved(ctx context.Context, id string, outcome 
 		   success=excluded.success,
 		   rule=excluded.rule`,
 		signalID,
-		outcome.ResolvedAt.UTC().Format(time.RFC3339Nano),
+		outcome.ResolvedAt.UTC().UnixNano(),
 		outcome.ForwardReturn, outcome.MaxFavorable, outcome.MaxAdverse,
 		success, outcome.Rule,
 	)
@@ -218,11 +358,11 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	}
 	if !filter.Since.IsZero() {
 		conds = append(conds, "s.emitted_at >= ?")
-		args = append(args, filter.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, filter.Since.UTC().UnixNano())
 	}
 	if !filter.Until.IsZero() {
 		conds = append(conds, "s.emitted_at < ?")
-		args = append(args, filter.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, filter.Until.UTC().UnixNano())
 	}
 	where := ""
 	if len(conds) > 0 {
@@ -252,21 +392,23 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	var out []domainsignal.SignalWithOutcome
 	for rows.Next() {
 		var (
-			s                      domainsignal.Signal
-			kind, ctxJSON, emitted string
-			outID, resolved, rule  sql.NullString
-			fwd, fav, adv          sql.NullFloat64
-			success                sql.NullInt64
+			s             domainsignal.Signal
+			kind, ctxJSON string
+			emittedNS     int64
+			outID, rule   sql.NullString
+			resolvedNS    sql.NullInt64
+			fwd, fav, adv sql.NullFloat64
+			success       sql.NullInt64
 		)
 		if err := rows.Scan(
 			&s.ID, &kind, &s.Symbol, &s.Timeframe, &s.Label, &s.Score, &s.Price, &s.ATR,
-			&ctxJSON, &emitted, &s.HorizonBars,
-			&outID, &resolved, &fwd, &fav, &adv, &success, &rule,
+			&ctxJSON, &emittedNS, &s.HorizonBars,
+			&outID, &resolvedNS, &fwd, &fav, &adv, &success, &rule,
 		); err != nil {
 			return nil, fmt.Errorf("scan signal+outcome: %w", err)
 		}
 		s.Kind = domainsignal.Kind(kind)
-		s.EmittedAt, _ = time.Parse(time.RFC3339Nano, emitted)
+		s.EmittedAt = time.Unix(0, emittedNS).UTC()
 		_ = json.Unmarshal([]byte(ctxJSON), &s.Context)
 		row := domainsignal.SignalWithOutcome{Signal: s}
 		if outID.Valid {
@@ -278,8 +420,8 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 				Success:       success.Int64 != 0,
 				Rule:          rule.String,
 			}
-			if resolved.Valid {
-				oc.ResolvedAt, _ = time.Parse(time.RFC3339Nano, resolved.String)
+			if resolvedNS.Valid {
+				oc.ResolvedAt = time.Unix(0, resolvedNS.Int64).UTC()
 			}
 			row.Outcome = &oc
 		}
@@ -292,17 +434,18 @@ func scanSignals(rows *sql.Rows) ([]domainsignal.Signal, error) {
 	var out []domainsignal.Signal
 	for rows.Next() {
 		var (
-			s                      domainsignal.Signal
-			kind, ctxJSON, emitted string
+			s             domainsignal.Signal
+			kind, ctxJSON string
+			emittedNS     int64
 		)
 		if err := rows.Scan(
 			&s.ID, &kind, &s.Symbol, &s.Timeframe, &s.Label, &s.Score, &s.Price, &s.ATR,
-			&ctxJSON, &emitted, &s.HorizonBars,
+			&ctxJSON, &emittedNS, &s.HorizonBars,
 		); err != nil {
 			return nil, fmt.Errorf("scan signal: %w", err)
 		}
 		s.Kind = domainsignal.Kind(kind)
-		s.EmittedAt, _ = time.Parse(time.RFC3339Nano, emitted)
+		s.EmittedAt = time.Unix(0, emittedNS).UTC()
 		_ = json.Unmarshal([]byte(ctxJSON), &s.Context)
 		out = append(out, s)
 	}

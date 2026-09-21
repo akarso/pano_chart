@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -81,6 +82,52 @@ func TestSQLiteRepository_RoundTrip(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Outcome == nil || !rows[0].Outcome.Success {
 		t.Fatalf("query=%#v", rows)
+	}
+	if !rows[0].Signal.EmittedAt.Equal(at) {
+		t.Fatalf("emitted_at round-trip: got %v want %v", rows[0].Signal.EmittedAt, at)
+	}
+}
+
+func TestSQLiteRepository_ChronologicalOrderAcrossSubsecond(t *testing.T) {
+	// Regression: variable-width RFC3339Nano text ordered "…00Z" after "…00.1Z".
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 3, 1, 12, 0, 0, 100_000_000, time.UTC) // +100ms
+	for i, at := range []time.Time{t1, t0} {                     // insert later first
+		if err := repo.Append(context.Background(), domainsignal.Signal{
+			ID: fmt.Sprintf("s%d", i), Kind: domainsignal.KindBadge,
+			Symbol: "BTCUSDT", Timeframe: "1h", Label: "trend_up",
+			Score: 1, Price: 1, ATR: 1, EmittedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := repo.Query(context.Background(), domainsignal.Filter{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("len=%d", len(rows))
+	}
+	// DESC: newest first
+	if !rows[0].Signal.EmittedAt.Equal(t1) || !rows[1].Signal.EmittedAt.Equal(t0) {
+		t.Fatalf("order=%v %v", rows[0].Signal.EmittedAt, rows[1].Signal.EmittedAt)
+	}
+	before := t1
+	unresolved, err := repo.Unresolved(context.Background(), before, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unresolved) != 1 || !unresolved[0].EmittedAt.Equal(t0) {
+		t.Fatalf("unresolved before t1: %#v", unresolved)
 	}
 }
 
@@ -214,7 +261,7 @@ func TestEmitter_CanceledContextStillPersists(t *testing.T) {
 	}
 }
 
-func TestEmitter_SkipsZeroPriceATR(t *testing.T) {
+func TestEmitter_SkipsZeroPrice(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +277,29 @@ func TestEmitter_SkipsZeroPriceATR(t *testing.T) {
 		Label: "trend_up", Score: 0.9, Price: 0, ATR: 1,
 	}) {
 		t.Fatal("expected skip on price<=0")
+	}
+}
+
+func TestEmitter_AllowsZeroATR(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	em := appsignal.NewEmitter(repo)
+	if !em.Emit(context.Background(), domainsignal.Signal{
+		Kind: domainsignal.KindBadge, Symbol: "BTCUSDT", Timeframe: "1h",
+		Label: "sideways", Score: 0.9, Price: 100, ATR: 0,
+	}) {
+		t.Fatal("flat series ATR=0 must still persist")
+	}
+	rows, err := repo.Query(context.Background(), domainsignal.Filter{Limit: 5})
+	if err != nil || len(rows) != 1 || rows[0].Signal.ATR != 0 {
+		t.Fatalf("got %#v err=%v", rows, err)
 	}
 }
 
