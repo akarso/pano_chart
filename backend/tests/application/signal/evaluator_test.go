@@ -3,6 +3,7 @@ package signal_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,7 +296,7 @@ func TestEvaluator_sharedBudgetCapsInvalidPlusReady(t *testing.T) {
 			EmittedAt: emitted, HorizonBars: 1,
 		})
 	}
-	// Ready unsupported that would resolve without path — must wait if budget spent.
+	// Ready path-independent signal — must still grade despite invalid backlog.
 	_ = repo.Append(context.Background(), domainsignal.Signal{
 		ID: "gain-ready", Kind: domainsignal.KindBadge, Symbol: "BTCUSDT", Timeframe: "1h",
 		Label: "gain", Price: 1, ATR: 1, EmittedAt: emitted, HorizonBars: 1,
@@ -306,8 +307,18 @@ func TestEvaluator_sharedBudgetCapsInvalidPlusReady(t *testing.T) {
 	if n != appsignal.MaxPerTick {
 		t.Fatalf("resolved=%d want %d", n, appsignal.MaxPerTick)
 	}
-	if _, ok := repo.outcomes["gain-ready"]; ok {
-		t.Fatal("ready row must not exceed shared MaxPerTick with invalid drain")
+	if _, ok := repo.outcomes["gain-ready"]; !ok {
+		t.Fatal("ready reserve must grade horizon-elapsed signals despite invalid backlog")
+	}
+	// Invalid first pass is capped at MaxPerTick/2; remainder after ready fills invalid.
+	invalidN := 0
+	for id, oc := range repo.outcomes {
+		if strings.HasPrefix(id, "bad-") && oc.Rule == domainsignal.RuleInvalid {
+			invalidN++
+		}
+	}
+	if invalidN != appsignal.MaxPerTick-1 {
+		t.Fatalf("invalid resolved=%d want %d", invalidN, appsignal.MaxPerTick-1)
 	}
 }
 
@@ -557,5 +568,50 @@ func TestSQLite_UnresolvedInvalidTF(t *testing.T) {
 	}
 	if len(inv) != 1 || inv[0].ID != "bad" {
 		t.Fatalf("invalid=%v", inv)
+	}
+}
+
+func TestSQLite_timeframeNormalization(t *testing.T) {
+	dbPath := t.TempDir() + "/tf.sqlite"
+	repo, err := infrasignal.NewSQLiteRepository(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// Domain-valid but non-canonical spellings must not be treated as invalid.
+	for _, tc := range []struct {
+		id, tf string
+	}{
+		{"h1", "1H"},
+		{"m15", " 15m "},
+	} {
+		if err := repo.Append(context.Background(), domainsignal.Signal{
+			ID: tc.id, Kind: domainsignal.KindBadge, Symbol: "BTCUSDT",
+			Timeframe: tc.tf, Label: "gain", Price: 1, ATR: 1,
+			EmittedAt: emitted, HorizonBars: 2,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv, err := repo.UnresolvedInvalidTF(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv) != 0 {
+		t.Fatalf("canonical-valid TFs must not be invalid: %v", inv)
+	}
+	now := emitted.Add(3 * time.Hour)
+	ready, err := repo.UnresolvedReady(context.Background(), now, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ready) != 2 {
+		t.Fatalf("ready=%v want 2", ready)
+	}
+	for _, s := range ready {
+		if s.Timeframe != "1h" && s.Timeframe != "15m" {
+			t.Fatalf("stored tf=%q want canonical", s.Timeframe)
+		}
 	}
 }

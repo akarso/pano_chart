@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"pano_chart/backend/domain"
 	domainsignal "pano_chart/backend/domain/signal"
 )
 
@@ -250,7 +251,8 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	return tx.Commit()
 }
 
-// Append inserts a signal row.
+// Append inserts a signal row. Timeframe is stored in canonical form when
+// domain-valid (trim+lower), matching UnresolvedReady SQL and HorizonEnd.
 func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) error {
 	ctxJSON, err := json.Marshal(s.Context)
 	if err != nil {
@@ -259,11 +261,12 @@ func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) er
 	if ctxJSON == nil {
 		ctxJSON = []byte("{}")
 	}
+	tf := canonicalTimeframe(s.Timeframe)
 	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO signals
 		 (id, kind, symbol, timeframe, label, score, price, atr, context, emitted_at, horizon_bars)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, string(s.Kind), s.Symbol, s.Timeframe, s.Label,
+		s.ID, string(s.Kind), s.Symbol, tf, s.Label,
 		s.Score, s.Price, s.ATR, string(ctxJSON),
 		s.EmittedAt.UTC().UnixNano(), s.HorizonBars,
 	)
@@ -271,6 +274,15 @@ func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) er
 		return fmt.Errorf("insert signal: %w", err)
 	}
 	return nil
+}
+
+// canonicalTimeframe mirrors domain.NewTimeframe normalization for storage.
+// Invalid values are trim+lowered so SQL CASE stays consistent with HorizonEnd.
+func canonicalTimeframe(s string) string {
+	if tf, err := domain.NewTimeframe(s); err == nil {
+		return tf.String()
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // Unresolved returns signals emitted before `before` with no outcome row.
@@ -296,8 +308,9 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 }
 
 // tfDurationNS maps timeframe strings to nanoseconds (matches domain.Timeframe.Duration).
+// Uses lower(trim(...)) so values like "1H" / " 15m " match domain.NewTimeframe.
 // Unknown TFs yield NULL → excluded from UnresolvedReady (never become ready).
-const tfDurationNSExpr = `CASE s.timeframe
+const tfDurationNSExpr = `CASE lower(trim(s.timeframe))
 	WHEN '1m'  THEN 60000000000
 	WHEN '5m'  THEN 300000000000
 	WHEN '15m' THEN 900000000000

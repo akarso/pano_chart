@@ -118,24 +118,29 @@ func (e *Evaluator) Run(ctx context.Context) {
 	}
 }
 
-// Tick resolves up to MaxPerTick signals (invalid-TF drain + ready grading
-// share one budget).
+// Tick resolves up to MaxPerTick signals. Invalid-TF drain and ready grading
+// share the budget with a ready reserve so a large invalid backlog cannot
+// starve horizon-elapsed signals for a full tick.
 func (e *Evaluator) Tick(ctx context.Context) int {
 	if e == nil || e.repo == nil {
 		return 0
 	}
 	now := e.now().UTC()
-	budget := MaxPerTick
 
-	n := e.resolveInvalid(ctx, now, budget)
-	budget -= n
-	if budget <= 0 || ctx.Err() != nil {
+	// Cap the first invalid pass at half the tick; unused capacity rolls to ready.
+	invalidFirst := MaxPerTick / 2
+	n := e.resolveInvalid(ctx, now, invalidFirst)
+	if ctx.Err() != nil {
 		e.logResolved(n)
 		return n
 	}
 
-	m := e.resolveReady(ctx, now, budget)
+	m := e.resolveReady(ctx, now, MaxPerTick-n)
 	total := n + m
+	if rem := MaxPerTick - total; rem > 0 && ctx.Err() == nil {
+		// Leftover after ready goes back to invalid drain.
+		total += e.resolveInvalid(ctx, now, rem)
+	}
 	e.logResolved(total)
 	return total
 }
