@@ -104,11 +104,15 @@ func TestGetEvents_SuccessAfterHold_ClearsHoldAndUsesNormalTTL(t *testing.T) {
 	}
 }
 
-// TestGetEvents_Canceled_DoesNotInstallEmptyHold.
-func TestGetEvents_Canceled_DoesNotInstallEmptyHold(t *testing.T) {
-	provider := &fakeEventProvider{err: context.Canceled}
+// TestGetEvents_ClientTimeout_DeadlineExceeded_InstallsHold covers the real
+// FinanceFlowClient blip mode: http.Client.Timeout surfaces as a wrapped
+// context.DeadlineExceeded and MUST arm an error hold (not skip it).
+func TestGetEvents_ClientTimeout_DeadlineExceeded_InstallsHold(t *testing.T) {
+	provider := &fakeEventProvider{
+		err: fmt.Errorf("financeflow request failed: Get \"https://example\": %w", context.DeadlineExceeded),
+	}
 	uc := usecases.NewGetEvents(provider)
-	uc.SetErrorBackoff(time.Hour) // would hide a bug for a long time
+	uc.SetErrorBackoff(time.Minute)
 
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	uc.SetNow(func() time.Time { return now })
@@ -124,15 +128,57 @@ func TestGetEvents_Canceled_DoesNotInstallEmptyHold(t *testing.T) {
 		t.Fatalf("expected 1 call, got %d", provider.calls)
 	}
 
-	// Immediate next Execute must hit the provider again (no empty hold).
-	provider.err = fmt.Errorf("still down")
+	now = now.Add(30 * time.Second)
 	_, _ = uc.Execute(context.Background(), req)
-	if provider.calls != 2 {
-		t.Fatalf("cancel must not install empty hold; expected 2 calls, got %d", provider.calls)
+	if provider.calls != 1 {
+		t.Fatalf("DeadlineExceeded (Client.Timeout) must install hold; got %d calls", provider.calls)
 	}
 }
 
-// TestGetEvents_PastRangeColdFail_RetriesAtErrorBackoffNotPastTTL.
+// TestGetEvents_LRU_HotKeySurvivesEvictionPressure: scheduler soft-hits keep
+// lastAccess fresh so API date-scanning cannot thrash the hot key out.
+func TestGetEvents_LRU_HotKeySurvivesEvictionPressure(t *testing.T) {
+	provider := &fakeEventProvider{err: fmt.Errorf("503")}
+	uc := usecases.NewGetEvents(provider)
+	uc.SetErrorBackoff(time.Hour)
+	uc.SetMaxEntries(3)
+
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	uc.SetNow(func() time.Time { return now })
+
+	hot := usecases.GetEventsRequest{
+		DateFrom: now.Truncate(24 * time.Hour),
+		DateTo:   now.Add(24 * time.Hour),
+		Country:  "United States",
+	}
+	_, _ = uc.Execute(context.Background(), hot) // installs empty hold on hot key
+	if provider.calls != 1 {
+		t.Fatalf("hot seed: %d", provider.calls)
+	}
+
+	// Interleave cold API scans with scheduler soft-hits (1/min in prod).
+	for i := 0; i < 5; i++ {
+		now = now.Add(time.Second)
+		cold := usecases.GetEventsRequest{
+			DateFrom: now.AddDate(0, 0, -10-i).Truncate(24 * time.Hour),
+			DateTo:   now.AddDate(0, 0, -9-i).Truncate(24 * time.Hour),
+			Country:  "China",
+		}
+		_, _ = uc.Execute(context.Background(), cold)
+
+		now = now.Add(time.Second)
+		_, _ = uc.Execute(context.Background(), hot) // bumps lastAccess
+	}
+
+	callsBefore := provider.calls
+	now = now.Add(time.Second)
+	_, _ = uc.Execute(context.Background(), hot)
+	if provider.calls != callsBefore {
+		t.Fatalf("hot US key was evicted under churn (calls %d → %d); LRU lastAccess must protect it",
+			callsBefore, provider.calls)
+	}
+}
+
 func TestGetEvents_PastRangeColdFail_RetriesAtErrorBackoffNotPastTTL(t *testing.T) {
 	provider := &fakeEventProvider{err: fmt.Errorf("timeout")}
 	uc := usecases.NewGetEvents(provider)
@@ -166,7 +212,9 @@ func TestGetEvents_PastRangeColdFail_RetriesAtErrorBackoffNotPastTTL(t *testing.
 	}
 }
 
-// TestGetEvents_StaleTTLExpire_BacksOffThenServesStale.
+// TestGetEvents_StaleTTLExpire_BacksOffThenServesStale covers the production
+// scheduler path: seed → TTL expire → fail (stale+hold) → past hold → fail
+// again must still serve the last known events (not wipe into empty hold).
 func TestGetEvents_StaleTTLExpire_BacksOffThenServesStale(t *testing.T) {
 	ts := time.Date(2025, 3, 3, 14, 45, 0, 0, time.UTC)
 	provider := &fakeEventProvider{
@@ -208,6 +256,29 @@ func TestGetEvents_StaleTTLExpire_BacksOffThenServesStale(t *testing.T) {
 	}
 	if provider.calls != 2 {
 		t.Fatalf("hold must suppress ticks, got %d", provider.calls)
+	}
+
+	// Hold elapsed + second failure: must re-arm on the same CPI payload,
+	// not install an empty negative cache (hold-expiry must not delete warm entries).
+	now = now.Add(time.Minute)
+	events, err = uc.Execute(context.Background(), req)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("second fail after hold: want stale CPI, err=%v len=%d", err, len(events))
+	}
+	if provider.calls != 3 {
+		t.Fatalf("expected second fail fetch, got %d", provider.calls)
+	}
+	if events[0].Title() != "CPI" {
+		t.Fatalf("expected CPI stale, got %q", events[0].Title())
+	}
+
+	now = now.Add(30 * time.Second)
+	events, err = uc.Execute(context.Background(), req)
+	if err != nil || len(events) != 1 || events[0].Title() != "CPI" {
+		t.Fatalf("soft-hit after second hold must still serve CPI: err=%v len=%d", err, len(events))
+	}
+	if provider.calls != 3 {
+		t.Fatalf("second hold must suppress, got %d", provider.calls)
 	}
 }
 

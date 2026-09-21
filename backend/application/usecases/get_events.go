@@ -2,7 +2,6 @@ package usecases
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -39,6 +38,8 @@ type cacheEntry struct {
 	// (force revalidation) — the entry is never treated as a successful
 	// fetch for the normal upcoming/past TTL. See PR-114.
 	errorHoldUntil time.Time
+	// lastAccess is bumped on soft-hit and successful write; eviction is LRU.
+	lastAccess time.Time
 }
 
 // DefaultEventsCacheMaxEntries bounds in-memory cache keys (public HTTP can
@@ -58,7 +59,7 @@ type GetEvents struct {
 	errorBackoff time.Duration
 	maxEntries   int
 
-	// now is injectable for tests; nil → time.Now.
+	// now is injectable for tests; nil → time.Now. Guarded by mu when set.
 	now func() time.Time
 }
 
@@ -74,24 +75,50 @@ func NewGetEvents(provider ports.EventProviderPort) *GetEvents {
 	}
 }
 
-// SetErrorBackoff overrides the post-failure hold duration. Used by tests;
-// zero or negative values are ignored.
+// SetErrorBackoff overrides the post-failure hold duration. Test-only;
+// zero or negative values are ignored. Synchronized with Execute.
 func (g *GetEvents) SetErrorBackoff(d time.Duration) {
-	if d > 0 {
-		g.errorBackoff = d
+	if d <= 0 {
+		return
 	}
+	g.mu.Lock()
+	g.errorBackoff = d
+	g.mu.Unlock()
 }
 
 // SetNow overrides the clock (tests). Pass nil to restore time.Now.
+// Synchronized with Execute.
 func (g *GetEvents) SetNow(fn func() time.Time) {
+	g.mu.Lock()
 	g.now = fn
+	g.mu.Unlock()
+}
+
+// SetMaxEntries overrides the in-memory cache cap (tests).
+func (g *GetEvents) SetMaxEntries(n int) {
+	if n <= 0 {
+		return
+	}
+	g.mu.Lock()
+	g.maxEntries = n
+	g.mu.Unlock()
 }
 
 func (g *GetEvents) clock() time.Time {
-	if g.now != nil {
-		return g.now()
+	g.mu.RLock()
+	fn := g.now
+	g.mu.RUnlock()
+	if fn != nil {
+		return fn()
 	}
 	return time.Now()
+}
+
+func (g *GetEvents) backoff() time.Duration {
+	g.mu.RLock()
+	d := g.errorBackoff
+	g.mu.RUnlock()
+	return d
 }
 
 // eventsFlightResult is the singleflight payload for Execute.
@@ -118,6 +145,9 @@ func (g *GetEvents) Execute(ctx context.Context, req GetEventsRequest) ([]domain
 
 		// Detach from any single caller's cancel so one aborted HTTP client
 		// cannot abort (or poison) a shared FinanceFlow fetch for siblings.
+		// http.Client.Timeout on FinanceFlowClient still applies and surfaces
+		// as (wrapped) context.DeadlineExceeded — that IS an upstream blip
+		// and must arm an error hold (PR-114 review).
 		workCtx := context.WithoutCancel(ctx)
 
 		log.Printf("[Events] cache miss for %s, fetching…", key)
@@ -132,16 +162,16 @@ func (g *GetEvents) Execute(ctx context.Context, req GetEventsRequest) ([]domain
 
 	select {
 	case <-ctx.Done():
-		// Caller cancelled — do not install/extend holds. Serve stale if any.
+		// Caller aborted while waiting — do not write a hold here. The shared
+		// flight may still complete and cache for siblings (by design).
 		if entry := g.getStaleCached(key); entry != nil {
-			log.Printf("[Events] caller canceled for %s, serving stale without hold", key)
+			log.Printf("[Events] caller canceled for %s, serving stale without hold write", key)
 			return filterEvents(entry, req.Impact), nil
 		}
-		log.Printf("[Events] caller canceled for %s, empty (no hold)", key)
+		log.Printf("[Events] caller canceled for %s, empty (no hold write)", key)
 		return []domain.Event{}, nil
 	case res := <-ch:
 		if res.Err != nil {
-			// Unexpected: handleFetchError returns soft results, not errors.
 			log.Printf("[Events] flight error for %s: %v", key, res.Err)
 			return []domain.Event{}, nil
 		}
@@ -151,20 +181,13 @@ func (g *GetEvents) Execute(ctx context.Context, req GetEventsRequest) ([]domain
 }
 
 func (g *GetEvents) handleFetchError(key string, req GetEventsRequest, err error) (interface{}, error) {
-	// Never install or extend holds for local cancellation / deadlines —
-	// those are client-side, not FinanceFlow pain (PR-114 review).
-	if isCallerAbort(err) {
-		log.Printf("[Events] fetch aborted (no hold) for %s: %v", key, err)
-		if entry := g.getStaleCached(key); entry != nil {
-			return eventsFlightResult{events: entry.events}, nil
-		}
-		return eventsFlightResult{}, nil
-	}
-
+	// All provider errors arm a hold — including wrapped DeadlineExceeded from
+	// http.Client.Timeout (the common FinanceFlow blip). Caller abort is handled
+	// only by Execute's select on ctx.Done(), not here.
 	log.Printf("[Events] upstream fetch error for %s: %v", key, err)
 	if entry := g.getStaleCached(key); entry != nil {
 		if g.holdOnError(key, req.DateFrom, req.DateTo) {
-			log.Printf("[Events] error-hold soft-hit armed for %s (%s)", key, g.errorBackoff)
+			log.Printf("[Events] error-hold soft-hit armed for %s (%s)", key, g.backoff())
 		} else {
 			log.Printf("[Events] serving fresher cache after failed fetch (no hold) for %s", key)
 		}
@@ -172,12 +195,8 @@ func (g *GetEvents) handleFetchError(key string, req GetEventsRequest, err error
 	}
 
 	g.putCacheWithErrorHold(key, nil, req.DateFrom, req.DateTo)
-	log.Printf("[Events] empty negative-cache hold for %s (%s)", key, g.errorBackoff)
+	log.Printf("[Events] empty negative-cache hold for %s (%s)", key, g.backoff())
 	return eventsFlightResult{}, nil
-}
-
-func isCallerAbort(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (g *GetEvents) logCacheHit(key string, entry *cacheEntry) {
@@ -194,21 +213,30 @@ func (g *GetEvents) logCacheHit(key string, entry *cacheEntry) {
 }
 
 // getCached returns cached events if the entry is still valid.
+// Soft-hits bump lastAccess (LRU). Hold expiry clears the hold and returns
+// nil (revalidate) but keeps a warm entry for getStaleCached — same as
+// success TTL expiry. Empty negative-cache entries are deleted on hold expiry.
 func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntry {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
 
 	entry, ok := g.cache[key]
 	if !ok {
 		return nil
 	}
 
-	now := g.clock()
+	now := g.clockLocked()
 	if !entry.errorHoldUntil.IsZero() {
 		if now.Before(entry.errorHoldUntil) {
+			entry.lastAccess = now
 			return entry
 		}
-		// Hold elapsed → force revalidation (do not fall through to normal TTL).
+		// Hold elapsed → force revalidation. Keep non-empty entries so a
+		// subsequent fail can re-arm holdOnError on the last known events.
+		entry.errorHoldUntil = time.Time{}
+		if len(entry.events) == 0 {
+			delete(g.cache, key)
+		}
 		return nil
 	}
 
@@ -216,6 +244,7 @@ func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntr
 	if now.Sub(entry.fetchedAt) > ttl {
 		return nil
 	}
+	entry.lastAccess = now
 	return entry
 }
 
@@ -229,12 +258,13 @@ func (g *GetEvents) putCache(key string, events []domain.Event, dateFrom, dateTo
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	now := g.clockLocked()
 	g.cache[key] = &cacheEntry{
-		events:    events,
-		fetchedAt: g.clock(),
-		dateFrom:  dateFrom,
-		dateTo:    dateTo,
-		// errorHoldUntil left zero — clears any prior hold by replacement
+		events:     events,
+		fetchedAt:  now,
+		dateFrom:   dateFrom,
+		dateTo:     dateTo,
+		lastAccess: now,
 	}
 	g.evictIfNeededLocked()
 }
@@ -243,7 +273,7 @@ func (g *GetEvents) putCacheWithErrorHold(key string, events []domain.Event, dat
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	now := g.clock()
+	now := g.clockLocked()
 	// fetchedAt is already past any normal TTL so after errorHoldUntil
 	// elapses, getCached returns nil (retry at errorBackoff, not pastTTL).
 	g.cache[key] = &cacheEntry{
@@ -252,13 +282,13 @@ func (g *GetEvents) putCacheWithErrorHold(key string, events []domain.Event, dat
 		dateFrom:       dateFrom,
 		dateTo:         dateTo,
 		errorHoldUntil: now.Add(g.errorBackoff),
+		lastAccess:     now,
 	}
 	g.evictIfNeededLocked()
 }
 
 // holdOnError arms an error hold on an existing entry. Returns false if the
-// entry looks like a racing successful refresh (warm, no hold) — in that
-// case we must not block proactive refresh for errorBackoff.
+// entry looks like a racing successful refresh (warm, no hold).
 func (g *GetEvents) holdOnError(key string, dateFrom, dateTo time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -267,16 +297,22 @@ func (g *GetEvents) holdOnError(key string, dateFrom, dateTo time.Time) bool {
 	if !ok {
 		return false
 	}
-	now := g.clock()
+	now := g.clockLocked()
 	ttl := g.ttlForAt(dateFrom, dateTo, now)
 	if entry.errorHoldUntil.IsZero() && now.Sub(entry.fetchedAt) <= ttl {
-		// Fresher success won the race — leave it alone.
 		return false
 	}
 	entry.errorHoldUntil = now.Add(g.errorBackoff)
-	// Ensure post-hold path cannot soft-hit via normal TTL.
 	entry.fetchedAt = now.Add(-ttl - time.Second)
+	entry.lastAccess = now
 	return true
+}
+
+func (g *GetEvents) clockLocked() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
 }
 
 func (g *GetEvents) evictIfNeededLocked() {
@@ -289,9 +325,9 @@ func (g *GetEvents) evictIfNeededLocked() {
 		var oldest time.Time
 		first := true
 		for k, e := range g.cache {
-			score := e.fetchedAt
-			if e.errorHoldUntil.After(score) {
-				score = e.errorHoldUntil
+			score := e.lastAccess
+			if score.IsZero() {
+				score = e.fetchedAt
 			}
 			if first || score.Before(oldest) {
 				oldest = score

@@ -36,17 +36,21 @@ suppresses the scheduler.
 - Observed production: some days ~50 calls, some days ~1440 after a mid-day blip.
 
 **Spec (contract).**
-1. Upstream error (not cancel/deadline): arm **15m** `errorHoldUntil`. Soft-hit until then.
-2. After hold elapses: **force revalidation** (`getCached` → nil). Never fall through to
-   success TTL on an error-path entry (empty or stale). Ceiling ≈ `24×60/15 ≈ 96`
-   scheduler calls/day/key during a full-day outage — not 1440, not “15m then 30m more.”
-3. `context.Canceled` / `DeadlineExceeded`: no hold install/extend.
-4. Singleflight per cache key; max 256 in-memory keys (evict oldest).
+1. Upstream error (**including** `http.Client.Timeout` → wrapped `DeadlineExceeded`):
+   arm **15m** `errorHoldUntil`. Soft-hit until then.
+2. After hold elapses: **force revalidation** (`getCached` clears hold → nil) but **keep**
+   warm entries for stale fallback. Never fall through to success TTL; never wipe into
+   empty hold on a second fail. Ceiling ≈ `24×60/15 ≈ 96` scheduler calls/day/key
+   during a full-day outage — not 1440.
+3. **No hold write** only for cancelled **waiters** on `Execute` (`ctx.Done()`). Do **not**
+   treat provider `DeadlineExceeded` as no-hold — that is the Client.Timeout blip path.
+4. Singleflight per cache key; max 256 entries; **LRU by lastAccess** (bump on soft-hit).
 5. HTTP: max 31-day span; countries allowlisted (US / Euro Area / China).
 
 **Tests.** `tests/application/usecases/get_events_backoff_test.go` (fake clock + short
-backoff): hold expiry refetch; success clears hold; cancel no empty insert; past-range
-cold fail retries at backoff not 6h; singleflight. Handler tests for span/country rejection.
+backoff): hold expiry refetch; success clears hold; wrapped DeadlineExceeded holds;
+past-range cold fail retries at backoff not 6h; stale survives second hold failure;
+LRU hot-key survival; singleflight. Handler tests for span/country rejection.
 
 **Definition of Done.** Spec tests pass; PR doc (`backend/docs/v2/PR-114.md`) matches this
 contract (prefer the PR doc for implementation detail; keep this section short).
