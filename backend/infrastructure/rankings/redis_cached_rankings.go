@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -19,11 +20,15 @@ type RedisClient interface {
 // RedisCachedRankings is a decorator that caches RankingsUseCase results in Redis.
 // The full sorted result is cached per timeframe+sort combination.
 // Pagination is NOT cached — it is applied after retrieval by the handler.
+//
+// On cache hits, badge signals are re-emitted so a multi-candle TTL does not
+// skip Track B logging (dedupe suppresses same-candle duplicates).
 type RedisCachedRankings struct {
-	next      usecases.RankingsUseCase
-	redis     RedisClient
-	ttl       time.Duration
-	keyPrefix string
+	next          usecases.RankingsUseCase
+	redis         RedisClient
+	ttl           time.Duration
+	keyPrefix     string
+	signalEmitter ports.SignalEmitter // optional — PR-090
 }
 
 // NewRedisCachedRankings constructs the decorator.
@@ -34,6 +39,11 @@ func NewRedisCachedRankings(next usecases.RankingsUseCase, redis RedisClient, tt
 		ttl:       ttl,
 		keyPrefix: keyPrefix,
 	}
+}
+
+// SetSignalEmitter attaches an optional signal logger for cache-hit badge emits.
+func (r *RedisCachedRankings) SetSignalEmitter(e ports.SignalEmitter) {
+	r.signalEmitter = e
 }
 
 // Execute implements RankingsUseCase.
@@ -47,12 +57,15 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 		if unmarshalErr := json.Unmarshal([]byte(cached), &items); unmarshalErr == nil {
 			out, convErr := fromCached(items)
 			if convErr == nil {
+				// Cache hit bypasses GetRankings.Execute — still log badges for
+				// the current candle (Emitter bar-dedupes repeats).
+				usecases.EmitBadgeSignals(ctx, r.signalEmitter, req.Timeframe.String(), out)
 				return out, nil
 			}
 		}
 	}
 
-	// 2. Cache miss — call underlying use case
+	// 2. Cache miss — call underlying use case (emits badges itself)
 	results, err := r.next.Execute(ctx, req)
 	if err != nil {
 		return nil, err
@@ -90,6 +103,8 @@ type cachedRankedResult struct {
 	MaxPercentile      float64            `json:"maxPercentile"`
 	DominantComponent  string             `json:"dominantComponent"`
 	BadgeComponent     string             `json:"badgeComponent"`
+	SignalPrice        float64            `json:"signalPrice,omitempty"`
+	SignalATR          float64            `json:"signalATR,omitempty"`
 }
 
 func toCached(results []usecases.RankedResult) []cachedRankedResult {
@@ -108,6 +123,8 @@ func toCached(results []usecases.RankedResult) []cachedRankedResult {
 			MaxPercentile:      r.MaxPercentile,
 			DominantComponent:  r.DominantComponent,
 			BadgeComponent:     r.BadgeComponent,
+			SignalPrice:        r.SignalPrice,
+			SignalATR:          r.SignalATR,
 		}
 	}
 	return out
@@ -133,6 +150,8 @@ func fromCached(items []cachedRankedResult) ([]usecases.RankedResult, error) {
 			MaxPercentile:      c.MaxPercentile,
 			DominantComponent:  c.DominantComponent,
 			BadgeComponent:     c.BadgeComponent,
+			SignalPrice:        c.SignalPrice,
+			SignalATR:          c.SignalATR,
 		}
 	}
 	return out, nil

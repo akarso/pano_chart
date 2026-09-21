@@ -24,7 +24,7 @@ func BuildSnapshot(
 	now := time.Now().UTC()
 
 	price := lastClose(series)
-	atr := simpleATR(series, 14)
+	atr := SimpleATR(series, 14)
 
 	return domain.EvaluationSnapshot{
 		Timestamp:         now,
@@ -53,9 +53,9 @@ func lastClose(series domain.CandleSeries) float64 {
 	return c.Close()
 }
 
-// simpleATR computes a simple ATR (average true range) over the last n candles.
-// Returns 0 if insufficient data.
-func simpleATR(series domain.CandleSeries, n int) float64 {
+// SimpleATR computes a simple ATR (average true range) over the last n candles.
+// Returns 0 if insufficient data. Shared by rankings badge logging and setups.
+func SimpleATR(series domain.CandleSeries, n int) float64 {
 	length := series.Len()
 	if length < 2 || n <= 0 {
 		return 0

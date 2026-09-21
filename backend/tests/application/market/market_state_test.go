@@ -3,12 +3,16 @@ package market_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	adhttp "pano_chart/backend/adapters/http"
 	appmarket "pano_chart/backend/application/market"
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -311,6 +315,46 @@ func TestMarketHandler_JSONFields(t *testing.T) {
 	symbolCount := resp["symbolCount"].(float64)
 	if symbolCount != 3 {
 		t.Errorf("expected symbolCount 3, got %v", symbolCount)
+	}
+}
+
+func TestMarketHandler_StoreUnavailableStableError(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		err: fmt.Errorf("%w: redis: connection refused", ports.ErrEvaluationStoreUnavailable),
+	})
+	h := adhttp.NewMarketHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/state?timeframe=1h", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body != `{"error":"evaluation store unavailable"}` {
+		t.Fatalf("stable client message, got %q", body)
+	}
+	if strings.Contains(body, "redis") {
+		t.Fatalf("must not leak transport strings: %q", body)
+	}
+}
+
+func TestMarketHandler_OtherErrorIsInternal(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		err: errors.New("redis: AUTH failed secret=hunter2"),
+	})
+	h := adhttp.NewMarketHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/state", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", rec.Code)
+	}
+	body := strings.TrimSpace(rec.Body.String())
+	if body != `{"error":"internal error"}` {
+		t.Fatalf("expected internal error, got %q", body)
+	}
+	if strings.Contains(body, "redis") || strings.Contains(body, "hunter2") {
+		t.Fatalf("must not leak error strings: %q", body)
 	}
 }
 

@@ -2,10 +2,12 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 
 	appmarket "pano_chart/backend/application/market"
+	"pano_chart/backend/application/ports"
 )
 
 // MarketHandler handles GET /api/market/state requests.
@@ -50,7 +52,11 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := h.service.Calculate(r.Context(), tf)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		msg := "internal error"
+		if errors.Is(err, ports.ErrEvaluationStoreUnavailable) {
+			msg = "evaluation store unavailable"
+		}
+		http.Error(w, `{"error":"`+msg+`"}`, http.StatusInternalServerError)
 		return
 	}
 

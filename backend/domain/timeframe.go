@@ -55,6 +55,14 @@ func (tf Timeframe) String() string {
 	return string(tf)
 }
 
+// AllTimeframes returns every supported timeframe in ascending duration order.
+func AllTimeframes() []Timeframe {
+	return []Timeframe{
+		Timeframe1m, Timeframe5m, Timeframe15m,
+		Timeframe1h, Timeframe4h, Timeframe1d,
+	}
+}
+
 // Duration returns the time.Duration equivalent of the Timeframe.
 func (tf Timeframe) Duration() time.Duration {
 	switch tf {

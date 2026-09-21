@@ -198,7 +198,7 @@ func TestTracker_firstObservation(t *testing.T) {
 	repo := newTestRepo(t)
 	tracker := regimehistory.NewTracker(repo)
 
-	err := tracker.Update("4h", mkt.RegimeCompression, 1000)
+	err := tracker.Update("4h", mkt.RegimeCompression, "", 1000)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -221,9 +221,9 @@ func TestTracker_sameRegimeIncrementsDuration(t *testing.T) {
 	tracker := regimehistory.NewTracker(repo)
 
 	// Each timestamp must cross a 4h candle boundary (14400s) to increment.
-	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 28800)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 43200)
 
 	latest, _ := repo.GetLatest("4h")
 	if latest.DurationCandles != 3 {
@@ -235,9 +235,9 @@ func TestTracker_duplicateCallWithinSameBoundaryIsNoop(t *testing.T) {
 	repo := newTestRepo(t)
 	tracker := regimehistory.NewTracker(repo)
 
-	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 14401) // same 4h boundary
-	_ = tracker.Update("4h", mkt.RegimeTrend, 14500) // same 4h boundary
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 14401) // same 4h boundary
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 14500) // same 4h boundary
 
 	latest, _ := repo.GetLatest("4h")
 	if latest.DurationCandles != 1 {
@@ -250,9 +250,9 @@ func TestTracker_regimeChangeClosesAndOpensNew(t *testing.T) {
 	tracker := regimehistory.NewTracker(repo)
 
 	// Timestamps cross 4h boundaries (14400s each).
-	_ = tracker.Update("4h", mkt.RegimeCompression, 14400)
-	_ = tracker.Update("4h", mkt.RegimeCompression, 28800)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
+	_ = tracker.Update("4h", mkt.RegimeCompression, "", 14400)
+	_ = tracker.Update("4h", mkt.RegimeCompression, "", 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 43200)
 
 	periods, _ := repo.GetHistory("4h", 50)
 	if len(periods) != 2 {
@@ -299,9 +299,9 @@ func TestService_GetHistory(t *testing.T) {
 
 	// Add some history with timestamps crossing 4h boundaries.
 	tracker := regimehistory.NewTracker(repo)
-	_ = tracker.Update("4h", mkt.RegimeSideways, 14400)
-	_ = tracker.Update("4h", mkt.RegimeSideways, 28800)
-	_ = tracker.Update("4h", mkt.RegimeCompression, 43200)
+	_ = tracker.Update("4h", mkt.RegimeSideways, "", 14400)
+	_ = tracker.Update("4h", mkt.RegimeSideways, "", 28800)
+	_ = tracker.Update("4h", mkt.RegimeCompression, "", 43200)
 
 	h, _ = svc.GetHistory("4h", 50)
 	if h.CurrentAge != 1 {
@@ -325,9 +325,9 @@ func TestService_CurrentAge(t *testing.T) {
 	}
 
 	tracker := regimehistory.NewTracker(repo)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 14400)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 28800)
-	_ = tracker.Update("4h", mkt.RegimeTrend, 43200)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 14400)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 28800)
+	_ = tracker.Update("4h", mkt.RegimeTrend, "", 43200)
 
 	age, _ = svc.CurrentAge("4h")
 	if age != 3 {
@@ -345,7 +345,7 @@ func TestTransitionService_usesAgeProvider(t *testing.T) {
 	// Build up regime history: 20 candles of compression.
 	// Each timestamp crosses a 4h boundary (14400s apart).
 	for i := 0; i < 20; i++ {
-		_ = tracker.Update("4h", mkt.RegimeCompression, int64(14400+i*14400))
+		_ = tracker.Update("4h", mkt.RegimeCompression, "", int64(14400+i*14400))
 	}
 
 	provider := &fakeTransitionRegimeProvider{

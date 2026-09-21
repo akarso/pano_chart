@@ -12,6 +12,11 @@ import (
 // requested timeframe / symbol.
 var ErrEvaluationNotFound = errors.New("evaluation store: not found")
 
+// ErrEvaluationStoreUnavailable is returned by readers when Redis transport
+// fails (fail-closed). HTTP adapters map this to a stable client message
+// instead of embedding transport strings.
+var ErrEvaluationStoreUnavailable = errors.New("evaluation store unavailable")
+
 // EvaluationStore persists per-timeframe evaluation snapshots so rankings,
 // setups, Market Pulse and notifications can share one compute pass.
 // See ROADMAP PR-089a.
