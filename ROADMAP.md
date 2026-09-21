@@ -11,6 +11,47 @@ PR numbering continues from PR-084. Every slice below gets its own spec file whe
 
 ---
 
+## Hotfixes (land immediately; independent of tracks)
+
+Ship these as soon as they are ready. They do not depend on Track A–F and should not wait
+on the broader round.
+
+| PR | Title | Why |
+|---|---|---|
+| **PR-114** | fix(events): FinanceFlow error backoff | Without this, a mid-day upstream blip after cache TTL expiry becomes a **1/min retry storm (~1440 calls/day)** for the rest of the day. Healthy days stay ~50. Spec: `backend/docs/v2/PR-114.md`. |
+
+### PR-114 — Events cache: error backoff (FinanceFlow retry storm)
+
+**Layer:** application. **Depends on:** nothing. **Priority:** ship before / alongside Track A.
+
+**Objective.** Stop the notification scheduler (`MacroCheckInterval = 1m`) from billing
+FinanceFlow on every tick when the upstream is failing after a normal cache TTL miss.
+
+**Context.**
+- `application/usecases/get_events.go` — in-memory cache, upcoming TTL 30m, past TTL 6h.
+- `application/notifications/scheduler.go` — `checkMacroEvents` every 1 minute →
+  `eventsAdapter` → `GetEvents.Execute` (US, short lead window).
+- Cache key is date-granular (`country|from|to`), so a warm cache yields ~48 scheduler
+  upstream calls/day. Observed production: some days ~50, some days ~1440.
+
+**Bug.** On provider error, code served stale data but did **not** refresh freshness.
+Next minute: miss → fail → stale → miss… for the rest of the day.
+
+**Spec.**
+1. Add `errorHoldUntil` on the cache entry and `errorBackoff` default **15m** on `GetEvents`.
+2. `getCached`: if `now < errorHoldUntil`, return the entry (soft hit).
+3. On `FetchEvents` error with stale present: set `errorHoldUntil = now + errorBackoff`,
+   return stale.
+4. On error with no cache: `putCache` empty list with the same hold (avoid empty 1/min storm).
+5. On success: `putCache` clears any hold.
+
+**Tests.** See `get_events_backoff_test.go` (expired TTL + fail backs off; cold fail backs off empty).
+
+**Definition of Done.** Spec tests pass; bad-day ceiling ≈ `24×60/15 ≈ 96` scheduler calls
+during a full-day outage, not 1440.
+
+---
+
 ## 0. How to implement a slice (read this first)
 
 1. Read the slice's **Context** section and open every file it lists. Do not start coding

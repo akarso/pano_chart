@@ -31,6 +31,11 @@ type cacheEntry struct {
 	fetchedAt time.Time
 	dateFrom  time.Time
 	dateTo    time.Time
+	// errorHoldUntil, when set and still in the future, keeps the entry
+	// serving without re-fetching even if the normal TTL has elapsed.
+	// Set after a FinanceFlow failure so the 1-minute notification scheduler
+	// does not retry-storm the upstream (PR-114).
+	errorHoldUntil time.Time
 }
 
 // GetEvents is the use case that fetches, caches, and filters economic events.
@@ -42,15 +47,21 @@ type GetEvents struct {
 
 	upcomingTTL time.Duration // TTL for date ranges that include future dates
 	pastTTL     time.Duration // TTL for fully-past date ranges
+	// errorBackoff is how long to keep serving a stale (or empty) entry after a
+	// provider failure without re-calling FinanceFlow. Without this, a miss
+	// after TTL + a failing upstream becomes a 1/min retry storm for the rest
+	// of the day (notification scheduler MacroCheckInterval) — see PR-114.
+	errorBackoff time.Duration
 }
 
 // NewGetEvents constructs the use case with reasonable cache TTLs.
 func NewGetEvents(provider ports.EventProviderPort) *GetEvents {
 	return &GetEvents{
-		provider:    provider,
-		cache:       make(map[string]*cacheEntry),
-		upcomingTTL: 30 * time.Minute,
-		pastTTL:     6 * time.Hour,
+		provider:     provider,
+		cache:        make(map[string]*cacheEntry),
+		upcomingTTL:  30 * time.Minute,
+		pastTTL:      6 * time.Hour,
+		errorBackoff: 15 * time.Minute,
 	}
 }
 
@@ -70,11 +81,15 @@ func (g *GetEvents) Execute(ctx context.Context, req GetEventsRequest) ([]domain
 	events, err := g.provider.FetchEvents(ctx, req.DateFrom, req.DateTo, req.Country)
 	if err != nil {
 		log.Printf("[Events] fetch error: %v, falling back to stale cache", err)
-		// Return stale cache if available (ignore TTL on error)
 		if entry := g.getStaleCached(key); entry != nil {
+			g.holdOnError(key)
+			log.Printf("[Events] error backoff for %s (%s)", key, g.errorBackoff)
 			return filterEvents(entry, req.Impact), nil
 		}
-		// Non-critical: return empty list, not 500
+		// No prior data: cache empty under error backoff so we still avoid
+		// a 1/min retry storm until the upstream recovers.
+		g.putCacheWithErrorHold(key, nil, req.DateFrom, req.DateTo)
+		log.Printf("[Events] error backoff (empty) for %s (%s)", key, g.errorBackoff)
 		return []domain.Event{}, nil
 	}
 
@@ -92,8 +107,13 @@ func (g *GetEvents) getCached(key string, dateFrom, dateTo time.Time) *cacheEntr
 		return nil
 	}
 
+	now := time.Now()
+	if !entry.errorHoldUntil.IsZero() && now.Before(entry.errorHoldUntil) {
+		return entry
+	}
+
 	ttl := g.ttlFor(dateFrom, dateTo)
-	if time.Since(entry.fetchedAt) > ttl {
+	if now.Sub(entry.fetchedAt) > ttl {
 		return nil
 	}
 	return entry
@@ -120,6 +140,31 @@ func (g *GetEvents) putCache(key string, events []domain.Event, dateFrom, dateTo
 		fetchedAt: time.Now(),
 		dateFrom:  dateFrom,
 		dateTo:    dateTo,
+		// clear any prior error hold on success
+	}
+}
+
+func (g *GetEvents) putCacheWithErrorHold(key string, events []domain.Event, dateFrom, dateTo time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	now := time.Now()
+	g.cache[key] = &cacheEntry{
+		events:         events,
+		fetchedAt:      now,
+		dateFrom:       dateFrom,
+		dateTo:         dateTo,
+		errorHoldUntil: now.Add(g.errorBackoff),
+	}
+}
+
+// holdOnError extends an existing entry with an error backoff window so
+// subsequent scheduler ticks are soft hits without calling FinanceFlow.
+func (g *GetEvents) holdOnError(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if entry, ok := g.cache[key]; ok {
+		entry.errorHoldUntil = time.Now().Add(g.errorBackoff)
 	}
 }
 
