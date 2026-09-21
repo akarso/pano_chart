@@ -30,6 +30,10 @@ const (
 	// grading. Tracker retains indefinitely; 500 covers multi-year 1d and
 	// weeks of 15m transitions — raise if RegimeAt misses on long horizons.
 	regimeHistoryLimit = 500
+	// retryGrace is how long after HorizonEnd a retryable miss (incomplete
+	// candles, ATR, regime/tape blip) may stay unresolved. Matches ROADMAP
+	// steady-state bound (horizon + ~10m). Past that → RulePathUnavailable.
+	retryGrace = 10 * time.Minute
 )
 
 var (
@@ -234,22 +238,39 @@ func (e *Evaluator) handleGradeError(
 	err error,
 ) bool {
 	if isRetryableGradeError(err) {
-		return false
-	}
-	if errors.Is(err, errPermanentTapeMiss) {
-		oc := domainsignal.Outcome{
-			SignalID:   sig.ID,
-			ResolvedAt: now,
-			Rule:       domainsignal.RulePathUnavailable,
-		}
-		if markErr := e.repo.MarkResolved(ctx, sig.ID, oc); markErr != nil {
-			log.Printf("[signal-eval] mark %s: %v", sig.ID, markErr)
+		if !retryExpired(sig, now) {
 			return false
 		}
-		return true
+		// Past grace: treat as permanently unavailable so ready queue drains.
+		err = errPermanentTapeMiss
+	}
+	if errors.Is(err, errPermanentTapeMiss) {
+		return e.markPathUnavailable(ctx, sig, now)
 	}
 	log.Printf("[signal-eval] id=%s label=%s: %v", sig.ID, sig.Label, err)
 	return false
+}
+
+func (e *Evaluator) markPathUnavailable(ctx context.Context, sig domainsignal.Signal, now time.Time) bool {
+	oc := domainsignal.Outcome{
+		SignalID:   sig.ID,
+		ResolvedAt: now,
+		Rule:       domainsignal.RulePathUnavailable,
+	}
+	if markErr := e.repo.MarkResolved(ctx, sig.ID, oc); markErr != nil {
+		log.Printf("[signal-eval] mark %s: %v", sig.ID, markErr)
+		return false
+	}
+	return true
+}
+
+// retryExpired is true once now ≥ HorizonEnd + retryGrace.
+func retryExpired(sig domainsignal.Signal, now time.Time) bool {
+	end, ok := domainsignal.HorizonEnd(sig)
+	if !ok {
+		return true
+	}
+	return !now.Before(end.Add(retryGrace))
 }
 
 func isRetryableGradeError(err error) bool {

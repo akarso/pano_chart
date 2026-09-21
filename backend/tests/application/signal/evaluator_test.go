@@ -107,9 +107,12 @@ func (f *fakeCandles) GetSeries(
 	key := sym.String() + "|" + tf.String()
 	full, ok := f.series[key]
 	if !ok {
-		return domain.CandleSeries{}, fmt.Errorf("missing series %s", key)
+		// Empty series → incomplete path (same as a real gap / miss).
+		return domain.NewCandleSeries(sym, tf, nil)
 	}
 	// Return unclipped (inclusive extras) to exercise evaluator clip.
+	_ = from
+	_ = to
 	return full, nil
 }
 
@@ -181,12 +184,41 @@ func TestEvaluator_skipsWhenCandlesMissing(t *testing.T) {
 		Label: "trend_up", Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 2,
 	})
 	ev := appsignal.NewEvaluator(repo, &fakeCandles{series: map[string]domain.CandleSeries{}})
-	ev.SetNow(func() time.Time { return emitted.Add(3 * time.Hour) })
+	// Within retry grace (HorizonEnd + <10m).
+	ev.SetNow(func() time.Time { return emitted.Add(2*time.Hour + time.Minute) })
 	if n := ev.Tick(context.Background()); n != 0 {
 		t.Fatalf("got %d", n)
 	}
 	if _, ok := repo.outcomes["s2"]; ok {
-		t.Fatal("should stay unresolved")
+		t.Fatal("should stay unresolved within grace")
+	}
+}
+
+func TestEvaluator_retryablePastGraceBecomesPathUnavailable(t *testing.T) {
+	repo := newMemRepo()
+	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	_ = repo.Append(context.Background(), domainsignal.Signal{
+		ID: "stale", Kind: domainsignal.KindBadge, Symbol: "ETHUSDT", Timeframe: "1h",
+		Label: "trend_up", Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 2,
+	})
+	// Also a newer ready path-independent row that must still resolve.
+	_ = repo.Append(context.Background(), domainsignal.Signal{
+		ID: "newer", Kind: domainsignal.KindBadge, Symbol: "BTCUSDT", Timeframe: "1h",
+		Label: "gain", Price: 1, ATR: 1, EmittedAt: emitted.Add(time.Hour), HorizonBars: 1,
+	})
+	ev := appsignal.NewEvaluator(repo, &fakeCandles{series: map[string]domain.CandleSeries{}})
+	// HorizonEnd(stale)=emitted+2h; grace ends at +10m.
+	ev.SetNow(func() time.Time { return emitted.Add(2*time.Hour + 11*time.Minute) })
+	n := ev.Tick(context.Background())
+	if n < 1 {
+		t.Fatalf("expected drain, got %d", n)
+	}
+	oc, ok := repo.outcomes["stale"]
+	if !ok || oc.Rule != domainsignal.RulePathUnavailable {
+		t.Fatalf("stale past grace: %+v ok=%v", oc, ok)
+	}
+	if _, ok := repo.outcomes["newer"]; !ok {
+		t.Fatal("newer ready signal must still resolve")
 	}
 }
 
@@ -194,7 +226,6 @@ func TestEvaluator_partialCandlesNotResolved(t *testing.T) {
 	repo := newMemRepo()
 	tf := domain.Timeframe1h
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	// Only 2 bars for horizon 4.
 	candles := &fakeCandles{series: map[string]domain.CandleSeries{
 		"BTCUSDT|1h": makeSeries("BTCUSDT", tf, emitted, []float64{100, 101}),
 	}}
@@ -203,12 +234,12 @@ func TestEvaluator_partialCandlesNotResolved(t *testing.T) {
 		Label: "trend_up", Price: 100, ATR: 1, EmittedAt: emitted, HorizonBars: 4,
 	})
 	ev := appsignal.NewEvaluator(repo, candles)
-	ev.SetNow(func() time.Time { return emitted.Add(5 * time.Hour) })
+	ev.SetNow(func() time.Time { return emitted.Add(4*time.Hour + time.Minute) })
 	if n := ev.Tick(context.Background()); n != 0 {
 		t.Fatalf("got %d", n)
 	}
 	if _, ok := repo.outcomes["partial"]; ok {
-		t.Fatal("partial path must stay unresolved")
+		t.Fatal("partial path must stay unresolved within grace")
 	}
 }
 
@@ -224,12 +255,12 @@ func TestEvaluator_atrZeroLeavesUnresolved(t *testing.T) {
 		Label: "trend_up", Price: 100, ATR: 0, EmittedAt: emitted, HorizonBars: 3,
 	})
 	ev := appsignal.NewEvaluator(repo, candles)
-	ev.SetNow(func() time.Time { return emitted.Add(3 * time.Hour) })
+	ev.SetNow(func() time.Time { return emitted.Add(3*time.Hour + time.Minute) })
 	if n := ev.Tick(context.Background()); n != 0 {
-		t.Fatalf("ATR=0 must not auto-succeed, got %d", n)
+		t.Fatalf("ATR=0 must not auto-succeed within grace, got %d", n)
 	}
 	if _, ok := repo.outcomes["atr0"]; ok {
-		t.Fatal("ATR=0 must stay unresolved")
+		t.Fatal("ATR=0 must stay unresolved within grace")
 	}
 }
 
