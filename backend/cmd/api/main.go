@@ -545,6 +545,19 @@ func main() {
 		log.Println("[main] Evaluation store refresher disabled (PC_EVAL_REFRESH=0)")
 	}
 
+	// --- Signal outcome evaluator (PR-091) ---
+	if signalRepo != nil {
+		signalEval := appsignal.NewEvaluator(signalRepo, candleRepo)
+		signalEval.SetTapeProvider(compositeUC)
+		signalEval.SetRegimeHistory(regimeHistoryService)
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			signalEval.Run(socialCtx)
+		}()
+		log.Println("[main] Signal outcome evaluator started (interval=5m)")
+	}
+
 	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
 	// VolatilityHandler.Reload() existed before PR-082 ("call this after
 	// vol_aggregate runs") but nothing ever called it — harmless while this

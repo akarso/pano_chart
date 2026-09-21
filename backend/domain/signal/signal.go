@@ -30,18 +30,6 @@ type Signal struct {
 	HorizonBars int
 }
 
-// Outcome is filled by the PR-091 evaluator. Defined here so MarkResolved
-// can accept it without a circular dependency.
-type Outcome struct {
-	SignalID      string
-	ResolvedAt    time.Time
-	ForwardReturn float64
-	MaxFavorable  float64
-	MaxAdverse    float64
-	Success       bool
-	Rule          string
-}
-
 // SignalWithOutcome joins a signal with an optional resolution.
 type SignalWithOutcome struct {
 	Signal  Signal

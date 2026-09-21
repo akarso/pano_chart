@@ -295,6 +295,40 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 	return scanSignals(rows)
 }
 
+// tfDurationNS maps timeframe strings to nanoseconds (matches domain.Timeframe.Duration).
+// Unknown TFs yield NULL → excluded from UnresolvedReady (never become ready).
+const tfDurationNSExpr = `CASE s.timeframe
+	WHEN '1m'  THEN 60000000000
+	WHEN '5m'  THEN 300000000000
+	WHEN '15m' THEN 900000000000
+	WHEN '1h'  THEN 3600000000000
+	WHEN '4h'  THEN 14400000000000
+	WHEN '1d'  THEN 86400000000000
+	ELSE NULL END`
+
+// UnresolvedReady returns unresolved signals whose horizon has elapsed.
+func (r *SQLiteRepository) UnresolvedReady(ctx context.Context, now time.Time, limit int) ([]domainsignal.Signal, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	// horizon_end = emitted_at + max(horizon_bars, 20) * tf_duration_ns
+	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
+		        s.context, s.emitted_at, s.horizon_bars
+		 FROM signals s
+		 LEFT JOIN outcomes o ON o.signal_id = s.id
+		 WHERE o.signal_id IS NULL
+		   AND (%s) IS NOT NULL
+		   AND s.emitted_at + (CASE WHEN s.horizon_bars <= 0 THEN 20 ELSE s.horizon_bars END) * (%s) <= ?
+		 ORDER BY s.emitted_at ASC
+		 LIMIT ?`, tfDurationNSExpr, tfDurationNSExpr)
+	rows, err := r.db.QueryContext(ctx, q, now.UTC().UnixNano(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query unresolved ready: %w", err)
+	}
+	defer rows.Close()
+	return scanSignals(rows)
+}
+
 // MarkResolved upserts an outcome for a signal.
 // Prefer outcome.SignalID when set; otherwise use id. Both must agree if both set.
 func (r *SQLiteRepository) MarkResolved(ctx context.Context, id string, outcome domainsignal.Outcome) error {
