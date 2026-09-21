@@ -625,6 +625,12 @@ func (f *failOnceRepo) Append(ctx context.Context, s domainsignal.Signal) error 
 func (f *failOnceRepo) Unresolved(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
 	return nil, nil
 }
+func (f *failOnceRepo) UnresolvedReady(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
+func (f *failOnceRepo) UnresolvedInvalidTF(context.Context, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
 func (f *failOnceRepo) MarkResolved(context.Context, string, domainsignal.Outcome) error {
 	return nil
 }
@@ -642,6 +648,12 @@ func (f *failAlwaysRepo) Append(context.Context, domainsignal.Signal) error {
 	return f.err
 }
 func (f *failAlwaysRepo) Unresolved(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
+func (f *failAlwaysRepo) UnresolvedReady(context.Context, time.Time, int) ([]domainsignal.Signal, error) {
+	return nil, nil
+}
+func (f *failAlwaysRepo) UnresolvedInvalidTF(context.Context, int) ([]domainsignal.Signal, error) {
 	return nil, nil
 }
 func (f *failAlwaysRepo) MarkResolved(context.Context, string, domainsignal.Outcome) error {

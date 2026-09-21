@@ -10,6 +10,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"pano_chart/backend/domain"
 	domainsignal "pano_chart/backend/domain/signal"
 )
 
@@ -250,7 +251,8 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	return tx.Commit()
 }
 
-// Append inserts a signal row.
+// Append inserts a signal row. Timeframe is stored in canonical form when
+// domain-valid (trim+lower), matching UnresolvedReady SQL and HorizonEnd.
 func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) error {
 	ctxJSON, err := json.Marshal(s.Context)
 	if err != nil {
@@ -259,11 +261,12 @@ func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) er
 	if ctxJSON == nil {
 		ctxJSON = []byte("{}")
 	}
+	tf := canonicalTimeframe(s.Timeframe)
 	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO signals
 		 (id, kind, symbol, timeframe, label, score, price, atr, context, emitted_at, horizon_bars)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		s.ID, string(s.Kind), s.Symbol, s.Timeframe, s.Label,
+		s.ID, string(s.Kind), s.Symbol, tf, s.Label,
 		s.Score, s.Price, s.ATR, string(ctxJSON),
 		s.EmittedAt.UTC().UnixNano(), s.HorizonBars,
 	)
@@ -271,6 +274,15 @@ func (r *SQLiteRepository) Append(ctx context.Context, s domainsignal.Signal) er
 		return fmt.Errorf("insert signal: %w", err)
 	}
 	return nil
+}
+
+// canonicalTimeframe mirrors domain.NewTimeframe normalization for storage.
+// Invalid values are trim+lowered so SQL CASE stays consistent with HorizonEnd.
+func canonicalTimeframe(s string) string {
+	if tf, err := domain.NewTimeframe(s); err == nil {
+		return tf.String()
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // Unresolved returns signals emitted before `before` with no outcome row.
@@ -290,6 +302,62 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved: %w", err)
+	}
+	defer rows.Close()
+	return scanSignals(rows)
+}
+
+// tfDurationNS maps timeframe strings to nanoseconds (matches domain.Timeframe.Duration).
+// Uses lower(trim(...)) so values like "1H" / " 15m " match domain.NewTimeframe.
+// Unknown TFs yield NULL → excluded from UnresolvedReady (never become ready).
+const tfDurationNSExpr = `CASE lower(trim(s.timeframe))
+	WHEN '1m'  THEN 60000000000
+	WHEN '5m'  THEN 300000000000
+	WHEN '15m' THEN 900000000000
+	WHEN '1h'  THEN 3600000000000
+	WHEN '4h'  THEN 14400000000000
+	WHEN '1d'  THEN 86400000000000
+	ELSE NULL END`
+
+// UnresolvedReady returns unresolved signals whose horizon has elapsed.
+func (r *SQLiteRepository) UnresolvedReady(ctx context.Context, now time.Time, limit int) ([]domainsignal.Signal, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	// horizon_end = emitted_at + max(horizon_bars, 20) * tf_duration_ns
+	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
+		        s.context, s.emitted_at, s.horizon_bars
+		 FROM signals s
+		 LEFT JOIN outcomes o ON o.signal_id = s.id
+		 WHERE o.signal_id IS NULL
+		   AND (%s) IS NOT NULL
+		   AND s.emitted_at + (CASE WHEN s.horizon_bars <= 0 THEN 20 ELSE s.horizon_bars END) * (%s) <= ?
+		 ORDER BY s.emitted_at ASC
+		 LIMIT ?`, tfDurationNSExpr, tfDurationNSExpr)
+	rows, err := r.db.QueryContext(ctx, q, now.UTC().UnixNano(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("query unresolved ready: %w", err)
+	}
+	defer rows.Close()
+	return scanSignals(rows)
+}
+
+// UnresolvedInvalidTF returns unresolved rows with an unknown timeframe string.
+func (r *SQLiteRepository) UnresolvedInvalidTF(ctx context.Context, limit int) ([]domainsignal.Signal, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
+		        s.context, s.emitted_at, s.horizon_bars
+		 FROM signals s
+		 LEFT JOIN outcomes o ON o.signal_id = s.id
+		 WHERE o.signal_id IS NULL
+		   AND (%s) IS NULL
+		 ORDER BY s.emitted_at ASC
+		 LIMIT ?`, tfDurationNSExpr)
+	rows, err := r.db.QueryContext(ctx, q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query unresolved invalid tf: %w", err)
 	}
 	defer rows.Close()
 	return scanSignals(rows)
