@@ -4,14 +4,14 @@ import (
 	"math"
 	"testing"
 
+	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/domain"
-	inframarket "pano_chart/backend/infrastructure/market"
 )
 
 func TestEnrichFromSparkline_BasicUptrend(t *testing.T) {
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{100, 101, 102, 103, 104, 105}
-	inframarket.EnrichFromSparkline(&snap, sparkline)
+	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if snap.Price != 105 {
 		t.Errorf("expected Price=105, got %f", snap.Price)
@@ -36,7 +36,7 @@ func TestEnrichFromSparkline_BasicUptrend(t *testing.T) {
 func TestEnrichFromSparkline_Downtrend(t *testing.T) {
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{105, 103, 101, 99, 97}
-	inframarket.EnrichFromSparkline(&snap, sparkline)
+	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if snap.Bias != "down" {
 		t.Errorf("expected Bias=down, got %q", snap.Bias)
@@ -49,7 +49,7 @@ func TestEnrichFromSparkline_Downtrend(t *testing.T) {
 func TestEnrichFromSparkline_FlatMarket(t *testing.T) {
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{100, 100, 100}
-	inframarket.EnrichFromSparkline(&snap, sparkline)
+	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if snap.Bias != "neutral" {
 		t.Errorf("expected Bias=neutral, got %q", snap.Bias)
@@ -61,7 +61,7 @@ func TestEnrichFromSparkline_FlatMarket(t *testing.T) {
 
 func TestEnrichFromSparkline_TooShort(t *testing.T) {
 	snap := domain.EvaluationSnapshot{}
-	inframarket.EnrichFromSparkline(&snap, []float64{100})
+	appmarket.EnrichFromSparkline(&snap, []float64{100})
 
 	if snap.Price != 0 {
 		t.Errorf("expected no enrichment for single-point sparkline, got Price=%f", snap.Price)
@@ -72,7 +72,7 @@ func TestEnrichFromSparkline_ATRComputation(t *testing.T) {
 	// Sparkline: 100, 102, 100, 102 → moves: 2, 2, 2 → ATR = 2.0
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{100, 102, 100, 102}
-	inframarket.EnrichFromSparkline(&snap, sparkline)
+	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if math.Abs(snap.ATR-2.0) > 0.01 {
 		t.Errorf("expected ATR≈2.0, got %f", snap.ATR)

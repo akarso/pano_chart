@@ -18,6 +18,7 @@ import (
 	"pano_chart/backend/adapters/http/middleware"
 	"pano_chart/backend/adapters/infra"
 	appbehavior "pano_chart/backend/application/behavior"
+	appeval "pano_chart/backend/application/evaluation"
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
@@ -28,6 +29,7 @@ import (
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
 	infraauth "pano_chart/backend/infrastructure/auth"
+	infraeval "pano_chart/backend/infrastructure/evaluation"
 	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/feargreed"
 	"pano_chart/backend/infrastructure/googleplay"
@@ -475,6 +477,25 @@ func main() {
 	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
+	// --- Evaluation store writer (PR-089a) ---
+	// Default on (ROADMAP); set PC_EVAL_REFRESH=0|false|off to disable.
+	// Uses uncached getRankingsUC (intentional full score when due). Redis
+	// SET NX lock + store freshness check so replicas score each TF once
+	// per interval. Wired after socialCtx/backgroundWG for graceful cancel.
+	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
+		evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
+		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			evalRefresher.Run(socialCtx)
+		}()
+		log.Println("[main] Evaluation store refresher started (PC_EVAL_REFRESH default on)")
+	} else {
+		log.Println("[main] Evaluation store refresher disabled (PC_EVAL_REFRESH=0)")
+	}
+
 	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
 	// VolatilityHandler.Reload() existed before PR-082 ("call this after
 	// vol_aggregate runs") but nothing ever called it — harmless while this
@@ -732,6 +753,14 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 		DateTo:   to,
 		Country:  "United States",
 	})
+}
+
+// hostnameOr returns the machine hostname, or fallback when unavailable.
+func hostnameOr(fallback string) string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return fallback
 }
 
 // volatilityReloadLoop periodically calls h.Reload() until ctx is done, so
