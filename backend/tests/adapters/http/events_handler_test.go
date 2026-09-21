@@ -194,7 +194,7 @@ func TestEventsHandler_PassesQueryParams(t *testing.T) {
 	uc := &fakeEventsUseCase{events: []domain.Event{}}
 	handler := adhttp.NewEventsHandler(uc)
 	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/events?date_from=2025-03-01&date_to=2025-03-07&impact=high&country=Germany", nil)
+		"/api/v1/events?date_from=2025-03-01&date_to=2025-03-07&impact=high&country=China", nil)
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -205,7 +205,31 @@ func TestEventsHandler_PassesQueryParams(t *testing.T) {
 	if uc.lastReq.Impact != "high" {
 		t.Errorf("impact = %q, want %q", uc.lastReq.Impact, "high")
 	}
-	if uc.lastReq.Country != "Germany" {
-		t.Errorf("country = %q, want %q", uc.lastReq.Country, "Germany")
+	if uc.lastReq.Country != "China" {
+		t.Errorf("country = %q, want %q", uc.lastReq.Country, "China")
+	}
+}
+
+func TestEventsHandler_RejectsUnsupportedCountry(t *testing.T) {
+	uc := &fakeEventsUseCase{}
+	handler := adhttp.NewEventsHandler(uc)
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?date_from=2025-03-01&date_to=2025-03-07&country=Germany", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestEventsHandler_RejectsOversizedRange(t *testing.T) {
+	uc := &fakeEventsUseCase{}
+	handler := adhttp.NewEventsHandler(uc)
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?date_from=2025-01-01&date_to=2025-03-15", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }

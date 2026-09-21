@@ -11,6 +11,52 @@ PR numbering continues from PR-084. Every slice below gets its own spec file whe
 
 ---
 
+## Hotfixes (land immediately; independent of tracks)
+
+Ship these as soon as they are ready. They do not depend on Track A–F and should not wait
+on the broader round.
+
+| PR | Title | Why |
+|---|---|---|
+| **PR-114** | fix(events): FinanceFlow error backoff | Without this, a mid-day upstream blip after cache TTL expiry becomes a **1/min retry storm (~1440 calls/day)** for the rest of the day. Healthy days stay ~50. Spec: `backend/docs/v2/PR-114.md`. |
+
+### PR-114 — Events cache: error backoff (FinanceFlow retry storm)
+
+**Layer:** application + HTTP. **Depends on:** nothing. **Priority:** ship before / alongside Track A.
+
+**Objective.** Stop the notification scheduler (`MacroCheckInterval = 1m`) from billing
+FinanceFlow on every tick when the upstream is failing after a normal cache TTL miss.
+Also prevent cancelled public `/api/v1/events` clients from installing an empty hold that
+suppresses the scheduler.
+
+**Context.**
+- `application/usecases/get_events.go` — in-memory cache, upcoming TTL 30m, past TTL 6h.
+- `application/notifications/scheduler.go` — `checkMacroEvents` every 1 minute →
+  `eventsAdapter` → `GetEvents.Execute` (US, short lead window).
+- Observed production: some days ~50 calls, some days ~1440 after a mid-day blip.
+
+**Spec (contract).**
+1. Upstream error (**including** `http.Client.Timeout` → wrapped `DeadlineExceeded`):
+   arm **15m** `errorHoldUntil`. Soft-hit until then.
+2. After hold elapses: **force revalidation** (`getCached` clears hold → nil) but **keep**
+   warm entries for stale fallback. Never fall through to success TTL; never wipe into
+   empty hold on a second fail. Ceiling ≈ `24×60/15 ≈ 96` scheduler calls/day/key
+   during a full-day outage — not 1440.
+3. **No hold write** only for cancelled **waiters** on `Execute` (`ctx.Done()`). Do **not**
+   treat provider `DeadlineExceeded` as no-hold — that is the Client.Timeout blip path.
+4. Singleflight per cache key; max 256 entries; **LRU by lastAccess** (bump on soft-hit).
+5. HTTP: max 31-day span; countries allowlisted (US / Euro Area / China).
+
+**Tests.** `tests/application/usecases/get_events_backoff_test.go` (fake clock + short
+backoff): hold expiry refetch; success clears hold; wrapped DeadlineExceeded holds;
+past-range cold fail retries at backoff not 6h; stale survives second hold failure;
+LRU hot-key survival; singleflight. Handler tests for span/country rejection.
+
+**Definition of Done.** Spec tests pass; PR doc (`backend/docs/v2/PR-114.md`) matches this
+contract (prefer the PR doc for implementation detail; keep this section short).
+
+---
+
 ## 0. How to implement a slice (read this first)
 
 1. Read the slice's **Context** section and open every file it lists. Do not start coding

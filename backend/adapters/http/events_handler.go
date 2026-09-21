@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"pano_chart/backend/application/usecases"
@@ -33,6 +34,20 @@ type eventsResponse struct {
 }
 
 const dateLayout = "2006-01-02"
+
+// maxEventsDateSpanDays caps how wide a calendar query may be. Limits
+// FinanceFlow cost and in-memory cache key cardinality on this public endpoint
+// (PR-114 review).
+const maxEventsDateSpanDays = 31
+
+// allowedEventsCountries is the closed set of country filter values the API
+// accepts (matches the app's macro country picker). Empty query defaults to
+// United States.
+var allowedEventsCountries = map[string]string{
+	"united states": "United States",
+	"euro area":     "Euro Area",
+	"china":         "China",
+}
 
 // ServeHTTP implements http.Handler.
 func (h *EventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,10 +86,23 @@ func (h *EventsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	spanDays := int(dateTo.Sub(dateFrom).Hours()/24) + 1
+	if spanDays > maxEventsDateSpanDays {
+		http.Error(w, `{"error":"date range too large, max 31 days"}`, http.StatusBadRequest)
+		return
+	}
+
 	impact := q.Get("impact")
 	country := q.Get("country")
 	if country == "" {
 		country = "United States"
+	} else {
+		canonical, ok := allowedEventsCountries[strings.ToLower(strings.TrimSpace(country))]
+		if !ok {
+			http.Error(w, `{"error":"unsupported country"}`, http.StatusBadRequest)
+			return
+		}
+		country = canonical
 	}
 
 	req := usecases.GetEventsRequest{
