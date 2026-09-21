@@ -3,7 +3,9 @@ package market
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,19 +246,44 @@ func TestRankingsEvaluationProvider_MissFallsBack(t *testing.T) {
 	}
 }
 
-func TestRankingsEvaluationProvider_TransportErrorFailsClosed(t *testing.T) {
+func TestRankingsEvaluationProvider_TransportErrorFallsBack(t *testing.T) {
 	boom := errors.New("redis down")
 	store := &stubEvalStore{getErr: boom}
-	rankings := &stubRankings{}
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	rankings := &stubRankings{rows: []usecases.RankedResult{{Symbol: sym}}}
 	p := NewRankingsEvaluationProvider(rankings)
 	p.SetStore(store)
 
-	_, err := p.GetLatestEvaluations(context.Background(), "1h")
-	if !errors.Is(err, ports.ErrEvaluationStoreUnavailable) {
-		t.Fatalf("expected ErrEvaluationStoreUnavailable, got %v", err)
+	got, err := p.GetLatestEvaluations(context.Background(), "1h")
+	if err != nil {
+		t.Fatalf("transport must fail open to rankings: %v", err)
 	}
-	if rankings.callCount() != 0 {
-		t.Fatalf("must not fall back on transport error, got %d rankings calls", rankings.callCount())
+	if rankings.callCount() != 1 {
+		t.Fatalf("expected rankings fallback on transport error, got %d calls", rankings.callCount())
+	}
+	if len(got) != 1 || got[0].Symbol != "BTCUSDT" {
+		t.Fatalf("expected rankings-derived snapshot, got %#v", got)
+	}
+}
+
+func TestRankingsEvaluationProvider_FutureAtIsStale(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := &stubEvalStore{
+		evals: []domain.EvaluationSnapshot{freshSnap("BTCUSDT")},
+		at:    now.Add(time.Hour), // clock skew / malformed future
+	}
+	sym, _ := domain.NewSymbol("ETHUSDT")
+	rankings := &stubRankings{rows: []usecases.RankedResult{{Symbol: sym}}}
+	p := NewRankingsEvaluationProvider(rankings)
+	p.SetStore(store)
+	p.SetNow(func() time.Time { return now })
+
+	got, err := p.GetLatestEvaluations(context.Background(), "1h")
+	if err != nil {
+		t.Fatalf("GetLatestEvaluations: %v", err)
+	}
+	if rankings.callCount() != 1 || got[0].Symbol != "ETHUSDT" {
+		t.Fatalf("future at must fall back, calls=%d got=%#v", rankings.callCount(), got)
 	}
 }
 
@@ -288,6 +315,9 @@ func TestRankingsEvaluationProvider_SingleflightCoalescesMiss(t *testing.T) {
 	p.SetStore(store)
 
 	const n = 8
+	var joined atomic.Int32
+	p.fallbackEnter = func() { joined.Add(1) }
+
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func() {
@@ -296,8 +326,15 @@ func TestRankingsEvaluationProvider_SingleflightCoalescesMiss(t *testing.T) {
 		}()
 	}
 	<-entered
-	// Let siblings park on the in-flight Do before releasing Execute.
-	time.Sleep(20 * time.Millisecond)
+	// Wait until every caller has entered computeFromRankings (and thus
+	// joined the in-flight DoChan) before releasing Execute — no fixed sleep.
+	deadline := time.Now().Add(2 * time.Second)
+	for joined.Load() < int32(n) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timeout waiting for siblings to join flight: joined=%d want=%d", joined.Load(), n)
+		}
+		runtime.Gosched()
+	}
 	close(block)
 
 	for i := 0; i < n; i++ {

@@ -34,3 +34,26 @@ func TestEvaluationStaleAfter_FloorAppliesToShortTF(t *testing.T) {
 		t.Fatalf("1m StaleAfter=%v want 1m", got)
 	}
 }
+
+func TestEvaluationStoreFresh(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	tf := domain.Timeframe1h
+	staleAfter := domain.EvaluationStaleAfter(tf)
+
+	cases := []struct {
+		name string
+		at   time.Time
+		want bool
+	}{
+		{"fresh recent", now.Add(-time.Minute), true},
+		{"exact boundary", now.Add(-staleAfter), true},
+		{"just stale", now.Add(-(staleAfter + time.Second)), false},
+		{"future at", now.Add(time.Minute), false},
+		{"zero at", time.Time{}, false},
+	}
+	for _, tc := range cases {
+		if got := domain.EvaluationStoreFresh(tc.at, now, tf); got != tc.want {
+			t.Errorf("%s: Fresh=%v want %v", tc.name, got, tc.want)
+		}
+	}
+}

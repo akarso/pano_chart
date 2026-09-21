@@ -58,6 +58,12 @@ type SetupService struct {
 
 const candleLimit = 200
 
+// storeTrendOverlayBars is the candle window used when overlaying live trend
+// magnitude onto store scores. Must match GetRankings default precision /
+// sparkline length so warm dominance compares like-for-like with store
+// Compression/Sideways/Breakout (not the full setup 200-bar series).
+const storeTrendOverlayBars = 110
+
 // NewSetupService constructs the service.
 func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScorer, eng *Engine) *SetupService {
 	return &SetupService{
@@ -227,8 +233,8 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		now = time.Now
 	}
 	age := now().Sub(at)
-	if age > domain.EvaluationStaleAfter(tf) {
-		log.Printf("[eval] setup reason=stale symbol=%s tf=%s age=%s", symbol, timeframe, age)
+	if !domain.EvaluationStoreFresh(at, now(), tf) {
+		log.Printf("[eval] setup reason=stale symbol=%s tf=%s at=%s age=%s", symbol, timeframe, at.UTC().Format(time.RFC3339), age)
 		return usecases.SymbolStats{}, false
 	}
 	// Hits silent at info — see provider readStore.
@@ -248,10 +254,16 @@ func statsFromSnapshot(snap domain.EvaluationSnapshot) usecases.SymbolStats {
 }
 
 // overlayLiveTrend replaces store Trend Predictability with a live
-// ScoreWithDirection magnitude+bias so warm-path dominance matches cold-path
-// semantics without a second ScoreWithDirection call. ok=false → miss.
+// ScoreWithDirection magnitude+bias on the rankings-sized trailing window
+// (storeTrendOverlayBars), so warm-path dominance uses the same bar count as
+// the store scores. Full setup series still drives volume/volatility.
+// ok=false → miss.
 func overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (usecases.SymbolStats, bool) {
-	recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
+	window, err := trailingWindow(series, storeTrendOverlayBars)
+	if err != nil {
+		return usecases.SymbolStats{}, false
+	}
+	recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(window)
 	if err != nil {
 		return usecases.SymbolStats{}, false
 	}
@@ -263,6 +275,21 @@ func overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (u
 	stats.Scores = scores
 	stats.DirectionBias = bias
 	return stats, true
+}
+
+// trailingWindow returns the last n candles as a new series (or the whole
+// series when shorter). Used so store-trend overlay matches rankings precision.
+func trailingWindow(series domain.CandleSeries, n int) (domain.CandleSeries, error) {
+	if n <= 0 || series.Len() <= n {
+		return series, nil
+	}
+	all := series.All()
+	tail := all[len(all)-n:]
+	first, err := series.At(0)
+	if err != nil {
+		return domain.CandleSeries{}, err
+	}
+	return domain.NewCandleSeries(first.Symbol(), series.Timeframe(), tail)
 }
 
 // buildContext converts raw scoring output and candle data into a SetupContext.

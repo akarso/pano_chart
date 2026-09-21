@@ -3,7 +3,6 @@ package market
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"time"
 
@@ -22,6 +21,9 @@ type RankingsEvaluationProvider struct {
 	store    ports.EvaluationStore // optional; nil → always compute
 	now      func() time.Time
 	sf       singleflight.Group
+	// fallbackEnter is invoked when entering computeFromRankings (tests:
+	// wait until all siblings have joined before releasing the flight).
+	fallbackEnter func()
 }
 
 // NewRankingsEvaluationProvider constructs the adapter.
@@ -46,8 +48,9 @@ func (p *RankingsEvaluationProvider) SetNow(fn func() time.Time) {
 
 // GetLatestEvaluations implements market.EvaluationProvider.
 // Fresh non-empty store hit (matching AlgoVersion) → return store data.
-// Miss / stale / empty / algo mismatch → rankings fallback (singleflight).
-// Redis transport errors fail closed as ports.ErrEvaluationStoreUnavailable.
+// Miss / stale / empty / algo / transport / future-at → rankings fallback
+// (singleflight). Transport fails open so Market Pulse stays up when Redis
+// is down; singleflight coalesces the stampede.
 func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, timeframe string) ([]domain.EvaluationSnapshot, error) {
 	if p == nil || p.rankings == nil {
 		return nil, errors.New("rankings evaluation provider not configured")
@@ -75,8 +78,7 @@ func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, t
 }
 
 // readStore returns (evals, true, nil) on a fresh usable hit; (nil, false, nil)
-// on miss/stale/empty/algo; and a wrapped ErrEvaluationStoreUnavailable on
-// Redis transport failure.
+// on miss/stale/empty/algo/transport/clock-skew (caller falls back).
 func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Timeframe, timeframe string, nowFn func() time.Time) ([]domain.EvaluationSnapshot, bool, error) {
 	evals, at, err := p.store.Get(ctx, timeframe)
 	if err != nil {
@@ -84,8 +86,10 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 			log.Printf("[eval] provider reason=miss tf=%s", timeframe)
 			return nil, false, nil
 		}
+		// Fail open: Redis down must not take Market Pulse offline when
+		// rankings can still compute (coalesced below).
 		log.Printf("[eval] provider reason=transport tf=%s err=%v", timeframe, err)
-		return nil, false, fmt.Errorf("%w: %v", ports.ErrEvaluationStoreUnavailable, err)
+		return nil, false, nil
 	}
 	if len(evals) == 0 {
 		// Empty fresh Put must not poison Market Pulse into
@@ -97,9 +101,8 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 		log.Printf("[eval] provider reason=algo tf=%s", timeframe)
 		return nil, false, nil
 	}
-	age := nowFn().Sub(at)
-	if age > domain.EvaluationStaleAfter(tf) {
-		log.Printf("[eval] provider reason=stale tf=%s age=%s", timeframe, age)
+	if !domain.EvaluationStoreFresh(at, nowFn(), tf) {
+		log.Printf("[eval] provider reason=stale tf=%s at=%s", timeframe, at.UTC().Format(time.RFC3339))
 		return nil, false, nil
 	}
 	// Hits are silent at info level — notification ticks / Market Pulse
@@ -117,6 +120,9 @@ func algoVersionOK(evals []domain.EvaluationSnapshot) bool {
 }
 
 func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf domain.Timeframe, timeframe string) ([]domain.EvaluationSnapshot, error) {
+	if p.fallbackEnter != nil {
+		p.fallbackEnter()
+	}
 	// Coalesce concurrent miss/stale fallbacks for the same TF so a cliff
 	// at EvaluationStaleAfter (or cold store) does not stampede rankings.
 	// DoChan + select: cancelled callers return immediately while the shared

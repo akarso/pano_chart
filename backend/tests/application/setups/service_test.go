@@ -936,6 +936,80 @@ func TestSetupService_StoreTransportErrorFallsBackToScorer(t *testing.T) {
 	}
 }
 
+func TestSetupService_FutureAtFallsBackToScorer(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion,
+		},
+		at: now.Add(time.Hour),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 1 {
+		t.Fatalf("future at must fall back, scorer calls=%d", scorer.calls)
+	}
+}
+
+func TestSetupService_OverlayUsesRankingsSizedWindow(t *testing.T) {
+	// 200-bar series: early half flat (would be non-trend), late 110 rising.
+	// Overlay must use the trailing 110 (rankings window), not the full 200.
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	sym, _ := domain.NewSymbol("BTCUSDT")
+	tf, _ := domain.NewTimeframe("4h")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	candles := make([]domain.Candle, 200)
+	for i := 0; i < 200; i++ {
+		price := 100.0
+		if i >= 90 {
+			price = 100.0 + float64(i-90) // rising over last 110
+		}
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, base.Add(time.Duration(i)*4*time.Hour),
+			price, price+2, price-2, price, 1000,
+		)
+	}
+	series, err := domain.NewCandleSeries(sym, tf, candles)
+	if err != nil {
+		t.Fatalf("NewCandleSeries: %v", err)
+	}
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{
+		snap: domain.EvaluationSnapshot{
+			Symbol:           "BTCUSDT",
+			TrendScore:       0.1, // deliberately low store magnitude
+			CompressionScore: 0.1,
+			SidewaysScore:    0.1,
+			AlgoVersion:      domain.AlgoVersion,
+		},
+		at: now.Add(-time.Minute),
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+	svc.SetNow(func() time.Time { return now })
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("expected store hit, scorer calls=%d", scorer.calls)
+	}
+	if result.Regime != "uptrend" {
+		t.Fatalf("trailing rankings window should yield uptrend, got %q", result.Regime)
+	}
+}
+
 func TestSetupService_StoreScoresDriveCompressionSetup(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	series := makeSeries(50)
