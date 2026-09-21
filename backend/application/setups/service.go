@@ -196,7 +196,9 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 // the candles Evaluate just fetched (compression/sideways/breakout stay
 // from the store). Overlay failure is treated as a miss → live scorer.
 func (s *SetupService) resolveScores(ctx context.Context, sym domain.Symbol, tf domain.Timeframe, series domain.CandleSeries) (usecases.SymbolStats, error) {
-	if stats, ok := s.scoresFromStore(ctx, sym, tf); ok {
+	if stats, ok, err := s.scoresFromStore(ctx, sym, tf); err != nil {
+		return usecases.SymbolStats{}, err
+	} else if ok {
 		if overlaid, ok := overlayLiveTrend(stats, series); ok {
 			return overlaid, nil
 		}
@@ -209,24 +211,30 @@ func (s *SetupService) resolveScores(ctx context.Context, sym domain.Symbol, tf 
 	return stats, nil
 }
 
-func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, tf domain.Timeframe) (usecases.SymbolStats, bool) {
+// scoresFromStore returns (stats, true, nil) on a fresh hit; (zero, false, nil)
+// on miss/stale/algo/transport; and a non-nil error for context cancel/deadline
+// so Evaluate does not fall through to live scoring after the caller gave up.
+func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, tf domain.Timeframe) (usecases.SymbolStats, bool, error) {
 	if s.evalStore == nil {
-		return usecases.SymbolStats{}, false
+		return usecases.SymbolStats{}, false, nil
 	}
 	symbol := sym.String()
 	timeframe := tf.String()
 	snap, at, err := s.evalStore.GetSymbol(ctx, timeframe, symbol)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return usecases.SymbolStats{}, false, err
+		}
 		if errors.Is(err, ports.ErrEvaluationNotFound) {
 			log.Printf("[eval] setup reason=miss symbol=%s tf=%s", symbol, timeframe)
 		} else {
 			log.Printf("[eval] setup reason=transport symbol=%s tf=%s err=%v", symbol, timeframe, err)
 		}
-		return usecases.SymbolStats{}, false
+		return usecases.SymbolStats{}, false, nil
 	}
 	if snap.AlgoVersion != domain.AlgoVersion {
 		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q want=%q", symbol, timeframe, snap.AlgoVersion, domain.AlgoVersion)
-		return usecases.SymbolStats{}, false
+		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now
 	if now == nil {
@@ -235,10 +243,10 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 	age := now().Sub(at)
 	if !domain.EvaluationStoreFresh(at, now(), tf) {
 		log.Printf("[eval] setup reason=stale symbol=%s tf=%s at=%s age=%s", symbol, timeframe, at.UTC().Format(time.RFC3339), age)
-		return usecases.SymbolStats{}, false
+		return usecases.SymbolStats{}, false, nil
 	}
 	// Hits silent at info — see provider readStore.
-	return statsFromSnapshot(snap), true
+	return statsFromSnapshot(snap), true, nil
 }
 
 func statsFromSnapshot(snap domain.EvaluationSnapshot) usecases.SymbolStats {

@@ -936,6 +936,23 @@ func TestSetupService_StoreTransportErrorFallsBackToScorer(t *testing.T) {
 	}
 }
 
+func TestSetupService_StoreContextCanceledDoesNotScore(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &countingScorer{fakeScorer: fakeScorer{stats: sidewaysFallbackStats()}}
+	store := &fakeEvalStore{getErr: context.Canceled}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetEvaluationStore(store)
+
+	_, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if scorer.calls != 0 {
+		t.Fatalf("cancel must not fall through to scorer, got %d calls", scorer.calls)
+	}
+}
+
 func TestSetupService_FutureAtFallsBackToScorer(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	series := makeSeries(50)

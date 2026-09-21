@@ -266,6 +266,36 @@ func TestRankingsEvaluationProvider_TransportErrorFallsBack(t *testing.T) {
 	}
 }
 
+func TestRankingsEvaluationProvider_ContextCanceledDoesNotFallback(t *testing.T) {
+	store := &stubEvalStore{getErr: context.Canceled}
+	rankings := &stubRankings{}
+	p := NewRankingsEvaluationProvider(rankings)
+	p.SetStore(store)
+
+	_, err := p.GetLatestEvaluations(context.Background(), "1h")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if rankings.callCount() != 0 {
+		t.Fatalf("cancel must not start rankings, got %d calls", rankings.callCount())
+	}
+}
+
+func TestRankingsEvaluationProvider_DeadlineExceededDoesNotFallback(t *testing.T) {
+	store := &stubEvalStore{getErr: context.DeadlineExceeded}
+	rankings := &stubRankings{}
+	p := NewRankingsEvaluationProvider(rankings)
+	p.SetStore(store)
+
+	_, err := p.GetLatestEvaluations(context.Background(), "1h")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+	if rankings.callCount() != 0 {
+		t.Fatalf("deadline must not start rankings, got %d calls", rankings.callCount())
+	}
+}
+
 func TestRankingsEvaluationProvider_FutureAtIsStale(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	store := &stubEvalStore{

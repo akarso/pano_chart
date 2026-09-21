@@ -78,10 +78,14 @@ func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, t
 }
 
 // readStore returns (evals, true, nil) on a fresh usable hit; (nil, false, nil)
-// on miss/stale/empty/algo/transport/clock-skew (caller falls back).
+// on miss/stale/empty/algo/transport/clock-skew (caller falls back); and a
+// non-nil error for context cancel/deadline (must not fall back).
 func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Timeframe, timeframe string, nowFn func() time.Time) ([]domain.EvaluationSnapshot, bool, error) {
 	evals, at, err := p.store.Get(ctx, timeframe)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, false, err
+		}
 		if errors.Is(err, ports.ErrEvaluationNotFound) {
 			log.Printf("[eval] provider reason=miss tf=%s", timeframe)
 			return nil, false, nil
@@ -120,9 +124,6 @@ func algoVersionOK(evals []domain.EvaluationSnapshot) bool {
 }
 
 func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf domain.Timeframe, timeframe string) ([]domain.EvaluationSnapshot, error) {
-	if p.fallbackEnter != nil {
-		p.fallbackEnter()
-	}
 	// Coalesce concurrent miss/stale fallbacks for the same TF so a cliff
 	// at EvaluationStaleAfter (or cold store) does not stampede rankings.
 	// DoChan + select: cancelled callers return immediately while the shared
@@ -138,6 +139,11 @@ func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf
 		}
 		return appmarket.SnapshotsFromRankings(results, timeframe, time.Time{}), nil
 	})
+	// Signal after DoChan so tests can wait until every sibling has joined
+	// the flight before releasing Execute.
+	if p.fallbackEnter != nil {
+		p.fallbackEnter()
+	}
 
 	select {
 	case <-ctx.Done():
