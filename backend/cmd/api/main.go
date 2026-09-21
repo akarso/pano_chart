@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"pano_chart/backend/adapters/http/middleware"
 	"pano_chart/backend/adapters/infra"
 	appbehavior "pano_chart/backend/application/behavior"
+	appeval "pano_chart/backend/application/evaluation"
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
@@ -28,6 +30,7 @@ import (
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring"
 	infraauth "pano_chart/backend/infrastructure/auth"
+	infraeval "pano_chart/backend/infrastructure/evaluation"
 	"pano_chart/backend/infrastructure/events"
 	"pano_chart/backend/infrastructure/feargreed"
 	"pano_chart/backend/infrastructure/googleplay"
@@ -475,6 +478,26 @@ func main() {
 	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
+	// --- Evaluation store writer (PR-089a) ---
+	// Opt-in full-universe scorer (PC_EVAL_REFRESH=1|true|on). Default off:
+	// enabling is a live load change. Uses uncached getRankingsUC (intentional
+	// cold score — rankings cache TTL is shorter than writer intervals).
+	// Redis SET NX lock per timeframe so horizontal replicas do not multiply
+	// scoring. Wired after socialCtx/backgroundWG for graceful cancel.
+	if evalRefreshEnabled(os.Getenv("PC_EVAL_REFRESH")) {
+		evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
+		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			evalRefresher.Run(socialCtx)
+		}()
+		log.Println("[main] Evaluation store refresher started (PC_EVAL_REFRESH on)")
+	} else {
+		log.Println("[main] Evaluation store refresher disabled (set PC_EVAL_REFRESH=1 to enable)")
+	}
+
 	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
 	// VolatilityHandler.Reload() existed before PR-082 ("call this after
 	// vol_aggregate runs") but nothing ever called it — harmless while this
@@ -732,6 +755,23 @@ func (a *eventsAdapter) FetchEvents(ctx context.Context, from, to time.Time) ([]
 		DateTo:   to,
 		Country:  "United States",
 	})
+}
+
+// evalRefreshEnabled is opt-in only (default off). Accepts 1/true/yes/on.
+func evalRefreshEnabled(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func hostnameOr(fallback string) string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return fallback
 }
 
 // volatilityReloadLoop periodically calls h.Reload() until ctx is done, so

@@ -3,6 +3,7 @@ package symbol_universe
 import (
 	"context"
 	"time"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -18,10 +19,40 @@ func NewGoRedisClient(addr string) *GoRedisClient {
 }
 
 func (r *GoRedisClient) Get(ctx context.Context, key string) (string, error) {
-	val, err := r.cli.Get(ctx, key).Result()
-	return val, err
+	return r.cli.Get(ctx, key).Result()
 }
 
 func (r *GoRedisClient) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	return r.cli.Set(ctx, key, value, ttl).Err()
+}
+
+func (r *GoRedisClient) Del(ctx context.Context, keys ...string) error {
+	return r.cli.Del(ctx, keys...).Err()
+}
+
+func (r *GoRedisClient) HSet(ctx context.Context, key string, fieldValues map[string]string) error {
+	if len(fieldValues) == 0 {
+		return nil
+	}
+	vals := make([]interface{}, 0, len(fieldValues)*2)
+	for f, v := range fieldValues {
+		vals = append(vals, f, v)
+	}
+	return r.cli.HSet(ctx, key, vals...).Err()
+}
+
+func (r *GoRedisClient) HGet(ctx context.Context, key, field string) (string, error) {
+	return r.cli.HGet(ctx, key, field).Result()
+}
+
+func (r *GoRedisClient) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return r.cli.Expire(ctx, key, ttl).Err()
+}
+
+func (r *GoRedisClient) SetNX(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	return r.cli.SetNX(ctx, key, value, ttl).Result()
+}
+
+func (r *GoRedisClient) Eval(ctx context.Context, script string, keys []string, args ...interface{}) (interface{}, error) {
+	return r.cli.Eval(ctx, script, keys, args...).Result()
 }
