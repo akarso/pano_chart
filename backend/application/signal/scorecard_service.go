@@ -303,6 +303,10 @@ func ResolveSince(raw string, now time.Time) (SinceWindow, error) {
 	}
 	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
 		exact := t.UTC()
+		now = now.UTC()
+		if now.Sub(exact) > time.Duration(maxSinceDays)*24*time.Hour {
+			return SinceWindow{}, fmt.Errorf("invalid since %q", raw)
+		}
 		token := "abs:" + exact.Format(time.RFC3339Nano)
 		return SinceWindow{
 			CacheBucket: token,

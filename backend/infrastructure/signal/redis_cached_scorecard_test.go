@@ -172,7 +172,7 @@ func TestRedisCachedScorecard_flightRecheckLogsAgainstRequest(t *testing.T) {
 	close(release)
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, context.DeadlineExceeded) {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err=%v", err)
 		}
 	case <-time.After(2 * time.Second):
@@ -352,19 +352,19 @@ func TestRedisCachedScorecard_siblingSurvivesLeaderCancel(t *testing.T) {
 	leaderCancel()
 	select {
 	case err := <-leaderErr:
-		t.Fatalf("leader returned before publish: %v", err)
-	case <-time.After(30 * time.Millisecond):
-	}
-
-	close(block)
-	select {
-	case err := <-leaderErr:
-		if err != nil {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("leader err=%v", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("leader did not return")
+		t.Fatal("leader did not return on cancel")
 	}
+	select {
+	case <-waiterDone:
+		t.Fatal("waiter must still be in the flight after the leader returns")
+	default:
+	}
+
+	close(block)
 	select {
 	case <-waiterDone:
 	case <-time.After(2 * time.Second):
@@ -641,30 +641,4 @@ func (panicAPI) Get(context.Context, string, string, string, string) (appsignal.
 }
 func (panicAPI) Summary(context.Context, string, string) (appsignal.SummaryResult, error) {
 	panic("boom")
-}
-
-func TestRedisCachedScorecard_cancelPrefersReadyResult(t *testing.T) {
-	f := &scorecardFlight{done: make(chan struct{}), waiters: 1}
-	f.publish(appsignal.Scorecard{Total: 9}, nil)
-	close(f.done)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	var got interface{}
-	var err error
-	select {
-	case <-f.done:
-		got, err, _ = f.result()
-	case <-ctx.Done():
-		<-f.done
-		got, err, _ = f.result()
-	}
-	if err != nil {
-		t.Fatalf("err=%v", err)
-	}
-	card, ok := got.(appsignal.Scorecard)
-	if !ok || card.Total != 9 {
-		t.Fatalf("got=%v", got)
-	}
 }

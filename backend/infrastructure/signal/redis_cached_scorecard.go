@@ -232,15 +232,16 @@ func (c *RedisCachedScorecard) doShared(
 	}
 
 	select {
+	case <-ctx.Done():
+		// Return immediately. A disconnected caller must not hold the handler
+		// for the rest of the compute window or receive the flight's card.
+		c.leaveFlight(f)
+		return nil, ctx.Err()
 	case <-f.done:
 		c.leaveFlight(f)
-		val, err, _ := f.result()
-		return val, err
-	case <-ctx.Done():
-		// Leave first so a sole waiter cancels the work context. Then wait
-		// for publish — no default, so a finished card cannot lose to cancel.
-		c.leaveFlight(f)
-		<-f.done
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		val, err, _ := f.result()
 		return val, err
 	}

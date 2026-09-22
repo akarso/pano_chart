@@ -99,6 +99,10 @@ func TestResolveSince_absoluteExactKeyMatchesSQL(t *testing.T) {
 	if !frac.Since.Equal(time.Date(2026, 9, 21, 0, 9, 0, 500000000, time.UTC)) {
 		t.Fatalf("fractional since=%v", frac.Since)
 	}
+	now := time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC)
+	if _, err := ResolveSince("2000-01-01T00:00:00Z", now); err == nil {
+		t.Fatal("absolute since older than 10y must be rejected")
+	}
 }
 
 func TestBaselineRate_nilVsZero(t *testing.T) {

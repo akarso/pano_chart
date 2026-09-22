@@ -254,7 +254,8 @@ Query params:
   Relative tokens must be exact (`30d`, not `30dgarbage`). Cached under the
   token itself (not `time.Now().Unix()`), so `since=30d` hits for ~10 minutes.
   Absolute RFC3339 / RFC3339Nano uses the exact UTC instant for both the SQL
-  window and the Redis key (no 10-minute absolute bucket). Timeframe is
+  window and the Redis key (no 10-minute absolute bucket). Instants older than
+  10 years are rejected, the same cap as relative durations. Timeframe is
   canonicalized (`1H`→`1h`).
 
 Response:
