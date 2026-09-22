@@ -693,6 +693,15 @@ func main() {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
 	}
+	// Scorecards (PR-092) — only when signal DB is up.
+	if signalRepo != nil {
+		scorecardSvc := appsignal.NewScorecardService(signalRepo)
+		scorecardAPI := infrasignal.NewRedisCachedScorecard(scorecardSvc, redisClient, "scorecards")
+		scorecardHandler := adhttp.NewScorecardHandler(scorecardAPI)
+		mux.Handle("/api/scorecards", scorecardHandler)
+		mux.Handle("/api/scorecards/summary", scorecardHandler)
+		log.Println("[main] /api/scorecards endpoints registered")
+	}
 	// Hard-enforced auth independent of AUTH_ENFORCE — see
 	// NewVerifyPurchaseRoute's doc for why this route doesn't get the same
 	// log-only migration grace period as the others.

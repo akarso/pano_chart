@@ -229,3 +229,80 @@ not present these as the headline regime.
 * `points` — equal-weight median (unchanged)
 * `volumeWeightedPoints` — quote-volume-weighted mean (additive)
 
+---
+
+## Scorecards (PR-092)
+
+Reliability of past badge / setup / regime / transition calls, graded by the
+PR-091 outcome evaluator. Only rows with a resolved outcome enter the
+denominator; administrative rules (`unsupported`, `invalid`,
+`insufficient_context`, `path_unavailable`) are excluded in SQL.
+
+Aggregates are computed in SQLite (counts / hits / sum return per score
+decile) — no row-hydrate cap. Summary is grouped per `(kind, label)` with no
+shared global `LIMIT`. Baselines for summary chips are derived from that same
+grouping (`(kindHits − labelHits) / (kindN − labelN)`).
+
+### `GET /api/scorecards`
+
+Query params:
+
+* `kind` (required) — allowlisted: `badge` | `setup` | `regime` | `transition`
+* `label` (required) — e.g. `trend_up`, `sideways`, `regime:trend`
+* `timeframe` (optional) — canonical TF; empty = all timeframes mixed
+* `since` (optional) — relative (`30d`, `7d`, `24h`) or RFC3339; default `30d`.
+  Relative tokens must be exact (`30d`, not `30dgarbage`). Cached under the
+  token itself (not `time.Now().Unix()`), so `since=30d` hits for ~10 minutes.
+  Absolute RFC3339 / RFC3339Nano uses the exact UTC instant for both the SQL
+  window and the Redis key (no 10-minute absolute bucket). Timeframe is
+  canonicalized (`1H`→`1h`).
+
+Response:
+
+```json
+{
+  "kind": "badge",
+  "label": "trend_up",
+  "timeframe": "1h",
+  "since": "2026-08-22T00:00:00Z",
+  "sinceRaw": "30d",
+  "total": 412,
+  "hits": 239,
+  "hitRate": 0.58,
+  "baseline": 0.49,
+  "buckets": [
+    { "lo": 0.0, "hi": 0.1, "n": 12, "hits": 3, "hitRate": 0.25, "avgReturn": -0.01 },
+    { "lo": 0.1, "hi": 0.2, "n": 20, "hits": 8, "hitRate": 0.4, "avgReturn": 0.0 }
+  ]
+}
+```
+
+`buckets` are score deciles `[0,0.1) … [0.9,1.0]`. `baseline` is the
+deterministic hit rate of all gradable rows of the **same kind** (and
+timeframe) in the window **excluding the scored label**. When there is no
+comparison set (sole label for that kind), `baseline` is JSON `null` — not
+`0`. Numeric `0` means the comparison set graded with zero hits. Hit rate and
+baseline share one Redis card (~10 minutes); there is no separate longer
+baseline TTL. Errors return JSON `{"error":"..."}`.
+
+### `GET /api/scorecards/summary`
+
+Query params: `timeframe` (optional), `since` (optional, default `30d`).
+
+Response:
+
+```json
+{
+  "timeframe": "1h",
+  "since": "2026-08-22T00:00:00Z",
+  "sinceRaw": "30d",
+  "items": [
+    { "kind": "badge", "label": "trend_up", "hitRate": 0.58, "baseline": 0.49, "n": 412 }
+  ]
+}
+```
+
+One row per `(kind, label)` for UI reliability chips. `since` is frozen with
+the cached payload (not re-stamped from wall clock on a hit). Same exclusion /
+nullable-baseline rules as the full scorecard.
+

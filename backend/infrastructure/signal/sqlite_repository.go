@@ -34,7 +34,9 @@ func NewSQLiteRepository(dbPath string) (*SQLiteRepository, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("setting WAL mode: %w", err)
 	}
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	// Above scorecardComputeTimeout (8s) so a held read does not trip writers
+	// into SQLITE_BUSY before the read's own context deadline fires.
+	if _, err := db.Exec("PRAGMA busy_timeout=15000"); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("setting busy_timeout: %w", err)
 	}
@@ -108,10 +110,15 @@ func (r *SQLiteRepository) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_signals_emitted_at ON signals(emitted_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_signals_kind_label ON signals(kind, label)`,
 		`CREATE INDEX IF NOT EXISTS idx_signals_symbol_tf ON signals(symbol, timeframe)`,
+		`CREATE INDEX IF NOT EXISTS idx_signals_kind_tf_emitted ON signals(kind, timeframe, emitted_at)`,
 	} {
 		if _, err := r.db.Exec(ddl); err != nil {
 			return fmt.Errorf("creating signals index: %w", err)
 		}
+	}
+	// Combined aggregate filters by kind+timeframe+emitted, not label.
+	if _, err := r.db.Exec(`DROP INDEX IF EXISTS idx_signals_kind_label_tf_emitted`); err != nil {
+		return fmt.Errorf("dropping unused signals index: %w", err)
 	}
 	return nil
 }
