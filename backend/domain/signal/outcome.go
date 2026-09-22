@@ -37,16 +37,27 @@ const (
 	RulePathUnavailable     = "path_unavailable"
 )
 
+// ExcludedHitRateRules lists administrative outcome rules omitted from
+// scorecard / baseline denominators (PR-092). Single source for SQL and Go.
+func ExcludedHitRateRules() []string {
+	return []string{
+		RuleUnsupported,
+		RuleInvalid,
+		RuleInsufficientContext,
+		RulePathUnavailable,
+	}
+}
+
 // ExcludedFromHitRate reports whether an outcome rule is administrative
 // (unsupported label, bad TF, missing context, unrecoverable path) and must
 // be omitted from hit-rate / baseline denominators in PR-092.
 func ExcludedFromHitRate(rule string) bool {
-	switch rule {
-	case RuleUnsupported, RuleInvalid, RuleInsufficientContext, RulePathUnavailable:
-		return true
-	default:
-		return false
+	for _, r := range ExcludedHitRateRules() {
+		if rule == r {
+			return true
+		}
 	}
+	return false
 }
 
 // PathStats holds forward-path metrics over the evaluation horizon.
