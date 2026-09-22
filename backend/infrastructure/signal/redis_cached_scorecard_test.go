@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -95,23 +96,6 @@ func (c *countingAPI) Summary(ctx context.Context, _, _ string) (appsignal.Summa
 	return c.sum, nil
 }
 
-func waitGets(t *testing.T, next *countingAPI, min int) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		next.mu.Lock()
-		n := next.gets
-		next.mu.Unlock()
-		if n >= min {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("flight never reached gets=%d (have %d)", min, n)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 func TestWrapRedisGetErr_logsOnlyWhenRequestContextLive(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
@@ -136,9 +120,11 @@ func TestWrapRedisGetErr_logsOnlyWhenRequestContextLive(t *testing.T) {
 	}
 
 	buf.Reset()
-	expired, stop := context.WithTimeout(context.Background(), time.Nanosecond)
+	expired, stop := context.WithDeadline(context.Background(), time.Unix(0, 0))
 	defer stop()
-	time.Sleep(time.Millisecond)
+	if !errors.Is(expired.Err(), context.DeadlineExceeded) {
+		t.Fatalf("past deadline err=%v", expired.Err())
+	}
 	if err := wrapRedisGetErr(expired, "late", context.DeadlineExceeded); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("wrap=%v", err)
 	}
@@ -289,9 +275,11 @@ func TestRedisCachedScorecard_absoluteSinceDistinctKeys(t *testing.T) {
 
 func TestRedisCachedScorecard_callerCancelSurfaces(t *testing.T) {
 	block := make(chan struct{})
+	entered := make(chan struct{})
 	next := &countingAPI{
-		card:  appsignal.Scorecard{Kind: "badge", Label: "x", Total: 3},
-		block: block,
+		card:    appsignal.Scorecard{Kind: "badge", Label: "x", Total: 3},
+		block:   block,
+		entered: entered,
 	}
 	cache := NewRedisCachedScorecard(next, nil, "scorecards")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -300,7 +288,11 @@ func TestRedisCachedScorecard_callerCancelSurfaces(t *testing.T) {
 		_, err := cache.Get(ctx, "badge", "x", "1h", "30d")
 		errCh <- err
 	}()
-	waitGets(t, next, 1)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("compute never entered")
+	}
 	cancel()
 	select {
 	case err := <-errCh:
@@ -315,9 +307,11 @@ func TestRedisCachedScorecard_callerCancelSurfaces(t *testing.T) {
 
 func TestRedisCachedScorecard_siblingSurvivesLeaderCancel(t *testing.T) {
 	block := make(chan struct{})
+	entered := make(chan struct{})
 	next := &countingAPI{
-		card:  appsignal.Scorecard{Kind: "badge", Label: "x", Total: 7, Hits: 4},
-		block: block,
+		card:    appsignal.Scorecard{Kind: "badge", Label: "x", Total: 7, Hits: 4},
+		block:   block,
+		entered: entered,
 	}
 	joined := make(chan struct{}, 2)
 	cache := NewRedisCachedScorecard(next, nil, "scorecards")
@@ -334,7 +328,11 @@ func TestRedisCachedScorecard_siblingSurvivesLeaderCancel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("leader never joined flight")
 	}
-	waitGets(t, next, 1)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("leader compute never entered")
+	}
 
 	waiterDone := make(chan struct{})
 	var waiterCard appsignal.Scorecard
@@ -523,84 +521,65 @@ func TestRedisCachedScorecard_missIsNilNotHardError(t *testing.T) {
 }
 
 func TestRedisCachedScorecard_panicDoesNotStealOtherPermit(t *testing.T) {
-	aGo := make(chan struct{})
-	bGo := make(chan struct{})
-	aEntered := make(chan struct{})
-	bEntered := make(chan struct{})
-	cEntered := make(chan struct{})
-	var onceA, onceB, onceC sync.Once
-	api := &labelGateAPI{
-		get: func(label string) (appsignal.Scorecard, error) {
-			switch label {
-			case "a":
-				onceA.Do(func() { close(aEntered) })
-				<-aGo
-				panic("boom")
-			case "b":
-				onceB.Do(func() { close(bEntered) })
-				<-bGo
-				return appsignal.Scorecard{Kind: "badge", Label: "b", Total: 2}, nil
-			default:
-				onceC.Do(func() { close(cEntered) })
-				return appsignal.Scorecard{Kind: "badge", Label: "c", Total: 3}, nil
-			}
-		},
-	}
-	cache := NewRedisCachedScorecard(api, nil, "scorecards")
-	waited := make(chan struct{}, 4)
-	cache.onComputeWait = func() { waited <- struct{}{} }
+	synctest.Test(t, func(t *testing.T) {
+		aGo := make(chan struct{})
+		bGo := make(chan struct{})
+		aEntered := make(chan struct{})
+		bEntered := make(chan struct{})
+		cEntered := make(chan struct{})
+		var onceA, onceB, onceC sync.Once
+		api := &labelGateAPI{
+			get: func(label string) (appsignal.Scorecard, error) {
+				switch label {
+				case "a":
+					onceA.Do(func() { close(aEntered) })
+					<-aGo
+					panic("boom")
+				case "b":
+					onceB.Do(func() { close(bEntered) })
+					<-bGo
+					return appsignal.Scorecard{Kind: "badge", Label: "b", Total: 2}, nil
+				default:
+					onceC.Do(func() { close(cEntered) })
+					return appsignal.Scorecard{Kind: "badge", Label: "c", Total: 3}, nil
+				}
+			},
+		}
+		cache := NewRedisCachedScorecard(api, nil, "scorecards")
+		waited := make(chan struct{}, 4)
+		cache.onComputeWait = func() { waited <- struct{}{} }
 
-	aErr := make(chan error, 1)
-	go func() {
-		_, err := cache.Get(context.Background(), "badge", "a", "1h", "30d")
-		aErr <- err
-	}()
-	select {
-	case <-aEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("A never entered")
-	}
+		aErr := make(chan error, 1)
+		go func() {
+			_, err := cache.Get(context.Background(), "badge", "a", "1h", "30d")
+			aErr <- err
+		}()
+		<-aEntered
 
-	go func() {
-		_, _ = cache.Get(context.Background(), "badge", "b", "1h", "7d")
-	}()
-	select {
-	case <-waited:
-	case <-time.After(2 * time.Second):
-		t.Fatal("B never blocked on the semaphore")
-	}
+		go func() {
+			_, _ = cache.Get(context.Background(), "badge", "b", "1h", "7d")
+		}()
+		<-waited
 
-	close(aGo)
-	select {
-	case <-aErr:
-	case <-time.After(2 * time.Second):
-		t.Fatal("A did not finish panicking")
-	}
-	select {
-	case <-bEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("B did not take the slot after A panicked")
-	}
+		close(aGo)
+		<-aErr
+		<-bEntered
 
-	go func() {
-		_, _ = cache.Get(context.Background(), "badge", "c", "1h", "1d")
-	}()
-	select {
-	case <-waited:
-	case <-time.After(2 * time.Second):
-		t.Fatal("C never blocked on the semaphore")
-	}
-	select {
-	case <-cEntered:
-		t.Fatal("C entered while B still holds the compute slot")
-	case <-time.After(50 * time.Millisecond):
-	}
-	close(bGo)
-	select {
-	case <-cEntered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("C did not run after B released the slot")
-	}
+		go func() {
+			_, _ = cache.Get(context.Background(), "badge", "c", "1h", "1d")
+		}()
+		<-waited
+		// Every other goroutine is durably blocked. C must still be waiting
+		// on the semaphore, not inside compute.
+		synctest.Wait()
+		select {
+		case <-cEntered:
+			t.Fatal("C entered while B still holds the compute slot")
+		default:
+		}
+		close(bGo)
+		<-cEntered
+	})
 }
 
 type labelGateAPI struct {
