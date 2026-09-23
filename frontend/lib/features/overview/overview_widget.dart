@@ -2130,6 +2130,9 @@ class _OverviewGridItem extends StatelessWidget {
 
   Widget _buildBadge(OverviewItem item, double fontSize) {
     final signal = _parseSignalType(item.badgeComponent);
+    final trendFalling =
+        badgeScorecardLabel('trend', item.sparkline) == 'trend_down';
+    final trendDirection = trendFalling ? -1.0 : 1.0;
     final scale = columns == 1
         ? 1.0
         : columns == 2
@@ -2141,7 +2144,7 @@ class _OverviewGridItem extends StatelessWidget {
       decoration: BoxDecoration(
         color: _signalColor(
           signal,
-          trendScore: item.trendScore,
+          trendScore: trendDirection,
         ).withAlpha((0.8 * 255).round()),
         borderRadius: BorderRadius.circular(4),
       ),
@@ -2149,7 +2152,7 @@ class _OverviewGridItem extends StatelessWidget {
         _signalLabel(
           signal,
           abbreviate: columns > 1,
-          trendScore: item.trendScore,
+          trendScore: trendDirection,
         ),
         style: TextStyle(
           fontSize: badgeFontSize,

@@ -1876,7 +1876,10 @@ class _RenderFieldsetHeader extends RenderBox
     size = constraints.constrain(Size(width, height));
 
     _place(title, 0, height);
-    if (hint != null) _place(hint, widths.title + _hintGap, height);
+    if (hint != null) {
+      final hintAfter = math.min(titleOneLine, widths.title);
+      _place(hint, hintAfter + _hintGap, height);
+    }
     if (trailing != null) {
       _place(trailing, size.width - trailingSize.width, height);
     }
