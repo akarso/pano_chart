@@ -19,6 +19,8 @@ on the broader round.
 | PR | Title | Why |
 |---|---|---|
 | **PR-114** | fix(events): FinanceFlow error backoff | Without this, a mid-day upstream blip after cache TTL expiry becomes a **1/min retry storm (~1440 calls/day)** for the rest of the day. Healthy days stay ~50. Spec: `backend/docs/v2/PR-114.md`. |
+| **PR-115** | fix(market): tape verdict must match the composite chart | Market Pulse shows **SIDEWAYS 45% / Trend 5%** above a composite chart that is visibly trending. Root cause confirmed on synthetic composites: Sideways V5 scores **0.000** on those series; the "sideways" bar is trend weight confiscated by `DampenTrendByHealth` (health = 0 whenever the index is > 1 mean bar-move under its high) and `SeriesDirectionAgreement` zeroes the trend on any tail pullback. Credibility bug — ship first. |
+| **PR-116** | feat(market-pulse): chart-first layout, one verdict, participation by count | Headline above the chart and derived from exactly the bars drawn; structure bars leave the headline card; bottom bars become **Market participation** (share of tokens whose own chart is up / down / ranging), which is allowed to differ from the tape and says *why*. Depends on PR-115. |
 
 ### PR-114 — Events cache: error backoff (FinanceFlow retry storm)
 
@@ -54,6 +56,154 @@ LRU hot-key survival; singleflight. Handler tests for span/country rejection.
 
 **Definition of Done.** Spec tests pass; PR doc (`backend/docs/v2/PR-114.md`) matches this
 contract (prefer the PR doc for implementation detail; keep this section short).
+
+---
+
+### PR-115 — Tape verdict must match the composite chart
+
+**Layer:** domain + application + HTTP (additive JSON). **Depends on:** nothing (PR-088 fixtures
+help but are not required). **Priority:** ship before PR-116 and before any Track E tuning.
+
+**Objective.** The headline regime is computed from the composite tape (PR-084), yet it says
+SIDEWAYS while the composite chart trends. The verdict and the chart are the same data; they
+cannot disagree. After this PR a trending composite is labelled TREND, a ranging one SIDEWAYS,
+and every number in `scores` is a *measured* structure score, never redistributed weight.
+
+**Context (read all).**
+- `application/market/tape_regime.go` → `ScoreMarketTape`. Mix = four calculator scores
+  normalized to sum 1, then `DampenTrendByHealth`, then argmax + indecisive rule.
+- `application/market/health.go` → `ComputeTrendHealth`, `DampenTrendByHealth`.
+  Dampening floor is 0.1 and the "lost" trend weight is **added to the other structures**
+  (or dumped entirely on Sideways when they are 0).
+- `domain/scoring/trend_predictability_score_calculator.go` → `ScoreWithDirection`:
+  `|slopeNorm| × R² × (N−1) × shapePenalty × dirAgreement`, plus `closePricesClustered` gate.
+- `application/market/market_state_service.go` → `candleMetricsWindow = 110`,
+  `scoreCompositeTape`; composite chart endpoint defaults to `limit=200`.
+
+**Measured root cause (synthetic 110-bar composite-like uptrends, 4h, seed 7):**
+
+| Series | Sideways V5 | raw trend | health | reported mix | state |
+|---|---|---|---|---|---|
+| clean +12%, no pullback | **0.000** | 0.85 (up) | 0.00 (dd = 3 mean-moves) | T 0.10 / **S 0.90** | sideways 90% |
+| +12%, 1.5% tail pullback | 0.000 | 0.40 | 0.00 | T 0.10 / S 0.90 | sideways |
+| +6% grind, 1% pullback | 0.000 | **0.00** (dirAgreement = 0) | 0.00 | T 0 / S 1.00 | sideways 100% |
+
+Two independent faults: (a) health uses mean `|Δclose|` as "ATR" and clamps drawdown at 1 unit,
+so a smooth index is always "breaking down"; the dampener then moves 90% of trend weight into
+Sideways *which measured zero*. (b) `SeriesDirectionAgreement(closes, 4)` returns 0 when the
+last quarter turns down, so a normal pullback deletes the trend score outright.
+
+**Spec.**
+1. **No redistribution on the tape.** `ScoreMarketTape` must not call `DampenTrendByHealth`.
+   `Structure` = raw normalized calculator scores. Health still computed and exposed via
+   `EffectiveTrend` / `BreakdownRate` / `Label`; it describes the trend, it does not vote.
+   `DampenTrendByHealth` stays for the participation fallback only.
+2. **Tape trend score without shape gates.** Add `domain/scoring/tape_trend.go`:
+   `TapeTrend(closes []float64, atr14 float64) (score float64, bias string)`
+   - `net = c_N − c_1`; `ER = |net| / Σ|c_i − c_{i−1}|` (0 if denominator 0)
+   - `R²` from OLS on closes (reuse the regression in the predictability calculator; extract a
+     helper, do not copy)
+   - `Mag = clamp(|net| / (4 × atr14), 0, 1)` — full credit once the window moved ≥ 4 true ATRs
+   - `score = R² × Mag × clamp(ER / 0.25, 0, 1)`; `bias = sign(net)` if `score ≥ 0.05` else
+     `neutral`
+   - No `shapePenalty`, no `dirAgreement`, no `closePricesClustered`. Pullbacks are health.
+   `atr14` = Wilder true ATR over the series (add `TrueATR(candles, 14)` to
+   `domain/scoring/stats.go`; reuse `rollingATR` if signature fits). `ScoreMarketTape` uses
+   `TapeTrend` for the trend component. Rankings / per-token scoring are **unchanged**.
+3. **Trend precedence.** After computing the mix: if `TapeTrend.score ≥ 0.5` then
+   `State = trend`, `Bias` from `TapeTrend`, `Confidence = score`. Otherwise argmax + existing
+   indecisive rule. A chart that passes the trend test is trending regardless of how much
+   compression/expansion coexists with it.
+4. **Health on the tape (pull PR-106 items 1–3 forward, drop item 4).**
+   `dd = (windowHigh − price) / atr14` (mirror for down); `health = 1 − clamp((dd − 1) / 2.5, 0, 1)`;
+   crash penalty as today. `Label` via `BuildMarketLabel(structure.Trend, health)` unchanged.
+5. **Window is explicit.** Add `windowBars` (int, = `candleMetricsWindow`) and `trendScore`
+   (0–1) to `GET /api/market/regime` and `GET /api/market/state`. Additive; update `COMMON.md`.
+6. **Participation by count** (feeds PR-116). In `MarketStateService`, from the same
+   evaluations used today, count tokens with `|TrendScore| ≥ 0.5 && Bias == up` → `up`,
+   `… down` → `down`, else `ranging`. Expose `participation: { up, down, ranging, total }` on
+   both endpoints (additive). Keep the old `metrics.*Breadth` fields untouched.
+
+**Tests** (`tests/application/market/tape_regime_coherence_test.go`, deterministic seeds; put
+the generator in `tests/testutil/synthetic_series.go` so PR-088 can reuse it):
+- Eye test, up: `clean +12%`, `+12% with 1.5% and 3% tail pullback`, `+6% grind with 1%
+  pullback`, `noisy +12% (bar noise 0.6)` → `State == trend`, `Bias == up`,
+  `Structure.Trend ≥ 0.6`, `Structure.Sideways ≤ 0.2`, `Label != "No clear trend"`. Mirror down.
+- Structure is measured: with a fake series where Sideways V5 returns 0, `Structure.Sideways`
+  must be 0 (no dumping).
+- `tight_range` (110 bars oscillating 100–104, N=3 extrema) → `State != trend`, Sideways dominant.
+- Random walk, 100 seeds → `State == trend` in ≤ 30% of seeds; mean `trendScore ≤ 0.3`.
+- Health: price 2 ATR under high → `EffectiveTrend ≈ 0.6`; label "Trend weakening", **state
+  still trend**.
+- Handler tests: `windowBars`, `trendScore`, `participation` present and rounded.
+
+**Definition of Done.** Coherence tests pass; existing `tape_regime_test.go` updated (not
+deleted — where an old expectation encoded the redistribution bug, replace it and say so in
+the PR doc); `COMMON.md` documents the new fields; PR doc lists the before/after mix table
+from a real production composite (curl the two endpoints once after deploy).
+
+**Relationship to Track E.** This is the minimum to stop the headline lying. PR-103 (Trend
+Strength v2) may later replace `TapeTrend` behind a flag; PR-106 becomes "participation
+fallback only". Do not start PR-103/106 tuning before this lands.
+
+---
+
+### PR-116 — Market Pulse: chart first, one verdict, participation by count
+
+**Layer:** frontend + docs. **Depends on:** PR-115 (`windowBars`, `trendScore`, `participation`).
+
+**Objective.** The screen currently shows: headline card **with four structure bars**, then the
+composite chart, then metrics, …, then "Token Participation" bars. The structure bars are the
+argmax input of the headline, so they can only ever agree with it or expose a bug — and they
+sit *above* the chart they are supposed to describe. Reorder so the chart is the evidence and
+the headline is its caption; move the bottom bars to a question that is allowed to have a
+different answer.
+
+**Context.** `frontend/lib/features/market_state/market_pulse_screen.dart`:
+`_buildHeadlineCard`/`_buildRegimeCard` (lines ~352–467, `_regimeScoreBar` ×4),
+`ListView` order (~322–338), `_buildCompositeCard` (~929), `_buildBreadthCard` (~1136,
+title "Token Participation"). `regime_data.dart` for the model. `frontend/test/vocabulary_test.dart`
+forbids `breadth`/`prevalence` in UI strings.
+
+**Spec.**
+1. **Order:** headline card → composite chart → **Market participation** card → Market Metrics →
+   Transitions → Regime History. Nothing else moves.
+2. **Headline card** keeps: icon, `UPTREND / DOWNTREND / SIDEWAYS / …`, health suffix,
+   reliability chip, info icon. **Remove** the four `_regimeScoreBar` rows from the card; show
+   the structure mix only inside `_showRegimeInfo` under a "Structure mix" heading.
+   Subline becomes: `Scored on the last {windowBars} bars shown • {timeframe}`; when
+   `regimeSource` is not `composite*`: `From token participation (tape unavailable)` as today.
+3. **Chart shows the evidence.** In the composite painter: bars outside the last `windowBars`
+   are drawn at 40% opacity; over the scored window draw the OLS regression line of the
+   displayed series in the headline color (`_trendBiasColor` / `_regimeColor`). When
+   `regime == trend` the line is solid; otherwise dashed. The chart's default `limit` stays 200.
+4. **Market participation card** (replaces "Token Participation"): one stacked horizontal bar
+   with three segments `Up {p}% · Ranging {p}% · Down {p}%` from `participation`, plus a
+   one-line reading under it: `≥ 50% up (or down)` → "Broad move — most tokens trend with the
+   tape"; `30–50%` → "Mixed — tape led by part of the market"; `< 30%` → "Narrow — tape led
+   by a few heavyweights"; if `up` and `down` are both ≥ 30% → "Split market". The four
+   proportional rows (`metrics.*Breadth`) leave this card and stay only in Market Metrics.
+5. **Info dialog copy** (must start with the glossary definition, PR-085 rule):
+   "Participation — share of tokens whose own chart is currently in an uptrend, a downtrend,
+   or ranging. It can differ from the headline: averaging 150 noisy charts removes noise, so the
+   tape can trend cleanly while many single tokens still look range-bound — or a few
+   heavyweights can pull the tape while most tokens sit still."
+6. **Glossary**: update the *Participation* row in section 1 and `COMMON.md` to the by-count
+   definition; keep *Structure* as the tape's four-way mix (now only in the info dialog).
+
+**Tests** (`frontend/test/features/market_state/market_pulse_screen_test.dart` + existing):
+- Widget order: headline `Key('mp-headline')` above `Key('mp-composite')` above
+  `Key('mp-participation')` (compare `tester.getTopLeft`).
+- Headline text is a pure function of the regime payload: `regime=trend,bias=up` → `UPTREND`;
+  the card contains **no** `_regimeScoreBar` (find by `Key('mp-structure-bar')` → 0).
+- Participation card renders the three segments and the correct reading for
+  `{up:62,down:8,ranging:30}` → "Broad move…", `{20,15,65}` → "Narrow…", `{35,35,30}` → "Split market".
+- Painter golden or `CustomPainter` unit test: regression line present and colored per regime.
+- `vocabulary_test.dart` still passes.
+
+**Definition of Done.** Order/headline/participation tests pass; `flutter analyze` clean;
+`ROADMAP.md` §1 and `COMMON.md` glossary updated; PR doc has before/after screenshots of the
+same 4h payload.
 
 ---
 
@@ -115,7 +265,7 @@ Every number shown to a user must map to exactly one term below. PR-085 enforces
 | **Regime** | Dominant structure of the tape: trend / sideways / compression / expansion / indecisive / silent | `ScoreMarketTape` |
 | **Tape confidence** | Share of the dominant structure in the tape's score mix (0–1) | `TapeRegime.Confidence` |
 | **Structure** | The tape's four-way score mix | `TapeRegime.Structure` |
-| **Participation** | Average per-token score mix across the universe (0–1 each) | `MarketStateService` participation breadth |
+| **Participation** | Share of tokens whose own chart is in an uptrend / downtrend / ranging (by count; PR-115/116). Legacy: average per-token score mix (`metrics.*Breadth`) | `MarketStateService` participation |
 | **Bias** | Direction of the tape's trend: up / down / neutral | `TapeRegime.Bias` |
 | **Composite (median)** | Equal-weight median rebased index | `CompositeIndex.Points` |
 | **Composite (volume-weighted)** | Quote-volume-weighted mean rebased index | `CompositeIndex.VolumeWeightedPoints` |
@@ -771,7 +921,8 @@ Inputs: last `N = 110` closes `c`, highs, lows. Compute on log prices `p = ln(c)
    `ScoreWithDirection` returns sign from `p_N − p_1` (neutral if `Mag < 0.2`).
 7. Config flag `scoring.trend_algo: predictability|strength` (default `predictability`).
    When `strength`, `main.go` uses it under the same `"Trend Predictability"` key so all
-   consumers (rankings, `scoreWeights`, `ScoreMarketTape`) pick it up without changes.
+   consumers (rankings, `scoreWeights`) pick it up without changes. `ScoreMarketTape` uses
+   `TapeTrend` from PR-115; switching the tape to Trend Strength v2 is a separate flag.
 
 **Tests.** Golden: `messy_uptrend` ≥ 0.5, `clean_uptrend` ≥ 0.7, `tight_range` ≤ 0.2,
 `v_reversal` ≤ 0.3 (drawdown penalty). Direction correct on `clean_downtrend`. Pure random
@@ -827,7 +978,9 @@ score ≥ 0.7; uniform noise → ≈ 0.5 ± 0.15.
 
 ### PR-106 — Trend health v2 (true ATR, wider tolerance)
 
-**Layer:** application. **Depends on:** PR-088.
+**Layer:** application. **Depends on:** PR-088. **Note:** PR-115 (hotfix) pulls items 1–3
+forward for the tape and removes dampening from `ScoreMarketTape` entirely; after PR-115 this
+slice applies to the participation fallback only and item 4 is moot.
 
 **Context.** `health.go` → `ComputeTrendHealth`: health = `1 − (high − price)/atr` clamped;
 `atr` is mean |Δclose| (from `EnrichFromSparkline` / `sparklineStats`). One average bar below

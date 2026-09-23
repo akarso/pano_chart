@@ -57,6 +57,11 @@ func NewCandleSeries(symbol Symbol, tf Timeframe, candles []Candle) (CandleSerie
 	}, nil
 }
 
+// Symbol returns the symbol of the series.
+func (cs CandleSeries) Symbol() Symbol {
+	return cs.symbol
+}
+
 // Timeframe returns the timeframe of the series.
 func (cs CandleSeries) Timeframe() Timeframe {
 	return cs.tf
