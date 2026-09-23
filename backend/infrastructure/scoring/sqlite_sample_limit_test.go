@@ -266,6 +266,22 @@ func TestPublishNamesSkipsStaleGeneration(t *testing.T) {
 	}
 }
 
+func TestNoteNamesFailureSkipsStaleGeneration(t *testing.T) {
+	sink := &SQLiteSampleSink{namesGen: 2}
+	if sink.noteNamesFailure(1, context.DeadlineExceeded) {
+		t.Fatal("cached a failure from an older generation")
+	}
+	if sink.namesErr != nil || !sink.namesFailedAt.IsZero() {
+		t.Fatal("stale failure was cached")
+	}
+	if !sink.noteNamesFailure(2, context.DeadlineExceeded) {
+		t.Fatal("current generation was not cached")
+	}
+	if sink.namesErr != context.DeadlineExceeded || sink.namesFailedAt.IsZero() {
+		t.Fatalf("err=%v failedAt=%v", sink.namesErr, sink.namesFailedAt)
+	}
+}
+
 func TestLogLimitedDebounce(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)

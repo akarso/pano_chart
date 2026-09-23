@@ -338,7 +338,7 @@ func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
 		next, err := s.loadNames(loadCtx)
 		cancel()
 		if err != nil {
-			s.noteNamesFailure(err)
+			s.noteNamesFailure(gen, err)
 			return err
 		}
 		if s.publishNames(gen, next) {
@@ -350,11 +350,15 @@ func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
 	}
 }
 
-func (s *SQLiteSampleSink) noteNamesFailure(err error) {
+func (s *SQLiteSampleSink) noteNamesFailure(gen uint64, err error) bool {
 	s.namesMu.Lock()
+	defer s.namesMu.Unlock()
+	if s.namesGen != gen {
+		return false
+	}
 	s.namesErr = err
 	s.namesFailedAt = time.Now()
-	s.namesMu.Unlock()
+	return true
 }
 
 func (s *SQLiteSampleSink) publishNames(gen uint64, next map[string]struct{}) bool {
