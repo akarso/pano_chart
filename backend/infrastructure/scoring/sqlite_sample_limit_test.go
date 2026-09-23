@@ -106,8 +106,8 @@ func TestSQLiteSampleSink_ReadOnlyAbortsBatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := sink.Flush(ctx); err != nil {
-		t.Fatal(err)
+	if err := sink.Flush(ctx); err == nil {
+		t.Fatal("expected flush to report the rejected batch")
 	}
 	if _, err := sink.db.Exec("PRAGMA query_only=OFF"); err != nil {
 		t.Fatal(err)
@@ -118,6 +118,90 @@ func TestSQLiteSampleSink_ReadOnlyAbortsBatch(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("rows=%d", n)
+	}
+}
+
+func TestCalculatorsUsesRetainedRowsOnly(t *testing.T) {
+	sink, err := NewSQLiteSampleSink(t.TempDir()+"/samples.sqlite", 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sink.Close() })
+	ctx := context.Background()
+	names, err := sink.Calculators(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("names=%v", names)
+	}
+
+	now := time.Now().UTC()
+	if err := sink.Record(ctx, "kept", "BTCUSDT", "1h", 0.2, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	names, err = sink.Calculators(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "kept" {
+		t.Fatalf("after commit names=%v", names)
+	}
+
+	if _, err := sink.db.Exec("PRAGMA query_only=ON"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Record(ctx, "ghost", "BTCUSDT", "1h", 0.2, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Flush(ctx); err == nil {
+		t.Fatal("expected flush to report the rejected batch")
+	}
+	if _, err := sink.db.Exec("PRAGMA query_only=OFF"); err != nil {
+		t.Fatal(err)
+	}
+	names, err = sink.Calculators(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 1 || names[0] != "kept" {
+		t.Fatalf("after failed insert names=%v", names)
+	}
+
+	sink.now = func() time.Time { return now.Add(91 * 24 * time.Hour) }
+	if err := sink.Purge(); err != nil {
+		t.Fatal(err)
+	}
+	names, err = sink.Calculators(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Fatalf("after purge names=%v", names)
+	}
+}
+
+func TestFlushReportsEarlierBatchFailure(t *testing.T) {
+	sink, err := NewSQLiteSampleSink(t.TempDir()+"/samples.sqlite", 90*24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sink.Close() })
+	if _, err := sink.db.Exec("PRAGMA query_only=ON"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now := time.Now().UTC()
+	for i := 0; i < sampleBatchSize+5; i++ {
+		if err := sink.Record(ctx, "sideways", "BTCUSDT", "1h", 0.5, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sink.Flush(ctx); err == nil {
+		t.Fatal("expected flush to report the batch that failed before the marker")
 	}
 }
 

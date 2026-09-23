@@ -51,6 +51,7 @@ type SQLiteSampleSink struct {
 	namesMu       sync.Mutex
 	names         map[string]struct{}
 	namesLoaded   bool
+	namesGen      uint64
 	namesErr      error
 	namesFailedAt time.Time
 	loadMu        sync.Mutex
@@ -62,7 +63,7 @@ type sampleWrite struct {
 	tf         string
 	score      float64
 	at         int64
-	done       chan struct{}
+	done       chan error
 }
 
 // RetentionFromEnv parses PC_SCORE_SAMPLE_RETENTION (`90d` or a Go duration).
@@ -223,10 +224,6 @@ func (s *SQLiteSampleSink) Record(ctx context.Context, calculator, symbol, tf st
 	select {
 	case s.ch <- req:
 		s.mu.Unlock()
-		// Remember only after the sample is queued. A dropped or rejected
-		// sample does not mark the calculator known. A later insert failure
-		// can still leave the name without a row.
-		s.remember(calculator)
 		return nil
 	default:
 		s.mu.Unlock()
@@ -235,12 +232,14 @@ func (s *SQLiteSampleSink) Record(ctx context.Context, calculator, symbol, tf st
 	}
 }
 
-// Flush waits until samples enqueued before this call are committed.
+// Flush waits until samples enqueued before this call have been written.
+// It returns the writer error when a batch was rolled back or otherwise
+// not committed.
 func (s *SQLiteSampleSink) Flush(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("score sample sink is closed")
 	}
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -254,8 +253,8 @@ func (s *SQLiteSampleSink) Flush(ctx context.Context) error {
 		return ctx.Err()
 	}
 	select {
-	case <-done:
-		return nil
+	case err := <-done:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -289,9 +288,9 @@ func (s *SQLiteSampleSink) Scores(ctx context.Context, calculator, tf string) ([
 
 // Calculators lists calculator names seen in this process or still stored.
 // The list ignores timeframe: a name is known when any retained sample exists
-// for it. A successful database load is cached. A failed load is reused for
-// one second so concurrent callers share that result, then the next call
-// tries again. The load uses ctx and stops after calculatorLoadTimeout.
+// for it. Names come from retained rows: a commit or purge drops the cache
+// so the next call reloads. A failed load is reused for one second, then the
+// next call tries again. The load uses ctx and stops after calculatorLoadTimeout.
 func (s *SQLiteSampleSink) Calculators(ctx context.Context) ([]string, error) {
 	if err := s.ensureNames(ctx); err != nil {
 		return nil, err
@@ -315,6 +314,9 @@ func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
 	if err, ok := s.cachedNames(time.Now()); ok {
 		return err
 	}
+	s.namesMu.Lock()
+	gen := s.namesGen
+	s.namesMu.Unlock()
 	loadCtx, cancel := context.WithTimeout(ctx, calculatorLoadTimeout)
 	defer cancel()
 	if err := s.loadNames(loadCtx); err != nil {
@@ -325,9 +327,11 @@ func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
 		return err
 	}
 	s.namesMu.Lock()
-	s.namesLoaded = true
-	s.namesErr = nil
-	s.namesFailedAt = time.Time{}
+	if s.namesGen == gen {
+		s.namesLoaded = true
+		s.namesErr = nil
+		s.namesFailedAt = time.Time{}
+	}
 	s.namesMu.Unlock()
 	return nil
 }
@@ -344,13 +348,12 @@ func (s *SQLiteSampleSink) cachedNames(now time.Time) (error, bool) {
 	return nil, false
 }
 
-func (s *SQLiteSampleSink) remember(name string) {
+func (s *SQLiteSampleSink) invalidateNames() {
 	s.namesMu.Lock()
-	defer s.namesMu.Unlock()
-	if s.names == nil {
-		s.names = map[string]struct{}{}
-	}
-	s.names[name] = struct{}{}
+	s.namesGen++
+	s.namesLoaded = false
+	s.namesFailedAt = time.Time{}
+	s.namesMu.Unlock()
 }
 
 func (s *SQLiteSampleSink) loadNames(ctx context.Context) error {
@@ -373,14 +376,13 @@ func (s *SQLiteSampleSink) loadNames(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("listing score calculators: %w", err)
 	}
-	s.namesMu.Lock()
-	defer s.namesMu.Unlock()
-	if s.names == nil {
-		s.names = map[string]struct{}{}
-	}
+	next := make(map[string]struct{}, len(found))
 	for _, name := range found {
-		s.names[name] = struct{}{}
+		next[name] = struct{}{}
 	}
+	s.namesMu.Lock()
+	s.names = next
+	s.namesMu.Unlock()
 	return nil
 }
 
@@ -389,6 +391,7 @@ func (s *SQLiteSampleSink) Purge() error {
 	if _, err := s.db.Exec(`DELETE FROM score_samples WHERE at < ?`, s.cutoff()); err != nil {
 		return fmt.Errorf("purging score samples: %w", err)
 	}
+	s.invalidateNames()
 	return nil
 }
 
@@ -401,45 +404,59 @@ func (s *SQLiteSampleSink) loop() {
 	ticker := time.NewTicker(sampleFlushEvery)
 	defer ticker.Stop()
 	var batch []sampleWrite
+	var pending error
 	for {
 		select {
 		case req, ok := <-s.ch:
 			if !ok {
-				s.writeBatch(batch)
+				_ = s.writeBatch(batch)
 				return
 			}
 			if req.done != nil {
-				s.writeBatch(batch)
-				batch = nil
-				close(req.done)
+				err := s.finishBatch(&batch, &pending)
+				req.done <- err
 				continue
 			}
 			batch = append(batch, req)
 			if len(batch) >= sampleBatchSize {
-				s.writeBatch(batch)
+				if err := s.writeBatch(batch); err != nil {
+					pending = err
+				}
 				batch = nil
 			}
 		case <-ticker.C:
-			s.writeBatch(batch)
+			if err := s.writeBatch(batch); err != nil {
+				pending = err
+			}
 			batch = nil
 		}
 	}
 }
 
-func (s *SQLiteSampleSink) writeBatch(batch []sampleWrite) {
+func (s *SQLiteSampleSink) finishBatch(batch *[]sampleWrite, pending *error) error {
+	err := s.writeBatch(*batch)
+	*batch = nil
+	if err == nil {
+		err = *pending
+	}
+	*pending = nil
+	return err
+}
+
+func (s *SQLiteSampleSink) writeBatch(batch []sampleWrite) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		log.Printf("[score-samples] begin: %v", err)
-		return
+		return fmt.Errorf("recording score samples: %w", err)
 	}
 	stmt, err := tx.Prepare(`INSERT INTO score_samples (calculator, symbol, tf, score, at) VALUES (?, ?, ?, ?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		log.Printf("[score-samples] prepare: %v", err)
-		return
+		return fmt.Errorf("recording score samples: %w", err)
 	}
 	defer stmt.Close()
 	wrote := 0
@@ -455,16 +472,19 @@ func (s *SQLiteSampleSink) writeBatch(batch []sampleWrite) {
 		}
 		_ = tx.Rollback()
 		s.logLimited("insert batch aborted: " + err.Error())
-		return
+		return fmt.Errorf("recording score samples: %w", err)
 	}
 	if wrote == 0 {
 		_ = tx.Rollback()
-		return
+		return fmt.Errorf("recording score samples: no rows committed")
 	}
 	if err := tx.Commit(); err != nil {
 		_ = tx.Rollback()
 		log.Printf("[score-samples] commit: %v", err)
+		return fmt.Errorf("recording score samples: %w", err)
 	}
+	s.invalidateNames()
+	return nil
 }
 
 // statementSkip is a constraint failure. RAISE(ABORT) and RAISE(ROLLBACK)

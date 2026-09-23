@@ -268,8 +268,8 @@ func TestSQLiteSampleSink_TransactionRollbackDropsBatch(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := sink.Flush(ctx); err != nil {
-		t.Fatal(err)
+	if err := sink.Flush(ctx); err == nil {
+		t.Fatal("expected flush to report the rolled-back batch")
 	}
 	if n := countSamples(t, path); n != 0 {
 		t.Fatalf("rows=%d", n)
