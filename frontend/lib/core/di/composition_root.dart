@@ -15,6 +15,7 @@ import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
 import '../../features/fear_greed/http_fear_greed_api.dart';
+import '../../features/scorecards/http_scorecard_api.dart';
 import '../../features/market_state/http_composite_index_api.dart';
 import '../../features/market_state/http_market_state_api.dart';
 import '../../features/market_state/http_regime_api.dart';
@@ -96,6 +97,12 @@ class CompositionRoot {
   /// Creates a wired FearGreedApi.
   FearGreedApi createFearGreedApi() {
     return HttpFearGreedApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [ScorecardApi] for reliability chips and the list screen.
+  /// Each request uses its own client so a timeout can close the socket.
+  ScorecardApi createScorecardApi() {
+    return HttpScorecardApi(baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired MarketStateApi.
