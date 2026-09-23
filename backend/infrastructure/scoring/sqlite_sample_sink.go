@@ -240,23 +240,33 @@ func (s *SQLiteSampleSink) Flush(ctx context.Context) error {
 		return fmt.Errorf("score sample sink is closed")
 	}
 	done := make(chan error, 1)
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return fmt.Errorf("score sample sink is closed")
-	}
-	select {
-	case s.ch <- sampleWrite{done: done}:
-		s.mu.Unlock()
-	case <-ctx.Done():
-		s.mu.Unlock()
-		return ctx.Err()
-	}
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
+	marker := sampleWrite{done: done}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return fmt.Errorf("score sample sink is closed")
+		}
+		select {
+		case s.ch <- marker:
+			s.mu.Unlock()
+			select {
+			case err := <-done:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		default:
+			s.mu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 
@@ -292,17 +302,23 @@ func (s *SQLiteSampleSink) Scores(ctx context.Context, calculator, tf string) ([
 // so the next call reloads. A failed load is reused for one second, then the
 // next call tries again. The load uses ctx and stops after calculatorLoadTimeout.
 func (s *SQLiteSampleSink) Calculators(ctx context.Context) ([]string, error) {
-	if err := s.ensureNames(ctx); err != nil {
-		return nil, err
+	for {
+		if err := s.ensureNames(ctx); err != nil {
+			return nil, err
+		}
+		s.namesMu.Lock()
+		if !s.namesLoaded {
+			s.namesMu.Unlock()
+			continue
+		}
+		out := make([]string, 0, len(s.names))
+		for name := range s.names {
+			out = append(out, name)
+		}
+		s.namesMu.Unlock()
+		sort.Strings(out)
+		return out, nil
 	}
-	s.namesMu.Lock()
-	defer s.namesMu.Unlock()
-	out := make([]string, 0, len(s.names))
-	for name := range s.names {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out, nil
 }
 
 func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
@@ -311,29 +327,47 @@ func (s *SQLiteSampleSink) ensureNames(ctx context.Context) error {
 	}
 	s.loadMu.Lock()
 	defer s.loadMu.Unlock()
-	if err, ok := s.cachedNames(time.Now()); ok {
-		return err
-	}
-	s.namesMu.Lock()
-	gen := s.namesGen
-	s.namesMu.Unlock()
-	loadCtx, cancel := context.WithTimeout(ctx, calculatorLoadTimeout)
-	defer cancel()
-	if err := s.loadNames(loadCtx); err != nil {
+	for {
+		if err, ok := s.cachedNames(time.Now()); ok {
+			return err
+		}
 		s.namesMu.Lock()
-		s.namesErr = err
-		s.namesFailedAt = time.Now()
+		gen := s.namesGen
 		s.namesMu.Unlock()
-		return err
+		loadCtx, cancel := context.WithTimeout(ctx, calculatorLoadTimeout)
+		next, err := s.loadNames(loadCtx)
+		cancel()
+		if err != nil {
+			s.noteNamesFailure(err)
+			return err
+		}
+		if s.publishNames(gen, next) {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
+}
+
+func (s *SQLiteSampleSink) noteNamesFailure(err error) {
 	s.namesMu.Lock()
-	if s.namesGen == gen {
-		s.namesLoaded = true
-		s.namesErr = nil
-		s.namesFailedAt = time.Time{}
-	}
+	s.namesErr = err
+	s.namesFailedAt = time.Now()
 	s.namesMu.Unlock()
-	return nil
+}
+
+func (s *SQLiteSampleSink) publishNames(gen uint64, next map[string]struct{}) bool {
+	s.namesMu.Lock()
+	defer s.namesMu.Unlock()
+	if s.namesGen != gen {
+		return false
+	}
+	s.names = next
+	s.namesLoaded = true
+	s.namesErr = nil
+	s.namesFailedAt = time.Time{}
+	return true
 }
 
 func (s *SQLiteSampleSink) cachedNames(now time.Time) (error, bool) {
@@ -356,34 +390,31 @@ func (s *SQLiteSampleSink) invalidateNames() {
 	s.namesMu.Unlock()
 }
 
-func (s *SQLiteSampleSink) loadNames(ctx context.Context) error {
+func (s *SQLiteSampleSink) loadNames(ctx context.Context) (map[string]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT DISTINCT calculator FROM score_samples WHERE at >= ?`,
 		s.cutoff(),
 	)
 	if err != nil {
-		return fmt.Errorf("listing score calculators: %w", err)
+		return nil, fmt.Errorf("listing score calculators: %w", err)
 	}
 	defer rows.Close()
 	var found []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return fmt.Errorf("scanning score calculator: %w", err)
+			return nil, fmt.Errorf("scanning score calculator: %w", err)
 		}
 		found = append(found, name)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("listing score calculators: %w", err)
+		return nil, fmt.Errorf("listing score calculators: %w", err)
 	}
 	next := make(map[string]struct{}, len(found))
 	for _, name := range found {
 		next[name] = struct{}{}
 	}
-	s.namesMu.Lock()
-	s.names = next
-	s.namesMu.Unlock()
-	return nil
+	return next, nil
 }
 
 // Purge deletes samples older than the retention window.

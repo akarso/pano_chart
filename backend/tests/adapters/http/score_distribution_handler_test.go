@@ -131,7 +131,7 @@ func TestScoreDistributionHandler_RemoteAddrIsNotTheGate(t *testing.T) {
 
 func TestLoopbackListenAddr(t *testing.T) {
 	got, err := adhttp.LoopbackListenAddr("")
-	if err != nil || got != "127.0.0.1:8081" {
+	if err != nil || got != "127.0.0.1:8082" {
 		t.Fatalf("default=%q err=%v", got, err)
 	}
 	got, err = adhttp.LoopbackListenAddr("127.0.0.1:9090")

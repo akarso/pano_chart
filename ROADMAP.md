@@ -115,8 +115,12 @@ last quarter turns down, so a normal pullback deletes the trend score outright.
    indecisive rule. A chart that passes the trend test is trending regardless of how much
    compression/expansion coexists with it.
 4. **Health on the tape (pull PR-106 items 1–3 forward, drop item 4).**
-   `dd = (windowHigh − price) / atr14` (mirror for down); `health = 1 − clamp((dd − 1) / 2.5, 0, 1)`;
-   crash penalty as today. `Label` via `BuildMarketLabel(structure.Trend, health)` unchanged.
+   `barsSinceExtreme` is the number of bars since the window high (the window low when the tape is down).
+   `dd = (windowHigh − price) / atr14` (mirror for down);
+   `ddScore = 1 − clamp((dd − 1) / 2.5, 0, 1)`;
+   `staleness = clamp(barsSinceExtreme / 40, 0, 1)`; `staleScore = 1 − 0.5 × staleness`;
+   health `= ddScore × staleScore`, then the crash penalty as today.
+   `Label` via `BuildMarketLabel(structure.Trend, health)` unchanged.
 5. **Window is explicit.** Add `windowBars` (int, = `candleMetricsWindow`) and `trendScore`
    (0–1) to `GET /api/market/regime` and `GET /api/market/state`. Additive; update `COMMON.md`.
 6. **Participation by count** (feeds PR-116). In `MarketStateService`, from the same

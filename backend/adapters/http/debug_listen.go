@@ -8,10 +8,10 @@ import (
 
 // DefaultDebugAddr is the loopback listener for debug routes.
 // It is a different socket from the public API.
-const DefaultDebugAddr = "127.0.0.1:8081"
+const DefaultDebugAddr = "127.0.0.1:8082"
 
 // LoopbackListenAddr returns addr when its host is a loopback IP.
-// An empty addr uses DefaultDebugAddr. A missing host (`:8081`), a wildcard,
+// An empty addr uses DefaultDebugAddr. A missing host (`:8082`), a wildcard,
 // or any public IP is rejected so the debug server cannot bind where a
 // reverse proxy publishes the API.
 func LoopbackListenAddr(addr string) (string, error) {

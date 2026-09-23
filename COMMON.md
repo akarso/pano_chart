@@ -326,7 +326,7 @@ for that calculator and timeframe. `calculator` is the exact `Name()` string.
 
 Registered only when `PC_DEBUG_ENDPOINTS=1` and the sample DB opened. It is
 not a route on the public API. The process listens for it on `PC_DEBUG_ADDR`
-(default `127.0.0.1:8081`). The host must be a loopback IP; `0.0.0.0`, an
+(default `127.0.0.1:8082`). The host must be a loopback IP; `0.0.0.0`, an
 empty host, and public addresses are refused. A reverse proxy that forwards
 to the public API port does not reach this socket unless it is configured to
 dial the debug address itself. Not an app surface.
@@ -342,7 +342,7 @@ Response is the nearest-rank sample at p5, p10, … p95 (19 values):
 {
   "calculator": "Sideways Consistency",
   "timeframe": "1h",
-  "distribution": [0.12, 0.18, 0.25]
+  "distribution": [0.05, 0.10, 0.14, 0.18, 0.22, 0.27, 0.31, 0.36, 0.41, 0.47, 0.52, 0.58, 0.63, 0.69, 0.74, 0.80, 0.85, 0.91, 0.96]
 }
 ```
 
