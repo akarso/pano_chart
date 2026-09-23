@@ -37,17 +37,20 @@ func NewMarketRegimeHandler(c RegimeCalculator) *MarketRegimeHandler {
 
 // regimeResponse is the JSON response DTO.
 type regimeResponse struct {
-	Timeframe      string           `json:"timeframe"`
-	Regime         string           `json:"regime"`
-	Prevalence     float64          `json:"prevalence"`
-	Bias           string           `json:"bias"`
-	Scores         regimeScoresDTO  `json:"scores"`
-	Metrics        regimeMetricsDTO `json:"metrics"`
-	EffectiveTrend float64          `json:"effectiveTrend"`
-	BreakdownRate  float64          `json:"breakdownRate"`
-	Label          string           `json:"label"`
-	DataQuality    string           `json:"dataQuality"`
-	RegimeSource   string           `json:"regimeSource,omitempty"`
+	Timeframe      string                 `json:"timeframe"`
+	Regime         string                 `json:"regime"`
+	Prevalence     float64                `json:"prevalence"`
+	Bias           string                 `json:"bias"`
+	Scores         regimeScoresDTO        `json:"scores"`
+	Metrics        regimeMetricsDTO       `json:"metrics"`
+	EffectiveTrend float64                `json:"effectiveTrend"`
+	BreakdownRate  float64                `json:"breakdownRate"`
+	Label          string                 `json:"label"`
+	DataQuality    string                 `json:"dataQuality"`
+	RegimeSource   string                 `json:"regimeSource,omitempty"`
+	WindowBars     int                    `json:"windowBars"`
+	TrendScore     float64                `json:"trendScore"`
+	Participation  marketParticipationDTO `json:"participation"`
 }
 
 type regimeScoresDTO struct {
@@ -113,6 +116,14 @@ func (h *MarketRegimeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		Label:          summary.Label,
 		DataQuality:    string(summary.DataQuality),
 		RegimeSource:   summary.RegimeSource,
+		WindowBars:     summary.WindowBars,
+		TrendScore:     roundTo(summary.TrendScore, 4),
+		Participation: marketParticipationDTO{
+			Up:      summary.Participation.Up,
+			Down:    summary.Participation.Down,
+			Ranging: summary.Participation.Ranging,
+			Total:   summary.Participation.Total,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -1,28 +1,35 @@
 package market
 
 import (
-	"math"
-
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/scoring"
 )
 
+const (
+	// tapeTrendGate is the exclusive path to State=trend (PR-115).
+	tapeTrendGate = 0.5
+	// crashTailBars is the lookback for the adverse-move penalty.
+	crashTailBars = 8
+)
+
 // TapeRegime is the market regime derived by scoring a merged composite
-// candle series with the same calculators used on individual charts (PR-084).
+// candle series. Trend state requires TapeTrend ≥ tapeTrendGate; structure
+// remains the measured four-way mix with no health redistribution.
 type TapeRegime struct {
 	Structure      mkt.Breadth
 	State          mkt.State
 	Confidence     float64
 	Bias           string
+	TrendScore     float64 // raw TapeTrend score
 	EffectiveTrend float64
 	BreakdownRate  float64
 	Label          string
 	Source         string
+	WindowBars     int
 }
 
-// ScoreMarketTape classifies a composite OHLCV series the same way a single
-// symbol is scored on the rankings page, then picks a dominant regime.
+// ScoreMarketTape classifies a composite OHLCV series.
 func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeRegime {
 	empty := TapeRegime{
 		State:      mkt.StateSideways,
@@ -30,17 +37,16 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 		Label:      BuildMarketLabel(0, 0),
 		Source:     source,
 		Confidence: 0,
+		WindowBars: series.Len(),
 	}
 	if series.Len() < 2 {
 		return empty
 	}
 
-	trendCalc := &scoring.TrendPredictabilityScoreCalculator{}
-	trendScore, trendBias, err := trendCalc.ScoreWithDirection(series)
-	if err != nil {
-		trendScore, trendBias = 0, "neutral"
-	}
-	trend := math.Abs(trendScore)
+	closes := closesFromSeries(series)
+	candles := series.All()
+	atr14 := scoring.TrueATR(candles, 14)
+	trendScore, trendBias := scoring.TapeTrend(closes, atr14)
 
 	sidewaysCalc := &scoring.SidewaysV5ScoreCalculator{
 		Config: scoring.NewSidewaysV5ConfigForTimeframe(timeframe),
@@ -67,9 +73,43 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 		expansion = 0
 	}
 
+	price := closes[len(closes)-1]
+	hi, lo, extremeBars := ohlcWindowExtreme(candles, trendBias == "down")
+	recentReturn := tailReturnATR(closes, atr14, crashTailBars)
+
+	var effectiveTrend, breakdownRate float64
+	// Health describes a TREND headline only — not a weak TapeTrend that
+	// lost the exclusive gate.
+	if trendScore >= tapeTrendGate && atr14 > 0 && (trendBias == "up" || trendBias == "down") {
+		stateDir := "uptrend"
+		if trendBias == "down" {
+			stateDir = "downtrend"
+		}
+		effectiveTrend = ComputeTrendHealthV2(stateDir, price, hi, lo, atr14, recentReturn, extremeBars)
+		if effectiveTrend < 0.4 {
+			breakdownRate = 1
+		}
+	}
+
+	tape := classifyTape(trendScore, trendBias, sideways, compression, expansion, effectiveTrend, breakdownRate)
+	tape.Source = source
+	tape.WindowBars = series.Len()
+	return tape
+}
+
+// classifyTape turns raw calculator scores into a TapeRegime. Exported for
+// tests that need coexistence / weak-grind fixtures without fighting the
+// real Sideways/Compression calculators.
+func classifyTape(
+	trendScore float64,
+	trendBias string,
+	sideways, compression, expansion float64,
+	effectiveTrend, breakdownRate float64,
+) TapeRegime {
+	trend := trendScore
 	total := trend + sideways + compression + expansion
 	var structure mkt.Breadth
-	if total <= 0 {
+	if total < 0.05 {
 		structure = mkt.Breadth{Sideways: 1}
 	} else {
 		structure = mkt.Breadth{
@@ -80,48 +120,24 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 		}
 	}
 
-	// Composite-level health (one tape, not diluted across 150 symbols).
-	closes := closesFromSeries(series)
-	price, hi, lo, atr, recentReturn := sparklineStats(closes)
-	stateDir := "uptrend"
-	if trendBias == "down" {
-		stateDir = "downtrend"
-	} else if trendBias != "up" {
-		// Flat/neutral trend score — health not meaningful; leave undamped.
-		stateDir = ""
-	}
-	var effectiveTrend, breakdownRate float64
-	if stateDir != "" && atr > 0 {
-		h := ComputeTrendHealth(stateDir, price, hi, lo, atr, recentReturn)
-		effectiveTrend = h
-		if h < 0.4 {
-			breakdownRate = 1
-		}
-		structure = DampenTrendByHealth(structure, effectiveTrend, breakdownRate)
-	}
-
-	dominant, confidence := dominantFromBreadth(structure)
-
-	// Indecisive when no clear winner on the tape itself.
-	first, second := topTwo([]float64{
-		structure.Sideways, structure.Compression, structure.Expansion, structure.Trend,
-	})
-	if first < 0.50 || (first-second) < 0.30 {
-		dominant = mkt.StateIndecisive
-		confidence = first
-	}
-
 	bias := trendBias
 	if bias == "" {
 		bias = "neutral"
 	}
-	// Validate bias against net tape move.
-	if len(closes) >= 2 {
-		net := closes[len(closes)-1] - closes[0]
-		if bias == "up" && net < 0 {
-			bias = "neutral"
-		} else if bias == "down" && net > 0 {
-			bias = "neutral"
+
+	var dominant mkt.State
+	var confidence float64
+	if trendScore >= tapeTrendGate {
+		dominant = mkt.StateTrend
+		confidence = trendScore
+	} else {
+		dominant, confidence = dominantNonTrend(structure)
+		first, second := topTwo([]float64{
+			structure.Sideways, structure.Compression, structure.Expansion,
+		})
+		if first < 0.50 || (first-second) < 0.30 {
+			dominant = mkt.StateIndecisive
+			confidence = first
 		}
 	}
 
@@ -130,11 +146,26 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 		State:          dominant,
 		Confidence:     confidence,
 		Bias:           bias,
+		TrendScore:     trendScore,
 		EffectiveTrend: effectiveTrend,
 		BreakdownRate:  breakdownRate,
-		Label:          BuildMarketLabel(structure.Trend, effectiveTrend),
-		Source:         source,
+		Label:          BuildTapeLabel(dominant, effectiveTrend),
 	}
+}
+
+// dominantNonTrend picks among sideways / compression / expansion only.
+func dominantNonTrend(b mkt.Breadth) (mkt.State, float64) {
+	dominant := mkt.StateSideways
+	maxWeight := b.Sideways
+	if b.Compression >= maxWeight {
+		dominant = mkt.StateCompression
+		maxWeight = b.Compression
+	}
+	if b.Expansion >= maxWeight {
+		dominant = mkt.StateExpansion
+		maxWeight = b.Expansion
+	}
+	return dominant, maxWeight
 }
 
 func dominantFromBreadth(b mkt.Breadth) (mkt.State, float64) {
@@ -168,30 +199,44 @@ func closesFromSeries(series domain.CandleSeries) []float64 {
 	return out
 }
 
-func sparklineStats(closes []float64) (price, hi, lo, atr, recentReturn float64) {
-	n := len(closes)
+// ohlcWindowExtreme returns the candle high/low extreme and bars since it.
+// lookForLow selects the window low (downtrends); otherwise the window high.
+func ohlcWindowExtreme(candles []domain.Candle, lookForLow bool) (hi, lo float64, barsSince int) {
+	n := len(candles)
 	if n == 0 {
-		return
+		return 0, 0, 0
 	}
-	price = closes[n-1]
-	hi, lo = closes[0], closes[0]
-	var atrSum float64
-	for i := 0; i < n; i++ {
-		if closes[i] > hi {
-			hi = closes[i]
+	hi, lo = candles[0].High(), candles[0].Low()
+	extremeIdx := 0
+	for i := 1; i < n; i++ {
+		if candles[i].High() > hi {
+			hi = candles[i].High()
 		}
-		if closes[i] < lo {
-			lo = closes[i]
+		if candles[i].Low() < lo {
+			lo = candles[i].Low()
 		}
-		if i > 0 {
-			atrSum += math.Abs(closes[i] - closes[i-1])
-		}
-	}
-	if n > 1 {
-		atr = atrSum / float64(n-1)
-		if atr > 0 {
-			recentReturn = (closes[n-1] - closes[0]) / atr
+		if lookForLow {
+			if candles[i].Low() <= candles[extremeIdx].Low() {
+				extremeIdx = i
+			}
+		} else if candles[i].High() >= candles[extremeIdx].High() {
+			extremeIdx = i
 		}
 	}
-	return
+	return hi, lo, n - 1 - extremeIdx
+}
+
+// tailReturnATR is (last − first_of_tail) / atr over the last n bars.
+func tailReturnATR(closes []float64, atr float64, n int) float64 {
+	if atr <= 0 || len(closes) < 2 {
+		return 0
+	}
+	if n < 2 {
+		n = 2
+	}
+	if n > len(closes) {
+		n = len(closes)
+	}
+	start := len(closes) - n
+	return (closes[len(closes)-1] - closes[start]) / atr
 }

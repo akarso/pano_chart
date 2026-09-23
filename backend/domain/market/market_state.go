@@ -43,11 +43,13 @@ type Summary struct {
 	// "composite_volume_weighted", "composite_median", or "participation".
 	RegimeSource string
 
-	// Trend health aggregates (additive — zero values are backward compatible).
-	// When RegimeSource is composite_*, these are health of the tape itself.
-	EffectiveTrend float64 // average trend health across all tokens (0–1)
-	BreakdownRate  float64 // fraction of trending tokens with health < 0.4
-	Label          string  // human-readable quality label
+	// Trend health (additive — zero values are backward compatible).
+	// On the composite-tape path these describe the tape itself (health of
+	// the scored series; BreakdownRate is 0 or 1). On the participation
+	// fallback they remain averages / fractions across trending tokens.
+	EffectiveTrend float64
+	BreakdownRate  float64
+	Label          string // human-readable quality label
 
 	// Candle-derived market-wide metrics (additive — see PR-073). Populated
 	// only when MarketStateService has a CandleProvider configured;
@@ -61,6 +63,29 @@ type Summary struct {
 	// evaluation-source outage looks identical to a genuinely quiet market
 	// (State=sideways, Confidence=0), which is misleading to show as-is.
 	DataQuality DataQuality
+
+	// WindowBars is the number of candles scored for the headline when
+	// RegimeSource is composite_*; 0 on participation fallback / unavailable.
+	WindowBars int
+	// TrendScore is the raw TapeTrend score (0–1) of the composite when
+	// RegimeSource is composite_*; zero on the participation fallback.
+	// Distinct from EvaluationSnapshot.TrendScore (Trend Predictability).
+	TrendScore float64
+	// Participation counts tokens by stored eval Trend Predictability
+	// (|TrendScore| ≥ 0.5) and sparkline Bias — not TapeTrend.
+	Participation Participation
+}
+
+// Participation counts tokens whose stored evaluation looks up, down, or
+// ranging. Up/down require |EvaluationSnapshot.TrendScore| ≥ 0.5 (Trend
+// Predictability) and Bias up/down from the sparkline net move. Distinct
+// from Breadth (average per-token score mix) and from response trendScore
+// (composite TapeTrend).
+type Participation struct {
+	Up      int
+	Down    int
+	Ranging int
+	Total   int
 }
 
 // DataQuality describes how much of the expected symbol universe actually
