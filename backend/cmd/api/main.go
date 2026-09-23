@@ -24,6 +24,7 @@ import (
 	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
 	apprisk "pano_chart/backend/application/risk"
+	appscoring "pano_chart/backend/application/scoring"
 	"pano_chart/backend/application/setups"
 	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/application/usecases"
@@ -128,12 +129,11 @@ func main() {
 	if sidewaysAlgo == "" {
 		sidewaysAlgo = usecases.SidewaysAlgoV5 // default
 	}
-	// PR-074: sample-logs SidewaysV5's score distribution in production —
-	// see infrastructure/scoring.LoggingScoreCalculator's doc for why this
-	// lives here rather than inside the domain calculation itself. There's
-	// no historical data available to measure the PR-074 CCS fix's impact
-	// on rankings ahead of shipping it; this is how that gets observed.
-	const sidewaysV5LogSampleRate = 0.05
+	// PR-074 / PR-094: sample SidewaysV5 scores in production. A sink persists
+	// them; if the sample DB cannot open, the decorator keeps logging.
+	sampleRate := infrascoring.SampleRateFromEnv(os.Getenv("PC_SCORE_SAMPLE_RATE"))
+	var scoreSampler *infrascoring.LoggingScoreCalculator
+	var scoreSink *infrascoring.SQLiteSampleSink
 
 	var sidewaysCalc scoring.SymbolScoreCalculator
 	switch sidewaysAlgo {
@@ -143,10 +143,24 @@ func main() {
 		sidewaysAlgo = usecases.SidewaysAlgoV5
 		sidewaysCalc = usecases.SidewaysCalcFor(sidewaysAlgo)
 	}
-	// Sample-log V5 (and default) score distribution in production — wrap
-	// outside TimeframeAware so one decorator covers all timeframes.
+	// Wrap outside TimeframeAware so one decorator covers all timeframes.
 	if sidewaysAlgo == usecases.SidewaysAlgoV5 {
-		sidewaysCalc = infrascoring.NewLoggingScoreCalculator(sidewaysCalc, sidewaysV5LogSampleRate)
+		scoreSampler = infrascoring.NewLoggingScoreCalculator(sidewaysCalc, sampleRate)
+		sidewaysCalc = scoreSampler
+	}
+	if scoreSampler != nil {
+		sampleDB := os.Getenv("PC_SCORE_SAMPLE_DB")
+		if sampleDB == "" {
+			sampleDB = "./score_samples.sqlite"
+		}
+		retention := infrascoring.RetentionFromEnv(os.Getenv("PC_SCORE_SAMPLE_RETENTION"))
+		sink, err := infrascoring.AttachSampleSink(scoreSampler, sampleDB, retention)
+		if err != nil {
+			log.Printf("[main] score sample sink unavailable, logging samples instead: %v", err)
+		} else {
+			scoreSink = sink
+			log.Printf("[main] score samples initialized (db=%s rate=%v retention=%s)", sampleDB, sampleRate, retention)
+		}
 	}
 
 	// --- Use cases ---
@@ -527,6 +541,14 @@ func main() {
 	}()
 	log.Printf("[main] Social watcher started (nitter=%s, cache_ttl=%v)\n", nitterBaseURL, socialCacheTTL)
 
+	if scoreSink != nil {
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			scoreSink.RunRetention(socialCtx)
+		}()
+	}
+
 	// --- Evaluation store writer (PR-089a) ---
 	// Default on (ROADMAP); set PC_EVAL_REFRESH=0|false|off to disable.
 	// Uses uncached getRankingsUC (intentional full score when due). Redis
@@ -702,6 +724,32 @@ func main() {
 		mux.Handle("/api/scorecards/summary", scorecardHandler)
 		log.Println("[main] /api/scorecards endpoints registered")
 	}
+	// Debug distribution is a second listener, not a route on the public mux.
+	// A same-host reverse proxy that forwards to :8080 never sees this socket.
+	var debugSrv *http.Server
+	if os.Getenv("PC_DEBUG_ENDPOINTS") == "1" && scoreSink != nil {
+		debugAddr, err := adhttp.LoopbackListenAddr(os.Getenv("PC_DEBUG_ADDR"))
+		if err != nil {
+			log.Printf("[main] debug score distribution not started: %v", err)
+		} else {
+			debugMux := http.NewServeMux()
+			dist := appscoring.NewDistributionService(scoreSink)
+			debugMux.Handle("/api/debug/score-distribution", adhttp.NewScoreDistributionHandler(dist))
+			debugSrv = &http.Server{
+				Addr:         debugAddr,
+				Handler:      debugMux,
+				ReadTimeout:  5 * time.Second,
+				WriteTimeout: 20 * time.Second,
+				IdleTimeout:  60 * time.Second,
+			}
+			go func() {
+				log.Printf("[main] debug score distribution listening on %s", debugAddr)
+				if err := debugSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Printf("[main] debug server: %v", err)
+				}
+			}()
+		}
+	}
 	// Hard-enforced auth independent of AUTH_ENFORCE — see
 	// NewVerifyPurchaseRoute's doc for why this route doesn't get the same
 	// log-only migration grace period as the others.
@@ -777,6 +825,15 @@ func main() {
 	<-sig
 	log.Println("[main] shutting down...")
 
+	if debugSrv != nil {
+		debugCtx, debugCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := debugSrv.Shutdown(debugCtx); err != nil {
+			log.Printf("[main] debug server shutdown: %v", err)
+			_ = debugSrv.Close()
+		}
+		debugCancel()
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -809,6 +866,11 @@ func main() {
 	_ = regimeHistoryRepo.Close()
 	if signalRepo != nil {
 		_ = signalRepo.Close()
+	}
+	// These waits run one after another (debug listener, public server,
+	// background workers, then this writer).
+	if scoreSink != nil {
+		_ = scoreSink.Close()
 	}
 	_ = socialAccountStore.Close()
 	_ = socialSubStore.Close()

@@ -307,3 +307,47 @@ One row per `(kind, label)` for UI reliability chips. `since` is frozen with
 the cached payload (not re-stamped from wall clock on a hit). Same exclusion /
 nullable-baseline rules as the full scorecard.
 
+---
+
+## Score distribution (PR-094)
+
+Sampled calculator scores, kept so Track E can place a live score in the
+recent distribution. `LoggingScoreCalculator` records a fraction of `Score()`
+calls (`PC_SCORE_SAMPLE_RATE`, default `0.1`; non-finite values also use `0.1`)
+into SQLite (`PC_SCORE_SAMPLE_DB`, default `./score_samples.sqlite`) instead of
+printing them. Samples are queued and written in batches; a full queue drops
+the sample. Rows older than the retention window (`PC_SCORE_SAMPLE_RETENTION`,
+`90d` or a Go duration, default 90 days) are deleted when the process starts
+its retention loop and about once a day. Queries also ignore anything outside
+that window. A percentile query uses the most recent 100000 retained rows
+for that calculator and timeframe. `calculator` is the exact `Name()` string.
+
+### `GET /api/debug/score-distribution`
+
+Registered only when `PC_DEBUG_ENDPOINTS=1` and the sample DB opened. It is
+not a route on the public API. The process listens for it on `PC_DEBUG_ADDR`
+(default `127.0.0.1:8082`). The host must be a loopback IP; `0.0.0.0`, an
+empty host, and public addresses are refused. A reverse proxy that forwards
+to the public API port does not reach this socket unless it is configured to
+dial the debug address itself. Not an app surface.
+
+Query params:
+
+* `calculator` (required) — exact calculator `Name()`, e.g. `Sideways Consistency`
+* `timeframe` (required) — canonical TF (`1H` is accepted as `1h`)
+
+Response is the nearest-rank sample at p5, p10, … p95 (19 values):
+
+```json
+{
+  "calculator": "Sideways Consistency",
+  "timeframe": "1h",
+  "distribution": [0.05, 0.10, 0.14, 0.18, 0.22, 0.27, 0.31, 0.36, 0.41, 0.47, 0.52, 0.58, 0.63, 0.69, 0.74, 0.80, 0.85, 0.91, 0.96]
+}
+```
+
+A known calculator (any retained sample, on any timeframe) with no rows for
+the requested timeframe → `404`. An unknown calculator → `400` with
+`calculators` listing those names. Missing params → `400`. Other methods →
+`405`. Errors are JSON `{"error":"..."}`.
+
