@@ -75,6 +75,10 @@ func (e *Emitter) Emit(ctx context.Context, s domainsignal.Signal) bool {
 	if s.ID == "" {
 		s.ID = uuid.NewString()
 	}
+	// Canonical TF so dedupe keys and SQLite readiness match domain.NewTimeframe.
+	if tf, err := domain.NewTimeframe(s.Timeframe); err == nil {
+		s.Timeframe = tf.String()
+	}
 	// Symbol-scoped signals need a usable price for forward return.
 	// ATR may be 0 for a flat series (normalization unavailable for PR-091);
 	// still persist so the call can be graded on price-based rules.

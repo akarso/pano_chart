@@ -545,6 +545,19 @@ func main() {
 		log.Println("[main] Evaluation store refresher disabled (PC_EVAL_REFRESH=0)")
 	}
 
+	// --- Signal outcome evaluator (PR-091) ---
+	if signalRepo != nil {
+		signalEval := appsignal.NewEvaluator(signalRepo, candleRepo)
+		signalEval.SetTapeProvider(compositeUC)
+		signalEval.SetRegimeHistory(regimeHistoryService)
+		backgroundWG.Add(1)
+		go func() {
+			defer backgroundWG.Done()
+			signalEval.Run(socialCtx)
+		}()
+		log.Println("[main] Signal outcome evaluator started (interval=5m)")
+	}
+
 	// --- Volatility profile periodic reload (CR follow-up, PR-082) ---
 	// VolatilityHandler.Reload() existed before PR-082 ("call this after
 	// vol_aggregate runs") but nothing ever called it — harmless while this
@@ -679,6 +692,15 @@ func main() {
 	if eventsUC != nil {
 		mux.Handle("/api/v1/events", adhttp.NewEventsHandler(eventsUC))
 		log.Println("[main] /api/v1/events endpoint registered")
+	}
+	// Scorecards (PR-092) — only when signal DB is up.
+	if signalRepo != nil {
+		scorecardSvc := appsignal.NewScorecardService(signalRepo)
+		scorecardAPI := infrasignal.NewRedisCachedScorecard(scorecardSvc, redisClient, "scorecards")
+		scorecardHandler := adhttp.NewScorecardHandler(scorecardAPI)
+		mux.Handle("/api/scorecards", scorecardHandler)
+		mux.Handle("/api/scorecards/summary", scorecardHandler)
+		log.Println("[main] /api/scorecards endpoints registered")
 	}
 	// Hard-enforced auth independent of AUTH_ENFORCE — see
 	// NewVerifyPurchaseRoute's doc for why this route doesn't get the same
