@@ -9,6 +9,7 @@ import 'detail_screen.dart';
 import 'http_behavior_api.dart';
 import 'http_fragility_api.dart';
 import 'http_setup_api.dart';
+import '../scorecards/http_scorecard_api.dart';
 
 /// Loads candle data for [symbol] then pushes [DetailScreen].
 ///
@@ -22,6 +23,7 @@ class SetupDetailLoader extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
+  final ScorecardApi? scorecardApi;
   final bool isProUser;
 
   const SetupDetailLoader({
@@ -33,6 +35,7 @@ class SetupDetailLoader extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.volatilityApi,
+    this.scorecardApi,
     this.isProUser = false,
   }) : super(key: key);
 
@@ -71,6 +74,7 @@ class _SetupDetailLoaderState extends State<SetupDetailLoader> {
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
             volatilityApi: widget.volatilityApi,
+            scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
           ),
         ),

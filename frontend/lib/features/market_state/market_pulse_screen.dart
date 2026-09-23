@@ -1,6 +1,8 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/polling_config.dart';
@@ -14,6 +16,11 @@ import 'market_state_data.dart';
 import 'regime_data.dart';
 import 'regime_history_data.dart';
 import 'transition_data.dart';
+import '../scorecards/http_scorecard_api.dart';
+import '../scorecards/reliability_chip.dart';
+import '../scorecards/scorecard_catalog.dart';
+import '../scorecards/scorecard_data.dart';
+import '../scorecards/scorecards_screen.dart';
 
 /// Full-page Market Pulse screen showing market state, participation, and
 /// composite index chart. Designed for extensibility with future stats.
@@ -23,6 +30,7 @@ class MarketPulseScreen extends StatefulWidget {
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
+  final ScorecardApi? scorecardApi;
   final String? initialTimeframe;
   final bool isProUser;
 
@@ -33,6 +41,7 @@ class MarketPulseScreen extends StatefulWidget {
     this.regimeApi,
     this.transitionApi,
     this.regimeHistoryApi,
+    this.scorecardApi,
     this.initialTimeframe,
     this.isProUser = false,
   }) : super(key: key);
@@ -49,9 +58,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   RegimeData? _regimeData;
   TransitionData? _transitionData;
   RegimeHistoryData? _regimeHistoryData;
+  final ScorecardCatalog _scorecards = ScorecardCatalog();
   String? _error;
   bool _loading = true;
   String _timeframe = '4h';
+
   /// When true and volume-weighted series exists, chart that path (PR-084).
   bool _useVolumeWeighted = true;
 
@@ -177,6 +188,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       _loading = true;
       _error = null;
     });
+    _loadScorecards();
     try {
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
@@ -241,14 +253,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               child: DropdownButton<String>(
                 value: _timeframe,
                 isDense: true,
-                icon: const Icon(Icons.expand_more, color: Colors.white70, size: 18),
+                icon: const Icon(
+                  Icons.expand_more,
+                  color: Colors.white70,
+                  size: 18,
+                ),
                 dropdownColor: const Color(0xFF1A1A1A),
                 style: const TextStyle(color: Colors.white, fontSize: 14),
                 items: _supportedTimeframes
-                    .map((tf) => DropdownMenuItem(
-                          value: tf,
-                          child: Text(tf),
-                        ))
+                    .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
                     .toList(),
                 onChanged: (v) {
                   if (v != null && v != _timeframe) {
@@ -278,7 +291,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
+              const Icon(
+                Icons.error_outline,
+                color: Colors.redAccent,
+                size: 48,
+              ),
               const SizedBox(height: 12),
               const Text(
                 'Failed to load market data',
@@ -291,10 +308,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-              TextButton(
-                onPressed: _loadAll,
-                child: const Text('Retry'),
-              ),
+              TextButton(onPressed: _loadAll, child: const Text('Retry')),
             ],
           ),
         ),
@@ -374,11 +388,12 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       ),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
             children: [
               Icon(icon, color: color, size: 28),
-              const SizedBox(width: 8),
               Text(
                 _regimeLabel(data.regime, data.bias),
                 style: TextStyle(
@@ -387,19 +402,34 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   color: color,
                 ),
               ),
+              ReliabilityChip(
+                item:
+                    _scorecards.items[scorecardKey(
+                      'regime',
+                      regimeScorecardLabel(data.regime),
+                    )],
+              ),
+              GestureDetector(
+                onTap: _showRegimeInfo,
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.help_outline,
+                    size: 16,
+                    color: Colors.white30,
+                  ),
+                ),
+              ),
               if (hasLabel) ...[
-                const SizedBox(width: 8),
                 const Text(
                   '·',
                   style: TextStyle(fontSize: 24, color: Colors.grey),
                 ),
-                const SizedBox(width: 8),
                 Icon(
                   _healthIcon(data.label),
                   color: _healthColor(data.label),
                   size: 20,
                 ),
-                const SizedBox(width: 4),
                 Text(
                   _healthSuffix(data.label),
                   style: TextStyle(
@@ -442,8 +472,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       children: [
         SizedBox(
           width: 90,
-          child: Text(label,
-              style: const TextStyle(fontSize: 12, color: Colors.white54)),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 12, color: Colors.white54),
+          ),
         ),
         Expanded(
           child: ClipRRect(
@@ -499,7 +531,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               GestureDetector(
                 onTap: () => _showInfoDialog(
                   title: 'Market Metrics',
-                  body: 'Participation — average per-token score mix across the '
+                  body:
+                      'Participation — average per-token score mix across the '
                       'universe (0–1 each).\n\n'
                       'Volatility — short-term ATR / long-term ATR ratio.\n'
                       '  • < 0.8 low  •  0.8–1.3 normal  •  > 1.3 high\n\n'
@@ -508,16 +541,22 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                       'Participation rows are not the headline. The headline '
                       'comes from the merged market tape.',
                 ),
-                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                child: const Icon(
+                  Icons.help_outline,
+                  size: 13,
+                  color: Colors.white30,
+                ),
               ),
             ],
           ),
           const SizedBox(height: 12),
-          _metricRow('Volatility', volLabel,
-              _volatilityColor(m.volatilityExpansion)),
+          _metricRow(
+            'Volatility',
+            volLabel,
+            _volatilityColor(m.volatilityExpansion),
+          ),
           const SizedBox(height: 8),
-          _metricRow('Dispersion', dispLabel,
-              _dispersionColor(m.dispersion)),
+          _metricRow('Dispersion', dispLabel, _dispersionColor(m.dispersion)),
           const SizedBox(height: 8),
           _metricRow(
             'Trend participation',
@@ -551,8 +590,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label,
-            style: const TextStyle(fontSize: 13, color: Colors.white70)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: Colors.white70),
+        ),
         Text(value, style: TextStyle(fontSize: 13, color: color)),
       ],
     );
@@ -612,7 +653,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   GestureDetector(
                     onTap: () => _showInfoDialog(
                       title: 'Transition Probabilities',
-                      body: 'Regime — dominant structure of the tape: trend / '
+                      body:
+                          'Regime — dominant structure of the tape: trend / '
                           'sideways / compression / expansion / indecisive / '
                           'silent.\n\n'
                           'Estimated likelihood of the market transitioning '
@@ -624,7 +666,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                           'Regime Age shows how long the current regime '
                           'has persisted, in both candles and real time.',
                     ),
-                    child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                    child: const Icon(
+                      Icons.help_outline,
+                      size: 13,
+                      color: Colors.white30,
+                    ),
                   ),
                 ],
               ),
@@ -653,8 +699,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       children: [
         SizedBox(
           width: 80,
-          child: Text(label,
-              style: const TextStyle(fontSize: 13, color: Colors.white70)),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
+          ),
         ),
         Expanded(
           child: ClipRRect(
@@ -709,7 +757,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   GestureDetector(
                     onTap: () => _showInfoDialog(
                       title: 'Regime History',
-                      body: 'Regime — dominant structure of the tape: trend / '
+                      body:
+                          'Regime — dominant structure of the tape: trend / '
                           'sideways / compression / expansion / indecisive / '
                           'silent.\n\n'
                           'Timeline of detected market regimes.\n\n'
@@ -719,7 +768,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                           'periods (up to 20) with duration proportional to '
                           'candle count.',
                     ),
-                    child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                    child: const Icon(
+                      Icons.help_outline,
+                      size: 13,
+                      color: Colors.white30,
+                    ),
                   ),
                 ],
               ),
@@ -748,8 +801,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Widget _buildTimeline(List<RegimePeriodData> periods) {
     // Show a horizontal regime timeline bar.
-    final totalCandles =
-        periods.fold<int>(0, (sum, p) => sum + p.durationCandles);
+    final totalCandles = periods.fold<int>(
+      0,
+      (sum, p) => sum + p.durationCandles,
+    );
     if (totalCandles == 0) {
       return const SizedBox.shrink();
     }
@@ -979,9 +1034,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         decoration: BoxDecoration(
           color: selected ? Colors.white12 : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected ? Colors.white38 : Colors.white12,
-          ),
+          border: Border.all(color: selected ? Colors.white38 : Colors.white12),
         ),
         child: Text(
           label,
@@ -1006,15 +1059,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       (points.length * 2) ~/ 3,
       points.length - 1,
     ];
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     String fmt(int ts) {
-      final dt = DateTime.fromMillisecondsSinceEpoch(ts * 1000, isUtc: true).toLocal();
+      final dt = DateTime.fromMillisecondsSinceEpoch(
+        ts * 1000,
+        isUtc: true,
+      ).toLocal();
       final m = months[dt.month - 1];
       final d = dt.day;
       final h = dt.hour.toString().padLeft(2, '0');
       final min = dt.minute.toString().padLeft(2, '0');
       return '$m $d $h:$min';
     }
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: indices.map((i) {
@@ -1084,7 +1154,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               GestureDetector(
                 onTap: () => _showInfoDialog(
                   title: 'Token Participation',
-                  body: 'Participation — average per-token score mix across '
+                  body:
+                      'Participation — average per-token score mix across '
                       'the universe (0–1 each).\n\n'
                       'Shown here as 0–100%. This is NOT the headline regime '
                       '— that comes from scoring the merged market tape like '
@@ -1094,7 +1165,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                       '• Compression — narrowing ranges\n'
                       '• Expansion — breakout / volatility expansion',
                 ),
-                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+                child: const Icon(
+                  Icons.help_outline,
+                  size: 13,
+                  color: Colors.white30,
+                ),
               ),
             ],
           ),
@@ -1117,7 +1192,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       children: [
         SizedBox(
           width: 90,
-          child: Text(label, style: const TextStyle(fontSize: 13, color: Colors.white70)),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: Colors.white70),
+          ),
         ),
         Expanded(
           child: ClipRRect(
@@ -1169,6 +1247,58 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   // ---------- Helpers ----------
+
+  void _showRegimeInfo() {
+    final api = widget.scorecardApi;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Regime'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Regime — dominant structure of the tape: trend / '
+              'sideways / compression / expansion / indecisive / silent.\n\n'
+              'The headline is that structure on the merged market tape.',
+            ),
+            if (api != null) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ScorecardsScreen(api: api, timeframe: _timeframe),
+                    ),
+                  );
+                },
+                child: const Text('Reliability'),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadScorecards() {
+    return _scorecards.load(
+      api: widget.scorecardApi,
+      timeframe: _timeframe,
+      notify: () {
+        if (mounted) setState(() {});
+      },
+    );
+  }
 
   void _showInfoDialog({required String title, required String body}) {
     showDialog(

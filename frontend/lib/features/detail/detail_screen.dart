@@ -1,5 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/format_price.dart';
@@ -25,6 +29,10 @@ import 'http_behavior_api.dart';
 import 'fragility_data.dart';
 import 'behavior_data.dart';
 import 'setup_data.dart';
+import '../scorecards/http_scorecard_api.dart';
+import '../scorecards/reliability_chip.dart';
+import '../scorecards/scorecard_catalog.dart';
+import '../scorecards/scorecard_data.dart';
 import 'trade/exchange_config.dart';
 import 'trade/trade_action_buttons.dart';
 import '../volatility/volatility_alignment.dart';
@@ -66,6 +74,9 @@ class DetailScreen extends StatefulWidget {
   /// API for fetching intraday volatility profiles.
   final VolatilityApi? volatilityApi;
 
+  /// Reliability summary for the setup chip. Null hides the chip.
+  final ScorecardApi? scorecardApi;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -83,6 +94,7 @@ class DetailScreen extends StatefulWidget {
     this.initialVisibleCount = 30,
     this.isProUser = false,
     this.volatilityApi,
+    this.scorecardApi,
   }) : super(key: key);
 
   @override
@@ -117,20 +129,26 @@ class _DetailScreenState extends State<DetailScreen> {
   SetupData? _setupData;
   bool _isLoadingSetup = false;
   bool _setupFetched = false;
+  int _setupGeneration = 0;
+  final ScorecardCatalog _scorecards = ScorecardCatalog();
 
   // ---- fragility state ----
   FragilityData? _fragilityData;
   bool _isLoadingFragility = false;
   bool _fragilityFetched = false;
+  int _fragilityGeneration = 0;
 
   // ---- behavior state ----
   BehaviorData? _behaviorData;
   bool _isLoadingBehavior = false;
   bool _behaviorFetched = false;
+  int _behaviorGeneration = 0;
 
   // ---- volatility state ----
   List<VolatilityBucket>? _volatilityData;
+  String? _volatilityTimeframe;
   bool _volatilityFetched = false;
+  int _volatilityGeneration = 0;
 
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
@@ -140,6 +158,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   // ---- lifecycle registration ----
   Pausable? _pausable;
+  AppLifecycleManager? _lifecycle;
 
   @override
   void initState() {
@@ -154,6 +173,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadEvents();
     _wireSocialFeedCallback();
     _loadSetupData();
+    _loadScorecards();
     _loadFragilityData();
     _loadBehaviorData();
     _loadVolatilityData();
@@ -166,6 +186,7 @@ class _DetailScreenState extends State<DetailScreen> {
     super.didChangeDependencies();
     if (_pausable == null) {
       final mgr = AppLifecycleScope.of(context);
+      _lifecycle = mgr;
       if (mgr != null) {
         _pausable = Pausable(
           onPause: () {
@@ -184,8 +205,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
-    final mgr = AppLifecycleScope.of(context);
-    if (_pausable != null) mgr?.removePausable(_pausable!);
+    if (_pausable != null) _lifecycle?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
     widget.socialFeedViewModel?.onChanged = null;
@@ -209,15 +229,21 @@ class _DetailScreenState extends State<DetailScreen> {
         _series = result;
         _warmupCount = kIndicatorWarmup;
         _isLoadingTf = false;
+        _setupData = null;
+        _setupFetched = false;
+        _fragilityData = null;
+        _fragilityFetched = false;
+        _behaviorData = null;
+        _behaviorFetched = false;
+        _volatilityData = null;
+        _volatilityTimeframe = null;
+        _volatilityFetched = false;
       });
       _loadEvents(); // reload events for new date range
-      _setupFetched = false;
       _loadSetupData(); // reload setup for new timeframe
-      _fragilityFetched = false;
+      _loadScorecards();
       _loadFragilityData(); // reload fragility for new timeframe
-      _behaviorFetched = false;
       _loadBehaviorData(); // reload behavior for new timeframe
-      _volatilityFetched = false;
       _loadVolatilityData(); // reload volatility for new timeframe
       _startAutoRefresh(); // restart with new timeframe interval
     } catch (_) {
@@ -243,16 +269,19 @@ class _DetailScreenState extends State<DetailScreen> {
   }
 
   /// Re-fetches candles + all dependent panels silently.
+  /// A result for a timeframe that is no longer on screen is dropped,
+  /// including its setup reload.
   Future<void> _autoRefreshChart() async {
     final svc = widget.getCandleSeries;
     if (svc == null || !mounted) return;
+    final timeframe = _timeframe;
     try {
       final input = buildDetailChartInput(
         symbol: widget.symbol.value,
-        timeframe: _timeframe,
+        timeframe: timeframe,
       );
       final result = await svc.execute(input);
-      if (!mounted) return;
+      if (!mounted || _timeframe != timeframe) return;
       setState(() {
         _series = result;
         _warmupCount = kIndicatorWarmup;
@@ -357,8 +386,9 @@ class _DetailScreenState extends State<DetailScreen> {
     final dateFrom = _isoDate(candles.first.timestamp);
     // Extend dateTo to cover the forward projection window so that
     // future scheduled events are included in the feed.
-    final projectionEnd =
-        candles.last.timestamp.add(maxProjectionWindow(_timeframe));
+    final projectionEnd = candles.last.timestamp.add(
+      maxProjectionWindow(_timeframe),
+    );
     final dateTo = _isoDate(projectionEnd);
     evm.load(dateFrom, dateTo);
   }
@@ -373,90 +403,185 @@ class _DetailScreenState extends State<DetailScreen> {
   Future<void> _loadSetupData() async {
     final api = widget.setupApi;
     if (api == null || _setupFetched) return;
+    final generation = ++_setupGeneration;
+    final timeframe = _timeframe;
     setState(() => _isLoadingSetup = true);
     try {
       final data = await api.fetch(
         symbol: widget.symbol.value,
-        timeframe: _timeframe,
+        timeframe: timeframe,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _setupGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      if (data.timeframe != timeframe) {
+        setState(() {
+          _setupData = null;
+          _isLoadingSetup = false;
+          _setupFetched = true;
+        });
+        return;
+      }
       setState(() {
         _setupData = data;
         _isLoadingSetup = false;
         _setupFetched = true;
       });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _isLoadingSetup = false;
-          _setupFetched = true;
-        });
+      if (!mounted ||
+          generation != _setupGeneration ||
+          _timeframe != timeframe) {
+        return;
       }
+      setState(() {
+        _isLoadingSetup = false;
+        _setupFetched = true;
+        if (_setupData != null && _setupData!.timeframe != _timeframe) {
+          _setupData = null;
+        }
+      });
     }
+  }
+
+  Future<void> _loadScorecards() {
+    if (widget.setupApi == null) return Future<void>.value();
+    return _scorecards.load(
+      api: widget.scorecardApi,
+      timeframe: _timeframe,
+      notify: () {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   Future<void> _loadFragilityData() async {
     final api = widget.fragilityApi;
     if (api == null || _fragilityFetched) return;
+    final generation = ++_fragilityGeneration;
+    final timeframe = _timeframe;
     setState(() => _isLoadingFragility = true);
     try {
       final data = await api.fetch(
         symbol: widget.symbol.value,
-        timeframe: _timeframe,
+        timeframe: timeframe,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _fragilityGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      if (data.timeframe != timeframe) {
+        setState(() {
+          _isLoadingFragility = false;
+          if (_fragilityData != null &&
+              _fragilityData!.timeframe != _timeframe) {
+            _fragilityData = null;
+          }
+        });
+        return;
+      }
       setState(() {
         _fragilityData = data;
         _isLoadingFragility = false;
         _fragilityFetched = true;
       });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _isLoadingFragility = false;
-          _fragilityFetched = true;
-        });
+      if (!mounted ||
+          generation != _fragilityGeneration ||
+          _timeframe != timeframe) {
+        return;
       }
+      setState(() {
+        _isLoadingFragility = false;
+        if (_fragilityData != null && _fragilityData!.timeframe != _timeframe) {
+          _fragilityData = null;
+        } else {
+          _fragilityFetched = true;
+        }
+      });
     }
   }
 
   Future<void> _loadBehaviorData() async {
     final api = widget.behaviorApi;
     if (api == null || _behaviorFetched) return;
+    final generation = ++_behaviorGeneration;
+    final timeframe = _timeframe;
     setState(() => _isLoadingBehavior = true);
     try {
       final data = await api.fetch(
         symbol: widget.symbol.value,
-        timeframe: _timeframe,
+        timeframe: timeframe,
       );
-      if (!mounted) return;
+      if (!mounted ||
+          generation != _behaviorGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      if (data.timeframe != timeframe) {
+        setState(() {
+          _isLoadingBehavior = false;
+          if (_behaviorData != null && _behaviorData!.timeframe != _timeframe) {
+            _behaviorData = null;
+          }
+        });
+        return;
+      }
       setState(() {
         _behaviorData = data;
         _isLoadingBehavior = false;
         _behaviorFetched = true;
       });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _isLoadingBehavior = false;
-          _behaviorFetched = true;
-        });
+      if (!mounted ||
+          generation != _behaviorGeneration ||
+          _timeframe != timeframe) {
+        return;
       }
+      setState(() {
+        _isLoadingBehavior = false;
+        if (_behaviorData != null && _behaviorData!.timeframe != _timeframe) {
+          _behaviorData = null;
+        } else {
+          _behaviorFetched = true;
+        }
+      });
     }
   }
 
   Future<void> _loadVolatilityData() async {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
+    final generation = ++_volatilityGeneration;
+    final timeframe = _timeframe;
     try {
-      final data = await api.fetch(timeframe: _timeframe);
-      if (!mounted) return;
+      final data = await api.fetch(timeframe: timeframe);
+      if (!mounted ||
+          generation != _volatilityGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
       setState(() {
         _volatilityData = data;
+        _volatilityTimeframe = timeframe;
         _volatilityFetched = true;
       });
     } catch (_) {
-      if (mounted) setState(() => _volatilityFetched = true);
+      if (!mounted ||
+          generation != _volatilityGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      setState(() {
+        if (_volatilityData != null && _volatilityTimeframe != _timeframe) {
+          _volatilityData = null;
+          _volatilityTimeframe = null;
+        } else {
+          _volatilityFetched = true;
+        }
+      });
     }
   }
 
@@ -464,20 +589,34 @@ class _DetailScreenState extends State<DetailScreen> {
   Future<void> _reloadChart() async {
     final svc = widget.getCandleSeries;
     if (svc == null) return;
+    final timeframe = _timeframe;
     setState(() => _isLoadingTf = true);
     try {
       final input = buildDetailChartInput(
         symbol: widget.symbol.value,
-        timeframe: _timeframe,
+        timeframe: timeframe,
       );
       final result = await svc.execute(input);
       if (!mounted) return;
+      if (_timeframe != timeframe) {
+        setState(() => _isLoadingTf = false);
+        return;
+      }
       setState(() {
         _series = result;
         _warmupCount = kIndicatorWarmup;
         _isLoadingTf = false;
+        _setupFetched = false;
+        _fragilityFetched = false;
+        _behaviorFetched = false;
+        _volatilityFetched = false;
       });
       _loadEvents();
+      _loadSetupData();
+      _loadScorecards();
+      _loadFragilityData();
+      _loadBehaviorData();
+      _loadVolatilityData();
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -559,8 +698,7 @@ class _DetailScreenState extends State<DetailScreen> {
       final days = (totalHours / 24).round();
       approx = '~$days day${days == 1 ? '' : 's'}';
     } else {
-      approx =
-          '~${totalHours.round()} hr${totalHours.round() == 1 ? '' : 's'}';
+      approx = '~${totalHours.round()} hr${totalHours.round() == 1 ? '' : 's'}';
     }
     return 'Showing last $count \u00d7 $tf candles ($approx)';
   }
@@ -587,33 +725,36 @@ class _DetailScreenState extends State<DetailScreen> {
   void _navigateToEventsList(String scrollToEventId) {
     final evm = widget.eventsViewModel;
     if (evm == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MacroEventsScreen(
-          viewModel: evm,
-          scrollToEventId:
-              scrollToEventId.isNotEmpty ? scrollToEventId : null,
-          isProUser: widget.isProUser,
-        ),
-      ),
-    ).then((_) {
-      // Re-attach the onChanged listener (MacroEventsScreen overrides it)
-      // and reload events for the chart's date range so the chart overlay
-      // reflects any updates (e.g. newly visible future events).
-      _loadEvents();
-    });
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => MacroEventsScreen(
+              viewModel: evm,
+              scrollToEventId: scrollToEventId.isNotEmpty
+                  ? scrollToEventId
+                  : null,
+              isProUser: widget.isProUser,
+            ),
+          ),
+        )
+        .then((_) {
+          // Re-attach the onChanged listener (MacroEventsScreen overrides it)
+          // and reload events for the chart's date range so the chart overlay
+          // reflects any updates (e.g. newly visible future events).
+          _loadEvents();
+        });
   }
 
   void _navigateToSocialFeed() {
     final svm = widget.socialFeedViewModel;
     if (svm == null) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SocialFeedScreen(viewModel: svm),
-      ),
-    ).then((_) {
-      _wireSocialFeedCallback();
-    });
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(builder: (_) => SocialFeedScreen(viewModel: svm)),
+        )
+        .then((_) {
+          _wireSocialFeedCallback();
+        });
   }
 
   // ---- build ----
@@ -679,10 +820,12 @@ class _DetailScreenState extends State<DetailScreen> {
                             size: 18,
                           ),
                           items: kTimeframes
-                              .map((tf) => DropdownMenuItem(
-                                    value: tf,
-                                    child: Text(tf),
-                                  ))
+                              .map(
+                                (tf) => DropdownMenuItem(
+                                  value: tf,
+                                  child: Text(tf),
+                                ),
+                              )
                               .toList(),
                           onChanged: _isLoadingTf
                               ? null
@@ -706,7 +849,11 @@ class _DetailScreenState extends State<DetailScreen> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 40, minHeight: 32),
                 onPressed: () async {
-                  final result = await showIndicatorPanel(context, _chartConfig, isProUser: widget.isProUser);
+                  final result = await showIndicatorPanel(
+                    context,
+                    _chartConfig,
+                    isProUser: widget.isProUser,
+                  );
                   if (result != null) _saveChartConfig(result);
                 },
                 tooltip: 'Indicators',
@@ -730,7 +877,9 @@ class _DetailScreenState extends State<DetailScreen> {
         body: SingleChildScrollView(
           physics: const ClampingScrollPhysics(),
           padding: EdgeInsets.only(
-            left: 16, right: 16, top: 8,
+            left: 16,
+            right: 16,
+            top: 8,
             bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
           ),
           child: Column(
@@ -740,10 +889,7 @@ class _DetailScreenState extends State<DetailScreen> {
               if (ctx != null) const SizedBox(height: 12),
               Text(
                 _timeRangeLabel(),
-                style: const TextStyle(
-                  color: Colors.white38,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
               ),
               const SizedBox(height: 8),
               if (_isLoadingTf)
@@ -771,131 +917,150 @@ class _DetailScreenState extends State<DetailScreen> {
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
                 ),
-            // Overlay controls (social feed + macro events)
-            if (widget.socialFeedViewModel != null ||
-                widget.eventsViewModel != null) ...[
-              const SizedBox(height: 8),
-              _buildOverlayControls(),
-            ],
-            const SizedBox(height: 12),
-            TradeActionButtons(
-              symbol: widget.symbol.value,
-              timeframe: _timeframe,
-              preferredExchangeId: _preferredExchangeId,
-              exchanges: _exchanges,
-              customExchange: _customExchange,
-              onExchangeChanged: _savePreferredExchange,
-              onAddCustom: _showCustomExchangeForm,
-              onEditCustom: _showCustomExchangeForm,
-            ),
-            if (pct24h != null || pctRef != null) ...[
+              // Overlay controls (social feed + macro events)
+              if (widget.socialFeedViewModel != null ||
+                  widget.eventsViewModel != null) ...[
+                const SizedBox(height: 8),
+                _buildOverlayControls(),
+              ],
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  // 24h percentage
-                  if (pct24h != null) ...[
+              TradeActionButtons(
+                symbol: widget.symbol.value,
+                timeframe: _timeframe,
+                preferredExchangeId: _preferredExchangeId,
+                exchanges: _exchanges,
+                customExchange: _customExchange,
+                onExchangeChanged: _savePreferredExchange,
+                onAddCustom: _showCustomExchangeForm,
+                onEditCustom: _showCustomExchangeForm,
+              ),
+              if (pct24h != null || pctRef != null) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    // 24h percentage
+                    if (pct24h != null) ...[
+                      Text(
+                        '${pct24h > 0 ? '+' : ''}${pct24h.toStringAsFixed(2)}%',
+                        style: TextStyle(
+                          color: pct24h > 0
+                              ? Colors.green
+                              : (pct24h < 0 ? Colors.red : Colors.grey),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      GestureDetector(
+                        onTap: () => _showInfoDialog(
+                          title: '24h Change',
+                          body: 'Percentage change over the last 24 hours.',
+                        ),
+                        child: const Icon(
+                          Icons.help_outline,
+                          size: 13,
+                          color: Colors.white30,
+                        ),
+                      ),
+                    ],
+                    // Divider
+                    if (pct24h != null && pctRef != null)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 8),
+                        child: Text(
+                          '|',
+                          style: TextStyle(color: Colors.white24, fontSize: 16),
+                        ),
+                      ),
+                    // Reference area percentage
+                    if (pctRef != null) ...[
+                      Text(
+                        '${pctRef > 0 ? '+' : ''}${pctRef.toStringAsFixed(2)}%',
+                        style: TextStyle(
+                          color: pctRef > 0
+                              ? Colors.green
+                              : (pctRef < 0 ? Colors.red : Colors.grey),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      GestureDetector(
+                        onTap: () => _showInfoDialog(
+                          title: 'Reference Area',
+                          body:
+                              'Percentage change across the reference area '
+                              '(green line on time axis) — same window as the '
+                              'overview sparkline you tapped on.',
+                        ),
+                        child: const Icon(
+                          Icons.help_outline,
+                          size: 13,
+                          color: Colors.white30,
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
                     Text(
-                      '${pct24h > 0 ? '+' : ''}${pct24h.toStringAsFixed(2)}%',
-                      style: TextStyle(
-                        color: pct24h > 0 ? Colors.green : (pct24h < 0 ? Colors.red : Colors.grey),
-                        fontWeight: FontWeight.bold,
+                      formatPrice(candles.last.close),
+                      style: const TextStyle(
+                        color: Colors.white70,
                         fontSize: 16,
                       ),
                     ),
-                    const SizedBox(width: 2),
-                    GestureDetector(
-                      onTap: () => _showInfoDialog(
-                        title: '24h Change',
-                        body: 'Percentage change over the last 24 hours.',
-                      ),
-                      child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
-                    ),
                   ],
-                  // Divider
-                  if (pct24h != null && pctRef != null)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8),
-                      child: Text('|', style: TextStyle(color: Colors.white24, fontSize: 16)),
-                    ),
-                  // Reference area percentage
-                  if (pctRef != null) ...[
-                    Text(
-                      '${pctRef > 0 ? '+' : ''}${pctRef.toStringAsFixed(2)}%',
-                      style: TextStyle(
-                        color: pctRef > 0 ? Colors.green : (pctRef < 0 ? Colors.red : Colors.grey),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    GestureDetector(
-                      onTap: () => _showInfoDialog(
-                        title: 'Reference Area',
-                        body: 'Percentage change across the reference area '
-                            '(green line on time axis) — same window as the '
-                            'overview sparkline you tapped on.',
-                      ),
-                      child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
-                    ),
-                  ],
-                  const Spacer(),
-                  Text(
-                    formatPrice(candles.last.close),
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 16,
-                    ),
+                ),
+              ],
+              if (ctx != null) ...[
+                const SizedBox(height: 20),
+                _scoringWindowInfo(),
+                const SizedBox(height: 6),
+                _buildScoreBreakdown(ctx),
+                const SizedBox(height: 20),
+                _buildPriceAction(ctx),
+              ],
+              if (_setupData != null) ...[
+                const SizedBox(height: 20),
+                _buildSetupQuality(_setupData!),
+              ] else if (_isLoadingSetup) ...[
+                const SizedBox(height: 20),
+                const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
-                ],
-              ),
-            ],
-            if (ctx != null) ...[
-              const SizedBox(height: 20),
-              _scoringWindowInfo(),
-              const SizedBox(height: 6),
-              _buildScoreBreakdown(ctx),
-              const SizedBox(height: 20),
-              _buildPriceAction(ctx),
-            ],
-            if (_setupData != null) ...[
-              const SizedBox(height: 20),
-              _buildSetupQuality(_setupData!),
-            ] else if (_isLoadingSetup) ...[
-              const SizedBox(height: 20),
-              const Center(
-                child: SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-              ),
-            ],
-            if (_fragilityData != null) ...[
-              const SizedBox(height: 20),
-              _buildFragility(_fragilityData!),
-            ] else if (_isLoadingFragility) ...[
-              const SizedBox(height: 20),
-              const Center(
-                child: SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+              ],
+              if (_fragilityData != null) ...[
+                const SizedBox(height: 20),
+                _buildFragility(_fragilityData!),
+              ] else if (_isLoadingFragility) ...[
+                const SizedBox(height: 20),
+                const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 ),
-              ),
-            ],
-            if (_behaviorData != null) ...[
-              const SizedBox(height: 20),
-              _buildBehavior(_behaviorData!),
-            ] else if (_isLoadingBehavior) ...[
-              const SizedBox(height: 20),
-              const Center(
-                child: SizedBox(
-                  width: 20, height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+              ],
+              if (_behaviorData != null) ...[
+                const SizedBox(height: 20),
+                _buildBehavior(_behaviorData!),
+              ] else if (_isLoadingBehavior) ...[
+                const SizedBox(height: 20),
+                const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
                 ),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -909,7 +1074,8 @@ class _DetailScreenState extends State<DetailScreen> {
     return Row(
       children: [
         // Social feed toggle
-        if (svm != null) ...[          _overlayToggle(
+        if (svm != null) ...[
+          _overlayToggle(
             icon: Icons.rss_feed,
             label: '',
             active: socialOn,
@@ -920,7 +1086,8 @@ class _DetailScreenState extends State<DetailScreen> {
           const SizedBox(width: 12),
         ],
         // Macro events toggle
-        if (evm != null) ...[          _overlayToggle(
+        if (evm != null) ...[
+          _overlayToggle(
             icon: Icons.public,
             label: 'Events',
             active: eventsOn,
@@ -929,15 +1096,19 @@ class _DetailScreenState extends State<DetailScreen> {
             }),
           ),
           // Filter level chips — only when events are shown
-          if (eventsOn) ...[            const SizedBox(width: 16),
-            for (final level in EventFilterLevel.values) ...[              GestureDetector(
+          if (eventsOn) ...[
+            const SizedBox(width: 16),
+            for (final level in EventFilterLevel.values) ...[
+              GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => setState(() {
                   evm.setFilterLevel(level);
                 }),
                 child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
                   decoration: BoxDecoration(
                     color: evm.state.filterLevel == level
                         ? Colors.white.withAlpha(25)
@@ -993,7 +1164,11 @@ class _DetailScreenState extends State<DetailScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: active ? Colors.white70 : Colors.white30),
+            Icon(
+              icon,
+              size: 16,
+              color: active ? Colors.white70 : Colors.white30,
+            ),
             const SizedBox(width: 4),
             Text(
               label,
@@ -1014,10 +1189,7 @@ class _DetailScreenState extends State<DetailScreen> {
       children: [
         Text(
           'Rank #${ctx.rank} \u2014 Sideways v2',
-          style: const TextStyle(
-            color: Colors.white54,
-            fontSize: 13,
-          ),
+          style: const TextStyle(color: Colors.white54, fontSize: 13),
         ),
         const SizedBox(height: 4),
         Row(
@@ -1026,27 +1198,31 @@ class _DetailScreenState extends State<DetailScreen> {
               Text(
                 '24h: ${pct24h > 0 ? '+' : ''}${pct24h.toStringAsFixed(1)}%',
                 style: TextStyle(
-                  color: pct24h > 0 ? Colors.green : (pct24h < 0 ? Colors.red : Colors.grey),
+                  color: pct24h > 0
+                      ? Colors.green
+                      : (pct24h < 0 ? Colors.red : Colors.grey),
                   fontSize: 13,
                 ),
               ),
             if (pct24h != null && pctRef != null)
-              const Text(' | ', style: TextStyle(color: Colors.white24, fontSize: 13)),
+              const Text(
+                ' | ',
+                style: TextStyle(color: Colors.white24, fontSize: 13),
+              ),
             if (pctRef != null)
               Text(
                 'Ref: ${pctRef > 0 ? '+' : ''}${pctRef.toStringAsFixed(1)}%',
                 style: TextStyle(
-                  color: pctRef > 0 ? Colors.green : (pctRef < 0 ? Colors.red : Colors.grey),
+                  color: pctRef > 0
+                      ? Colors.green
+                      : (pctRef < 0 ? Colors.red : Colors.grey),
                   fontSize: 12,
                 ),
               ),
             const SizedBox(width: 16),
             Text(
               'Vol: ${_formatVolume(ctx.volume)}',
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 13,
-              ),
+              style: const TextStyle(color: Colors.white54, fontSize: 13),
             ),
           ],
         ),
@@ -1094,7 +1270,8 @@ class _DetailScreenState extends State<DetailScreen> {
             GestureDetector(
               onTap: () => _showInfoDialog(
                 title: 'Fragility',
-                body: 'How vulnerable the current price level is to '
+                body:
+                    'How vulnerable the current price level is to '
                     'sudden dislocations.\n\n'
                     '• Funding Extremeness — distance of funding rate from neutral\n'
                     '• OI Expansion — open-interest growth vs baseline\n'
@@ -1103,15 +1280,16 @@ class _DetailScreenState extends State<DetailScreen> {
                     'liquidation clusters\n\n'
                     'High fragility suggests a stop-hunt or squeeze is more likely.',
               ),
-              child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+              child: const Icon(
+                Icons.help_outline,
+                size: 13,
+                color: Colors.white30,
+              ),
             ),
             const Spacer(),
             Text(
               FragilityData.riskLabel(data.riskLevel),
-              style: TextStyle(
-                color: riskColor,
-                fontSize: 12,
-              ),
+              style: TextStyle(color: riskColor, fontSize: 12),
             ),
             const SizedBox(width: 6),
             Text(
@@ -1125,7 +1303,8 @@ class _DetailScreenState extends State<DetailScreen> {
           ],
         ),
         const SizedBox(height: 8),
-        if (data.dominantSide != 'neutral') ...[          Row(
+        if (data.dominantSide != 'neutral') ...[
+          Row(
             children: [
               Text(
                 FragilityData.sideLabel(data.dominantSide),
@@ -1138,10 +1317,7 @@ class _DetailScreenState extends State<DetailScreen> {
               const SizedBox(width: 8),
               Text(
                 FragilityData.squeezeLabel(data.squeezeRisk),
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 12,
-                ),
+                style: const TextStyle(color: Colors.white54, fontSize: 12),
               ),
             ],
           ),
@@ -1191,7 +1367,8 @@ class _DetailScreenState extends State<DetailScreen> {
             GestureDetector(
               onTap: () => _showInfoDialog(
                 title: 'Retail Behavior',
-                body: 'Inferred crowd-sentiment dimensions derived from '
+                body:
+                    'Inferred crowd-sentiment dimensions derived from '
                     'funding rates, open-interest dynamics, and '
                     'order-flow imbalances.\n\n'
                     '• Greed — aggressive long positioning\n'
@@ -1199,15 +1376,16 @@ class _DetailScreenState extends State<DetailScreen> {
                     '• Patience — low activity, wait-and-see\n'
                     '• Panic — capitulation signals',
               ),
-              child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
+              child: const Icon(
+                Icons.help_outline,
+                size: 13,
+                color: Colors.white30,
+              ),
             ),
             const Spacer(),
             Text(
               data.summary,
-              style: const TextStyle(
-                color: Colors.white54,
-                fontSize: 12,
-              ),
+              style: const TextStyle(color: Colors.white54, fontSize: 12),
             ),
           ],
         ),
@@ -1271,13 +1449,24 @@ class _DetailScreenState extends State<DetailScreen> {
     final rawCompression = ctx.compressionScore.abs();
     final rawBreakoutUp = ctx.breakoutUpScore.abs();
     final rawBreakoutDown = ctx.breakoutDownScore.abs();
-    final metricSum = rawTrend + rawSideways + rawCompression + rawBreakoutUp + rawBreakoutDown;
+    final metricSum =
+        rawTrend +
+        rawSideways +
+        rawCompression +
+        rawBreakoutUp +
+        rawBreakoutDown;
     final total = ctx.totalScore.clamp(0.0, 1.0);
     final trendPct = metricSum > 0 ? (rawTrend / metricSum) * total : 0.0;
     final sidewaysPct = metricSum > 0 ? (rawSideways / metricSum) * total : 0.0;
-    final compressionPct = metricSum > 0 ? (rawCompression / metricSum) * total : 0.0;
-    final breakoutUpPct = metricSum > 0 ? (rawBreakoutUp / metricSum) * total : 0.0;
-    final breakoutDownPct = metricSum > 0 ? (rawBreakoutDown / metricSum) * total : 0.0;
+    final compressionPct = metricSum > 0
+        ? (rawCompression / metricSum) * total
+        : 0.0;
+    final breakoutUpPct = metricSum > 0
+        ? (rawBreakoutUp / metricSum) * total
+        : 0.0;
+    final breakoutDownPct = metricSum > 0
+        ? (rawBreakoutDown / metricSum) * total
+        : 0.0;
 
     // Direction coloring: trend uses sign, compression uses sign heuristic,
     // breakout up = green, breakout down = red, sideways = gray.
@@ -1285,18 +1474,50 @@ class _DetailScreenState extends State<DetailScreen> {
     final compressionColor = Colors.amber;
     const sidewaysColor = Colors.grey;
 
-    return _fieldset('Metrics Breakdown', [
-      _metricBar('Trend:', trendPct, '${(trendPct * 100).toStringAsFixed(0)}%', trendColor),
-      _metricBar('Sideways:', sidewaysPct, '${(sidewaysPct * 100).toStringAsFixed(0)}%', sidewaysColor),
-      _metricBar('Compression:', compressionPct, '${(compressionPct * 100).toStringAsFixed(0)}%', compressionColor),
-      _metricBar('Breakout Up:', breakoutUpPct, '${(breakoutUpPct * 100).toStringAsFixed(0)}%', Colors.green, dotColor: _breakoutDotColor),
-      _metricBar('Breakout Down:', breakoutDownPct, '${(breakoutDownPct * 100).toStringAsFixed(0)}%', Colors.red, dotColor: _breakoutDotColor),
-    ], hint: 'Proportional weight of each regime detector '
-        'normalised to overall conviction (total score).\n\n'
-        '• Trend — directional strength (slope × R²)\n'
-        '• Sideways — range-bound, low-volatility character\n'
-        '• Compression — narrowing Bollinger bandwidth\n'
-        '• Breakout Up / Down — price escaping a compression zone');
+    return _fieldset(
+      'Metrics Breakdown',
+      [
+        _metricBar(
+          'Trend:',
+          trendPct,
+          '${(trendPct * 100).toStringAsFixed(0)}%',
+          trendColor,
+        ),
+        _metricBar(
+          'Sideways:',
+          sidewaysPct,
+          '${(sidewaysPct * 100).toStringAsFixed(0)}%',
+          sidewaysColor,
+        ),
+        _metricBar(
+          'Compression:',
+          compressionPct,
+          '${(compressionPct * 100).toStringAsFixed(0)}%',
+          compressionColor,
+        ),
+        _metricBar(
+          'Breakout Up:',
+          breakoutUpPct,
+          '${(breakoutUpPct * 100).toStringAsFixed(0)}%',
+          Colors.green,
+          dotColor: _breakoutDotColor,
+        ),
+        _metricBar(
+          'Breakout Down:',
+          breakoutDownPct,
+          '${(breakoutDownPct * 100).toStringAsFixed(0)}%',
+          Colors.red,
+          dotColor: _breakoutDotColor,
+        ),
+      ],
+      hint:
+          'Proportional weight of each regime detector '
+          'normalised to overall conviction (total score).\n\n'
+          '• Trend — directional strength (slope × R²)\n'
+          '• Sideways — range-bound, low-volatility character\n'
+          '• Compression — narrowing Bollinger bandwidth\n'
+          '• Breakout Up / Down — price escaping a compression zone',
+    );
   }
 
   Widget _buildPriceAction(DetailContext ctx) {
@@ -1304,12 +1525,22 @@ class _DetailScreenState extends State<DetailScreen> {
     final pct = (gain * 100).abs();
     final color = gain >= 0 ? Colors.green : Colors.red;
     final label = gain >= 0 ? 'Gainer' : 'Loser';
-    return _fieldset('Price Action', [
-      _metricBar('$label:', gain.abs().clamp(0.0, 1.0), '${pct.toStringAsFixed(0)}%', color),
-    ], hint: 'Net return detected over the scoring window.\n\n'
-        'Gainer — positive price change.\n'
-        'Loser — negative price change.\n\n'
-        'Bar width shows magnitude relative to 100%.');
+    return _fieldset(
+      'Price Action',
+      [
+        _metricBar(
+          '$label:',
+          gain.abs().clamp(0.0, 1.0),
+          '${pct.toStringAsFixed(0)}%',
+          color,
+        ),
+      ],
+      hint:
+          'Net return detected over the scoring window.\n\n'
+          'Gainer — positive price change.\n'
+          'Loser — negative price change.\n\n'
+          'Bar width shows magnitude relative to 100%.',
+    );
   }
 
   Widget _buildSetupQuality(SetupData data) {
@@ -1350,26 +1581,57 @@ class _DetailScreenState extends State<DetailScreen> {
         ? 'Setup Quality \u2014 $totalDisplay \u00b7 ${data.confidenceDot}'
         : 'Setup Quality \u2014 $totalDisplay';
 
-    return _fieldset(title, [
-      for (final entry in data.scores.entries)
-        _metricBar(
-          '${SetupData.displayName(entry.key)}:',
-          subSum > 0 ? (entry.value / subSum) * totalPct : 0.0,
-          '${(subSum > 0 ? (entry.value / subSum) * totalPct * 100 : 0.0).toStringAsFixed(0)}%',
-          colors[entry.key] ?? Colors.grey,
-        ),
-    ], hint: 'Tradability assessment — how well the current '
-        'price structure matches known setup archetypes.\n\n'
-        '• Compression Breakout — tight range about to break\n'
-        '• Trend Continuation — pullback within a strong trend\n'
-        '• Range Reversion — mean-reversion at range edges\n\n'
-        'Confidence: ${data.confidenceLabel}',
-    titleSuffixColor: data.regime.isNotEmpty ? confidenceColor : null);
+    final mapped = setupScorecardLabel(
+      bestSetup: data.bestSetup,
+      regime: data.regime,
+      breakoutUp: data.breakoutUp,
+      breakoutDown: data.breakoutDown,
+    );
+    final logged = data.confidence >= setupSignalConfidence;
+
+    return _fieldset(
+      title,
+      [
+        for (final entry in data.scores.entries)
+          _metricBar(
+            '${SetupData.displayName(entry.key)}:',
+            subSum > 0 ? (entry.value / subSum) * totalPct : 0.0,
+            '${(subSum > 0 ? (entry.value / subSum) * totalPct * 100 : 0.0).toStringAsFixed(0)}%',
+            colors[entry.key] ?? Colors.grey,
+          ),
+      ],
+      hint:
+          'Tradability assessment — how well the current '
+          'price structure matches known setup archetypes.\n\n'
+          '• Compression Breakout — tight range about to break\n'
+          '• Trend Continuation — pullback within a strong trend\n'
+          '• Range Reversion — mean-reversion at range edges\n\n'
+          'Confidence: ${data.confidenceLabel}',
+      titleSuffixColor: data.regime.isNotEmpty ? confidenceColor : null,
+      trailing: logged
+          ? setupSignalTrailing(
+              label: mapped,
+              chip: ReliabilityChip(
+                item: setupReliabilityItem(
+                  confidence: data.confidence,
+                  label: mapped,
+                  items: _scorecards.items,
+                ),
+              ),
+            )
+          : null,
+    );
   }
 
   // ---- shared fieldset & metric bar helpers ----
 
-  Widget _fieldset(String title, List<Widget> children, {String? hint, Color? titleSuffixColor}) {
+  Widget _fieldset(
+    String title,
+    List<Widget> children, {
+    String? hint,
+    Color? titleSuffixColor,
+    Widget? trailing,
+  }) {
     // When titleSuffixColor is provided, colour the text after the last " · "
     // in the title using a RichText widget, while keeping everything before
     // it in the default style.
@@ -1379,6 +1641,8 @@ class _DetailScreenState extends State<DetailScreen> {
       final prefix = title.substring(0, sepIdx + 3);
       final suffix = title.substring(sepIdx + 3);
       titleWidget = RichText(
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         text: TextSpan(
           style: const TextStyle(
             color: Colors.white70,
@@ -1397,6 +1661,8 @@ class _DetailScreenState extends State<DetailScreen> {
     } else {
       titleWidget = Text(
         title,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(
           color: Colors.white70,
           fontWeight: FontWeight.w600,
@@ -1408,17 +1674,19 @@ class _DetailScreenState extends State<DetailScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            titleWidget,
-            if (hint != null) ...[
-              const SizedBox(width: 4),
-              GestureDetector(
-                onTap: () => _showInfoDialog(title: title, body: hint),
-                child: const Icon(Icons.help_outline, size: 13, color: Colors.white30),
-              ),
-            ],
-          ],
+        FieldsetHeader(
+          title: titleWidget,
+          hint: hint == null
+              ? null
+              : GestureDetector(
+                  onTap: () => _showInfoDialog(title: title, body: hint),
+                  child: const Icon(
+                    Icons.help_outline,
+                    size: 13,
+                    color: Colors.white30,
+                  ),
+                ),
+          trailing: trailing,
         ),
         const SizedBox(height: 8),
         ...children,
@@ -1426,7 +1694,13 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
-  Widget _metricBar(String label, double fraction, String display, Color color, {Color? dotColor}) {
+  Widget _metricBar(
+    String label,
+    double fraction,
+    String display,
+    Color color, {
+    Color? dotColor,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Column(
@@ -1461,10 +1735,7 @@ class _DetailScreenState extends State<DetailScreen> {
               ),
               if (dotColor != null) ...[
                 const SizedBox(width: 4),
-                Text(
-                  '\u25CF',
-                  style: TextStyle(color: dotColor, fontSize: 10),
-                ),
+                Text('\u25CF', style: TextStyle(color: dotColor, fontSize: 10)),
               ],
             ],
           ),
@@ -1472,4 +1743,261 @@ class _DetailScreenState extends State<DetailScreen> {
       ),
     );
   }
+}
+
+/// Title row for a detail fieldset. Extra width goes to the title. A short
+/// title keeps its width. A long title gets the width it needs to wrap within
+/// two lines, and the deficit comes out of the trailing label down to the chip.
+class FieldsetHeader extends StatelessWidget {
+  final Widget title;
+  final Widget? hint;
+  final Widget? trailing;
+
+  const FieldsetHeader({
+    super.key,
+    required this.title,
+    this.hint,
+    this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _FieldsetHeaderRow(title: title, hint: hint, trailing: trailing);
+  }
+}
+
+class _FieldsetHeaderRow extends MultiChildRenderObjectWidget {
+  _FieldsetHeaderRow({required Widget title, Widget? hint, Widget? trailing})
+    : super(
+        children: [
+          _HeaderSlot(kind: _HeaderChildKind.title, child: title),
+          if (hint != null)
+            _HeaderSlot(kind: _HeaderChildKind.hint, child: hint),
+          if (trailing != null)
+            _HeaderSlot(kind: _HeaderChildKind.trailing, child: trailing),
+        ],
+      );
+
+  @override
+  RenderObject createRenderObject(BuildContext context) {
+    return _RenderFieldsetHeader();
+  }
+}
+
+enum _HeaderChildKind { title, hint, trailing }
+
+class _HeaderSlot extends ParentDataWidget<_HeaderParentData> {
+  final _HeaderChildKind kind;
+
+  const _HeaderSlot({required this.kind, required super.child});
+
+  @override
+  void applyParentData(RenderObject renderObject) {
+    final parentData = renderObject.parentData! as _HeaderParentData;
+    if (parentData.kind == kind) return;
+    parentData.kind = kind;
+    final targetParent = renderObject.parent;
+    if (targetParent is RenderObject) targetParent.markNeedsLayout();
+  }
+
+  @override
+  Type get debugTypicalAncestorWidgetClass => _FieldsetHeaderRow;
+}
+
+class _HeaderParentData extends ContainerBoxParentData<RenderBox> {
+  _HeaderChildKind kind = _HeaderChildKind.title;
+}
+
+class _RenderFieldsetHeader extends RenderBox
+    with
+        ContainerRenderObjectMixin<RenderBox, _HeaderParentData>,
+        RenderBoxContainerDefaultsMixin<RenderBox, _HeaderParentData> {
+  static const double _hintGap = 4;
+  static const double _trailingGap = 8;
+
+  @override
+  void setupParentData(RenderBox child) {
+    if (child.parentData is! _HeaderParentData) {
+      child.parentData = _HeaderParentData();
+    }
+  }
+
+  RenderBox? _child(_HeaderChildKind kind) {
+    RenderBox? child = firstChild;
+    while (child != null) {
+      final parentData = child.parentData! as _HeaderParentData;
+      if (parentData.kind == kind) return child;
+      child = parentData.nextSibling;
+    }
+    return null;
+  }
+
+  @override
+  void performLayout() {
+    final title = _child(_HeaderChildKind.title)!;
+    final hint = _child(_HeaderChildKind.hint);
+    final trailing = _child(_HeaderChildKind.trailing);
+    final maxWidth = constraints.hasBoundedWidth
+        ? constraints.maxWidth
+        : double.infinity;
+    final maxHeight = constraints.maxHeight;
+
+    final titleOneLine = title.getMaxIntrinsicWidth(maxHeight);
+    final titleTwoLine = _widthWithinTwoLines(title, titleOneLine);
+    final hintWidth = hint?.getMaxIntrinsicWidth(maxHeight) ?? 0;
+    final hintBlock = hint == null ? 0.0 : _hintGap + hintWidth;
+    final trailGap = trailing == null ? 0.0 : _trailingGap;
+    final trailingNatural = trailing?.getMaxIntrinsicWidth(maxHeight) ?? 0;
+    final trailingFloor = trailing == null ? 0.0 : _trailingFloor(trailing);
+    final gaps = hintBlock + trailGap;
+    final widths = _allocate(
+      maxWidth: maxWidth,
+      titleOneLine: titleOneLine,
+      titleTwoLine: titleTwoLine,
+      trailingNatural: trailingNatural,
+      trailingFloor: trailingFloor,
+      gaps: gaps,
+    );
+
+    final titleSize = _layoutAt(title, widths.title, maxHeight);
+    final hintSize = hint == null
+        ? Size.zero
+        : _layoutAt(hint, hintWidth, maxHeight);
+    final trailingSize = trailing == null
+        ? Size.zero
+        : _layoutAt(trailing, widths.trailing, maxHeight);
+    final height = math.max(
+      titleSize.height,
+      math.max(hintSize.height, trailingSize.height),
+    );
+    final width = maxWidth.isFinite
+        ? maxWidth
+        : titleSize.width + gaps + trailingSize.width;
+    size = constraints.constrain(Size(width, height));
+
+    _place(title, 0, height);
+    if (hint != null) _place(hint, widths.title + _hintGap, height);
+    if (trailing != null) {
+      _place(trailing, size.width - trailingSize.width, height);
+    }
+  }
+
+  /// Smallest width at which [title] wraps onto at most two lines.
+  /// A title that does not wrap returns its one-line width.
+  double _widthWithinTwoLines(RenderBox title, double oneLine) {
+    final narrow = title.getMinIntrinsicWidth(double.infinity);
+    if (narrow >= oneLine - 0.5) return oneLine;
+    final lineHeight = title.getMinIntrinsicHeight(oneLine);
+    if (lineHeight <= 0) return oneLine;
+    final twoLines = lineHeight * 2 + 1;
+    if (title.getMinIntrinsicHeight(narrow) <= twoLines) return narrow;
+    var low = narrow;
+    var high = oneLine;
+    for (var i = 0; i < 24; i++) {
+      final mid = (low + high) / 2;
+      if (title.getMinIntrinsicHeight(mid) <= twoLines) {
+        high = mid;
+      } else {
+        low = mid;
+      }
+    }
+    return high;
+  }
+
+  /// Width of the trailing pieces that do not scale: the gap and the chip.
+  double _trailingFloor(RenderBox trailing) {
+    if (trailing is! RenderFlex) {
+      return trailing.getMinIntrinsicWidth(double.infinity);
+    }
+    var floor = 0.0;
+    RenderBox? child = trailing.firstChild;
+    while (child != null) {
+      final parentData = child.parentData! as FlexParentData;
+      if (parentData.flex == null) {
+        floor += child.getMaxIntrinsicWidth(double.infinity);
+      }
+      child = parentData.nextSibling;
+    }
+    return floor;
+  }
+
+  _HeaderWidths _allocate({
+    required double maxWidth,
+    required double titleOneLine,
+    required double titleTwoLine,
+    required double trailingNatural,
+    required double trailingFloor,
+    required double gaps,
+  }) {
+    if (!maxWidth.isFinite ||
+        maxWidth >= titleOneLine + gaps + trailingNatural) {
+      final trailing = trailingNatural;
+      final title = maxWidth.isFinite
+          ? math.max(0.0, maxWidth - gaps - trailing)
+          : titleOneLine;
+      return _HeaderWidths(title, trailing);
+    }
+    final besideTwoLines = maxWidth - gaps - titleTwoLine;
+    if (besideTwoLines >= trailingFloor) {
+      final trailing = math.min(trailingNatural, besideTwoLines);
+      final title = trailing >= trailingNatural
+          ? maxWidth - gaps - trailing
+          : titleTwoLine;
+      return _HeaderWidths(title, trailing);
+    }
+    final floor = math.min(trailingFloor, math.max(0.0, maxWidth - gaps));
+    return _HeaderWidths(math.max(0.0, maxWidth - gaps - floor), floor);
+  }
+
+  Size _layoutAt(RenderBox child, double width, double maxHeight) {
+    final box = math.max(0.0, width);
+    child.layout(
+      BoxConstraints(minWidth: box, maxWidth: box, maxHeight: maxHeight),
+      parentUsesSize: true,
+    );
+    return child.size;
+  }
+
+  void _place(RenderBox child, double x, double rowHeight) {
+    final parentData = child.parentData! as _HeaderParentData;
+    parentData.offset = Offset(x, (rowHeight - child.size.height) / 2);
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    defaultPaint(context, offset);
+  }
+
+  @override
+  bool hitTestChildren(BoxHitTestResult result, {required Offset position}) {
+    return defaultHitTestChildren(result, position: position);
+  }
+}
+
+class _HeaderWidths {
+  final double title;
+  final double trailing;
+
+  const _HeaderWidths(this.title, this.trailing);
+}
+
+/// Mapped setup label plus its chip. The chip stays at its tap size.
+Widget setupSignalTrailing({required String label, required Widget chip}) {
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Flexible(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerRight,
+          child: Text(
+            label,
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+        ),
+      ),
+      const SizedBox(width: 6),
+      chip,
+    ],
+  );
 }

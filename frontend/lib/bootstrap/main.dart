@@ -44,6 +44,7 @@ Widget bootstrapApp({
   final getCandleSeries = root.createGetCandleSeries();
   final eventsViewModel = root.createEventsViewModel();
   final bubbleMapViewModel = root.createBubbleMapViewModel();
+  final scorecardApi = root.createScorecardApi();
   final fearGreedApi = root.createFearGreedApi();
   final marketStateApi = root.createMarketStateApi();
   final compositeIndexApi = root.createCompositeIndexApi();
@@ -81,6 +82,7 @@ Widget bootstrapApp({
       volatilityApi: volatilityApi,
       socialFeedViewModel: socialVm,
       notificationConfigApi: notificationConfigApi,
+      scorecardApi: scorecardApi,
     ),
   );
 
@@ -101,6 +103,7 @@ Widget bootstrapApp({
             fragilityApi: fragilityApi,
             behaviorApi: behaviorApi,
             volatilityApi: volatilityApi,
+            scorecardApi: scorecardApi,
             isProUser: billingManager?.hasFullAccess ?? false,
           ),
       marketScreen: (timeframe) => MarketPulseScreen(
@@ -109,6 +112,7 @@ Widget bootstrapApp({
             regimeApi: regimeApi,
             transitionApi: transitionApi,
             regimeHistoryApi: regimeHistoryApi,
+            scorecardApi: scorecardApi,
             initialTimeframe: timeframe,
             isProUser: billingManager?.hasFullAccess ?? false,
           ),

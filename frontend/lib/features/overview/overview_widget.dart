@@ -1,9 +1,11 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+
 import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/overview_banner.dart';
@@ -35,13 +37,20 @@ import '../social/social_feed_screen.dart';
 import '../social/social_feed_view_model.dart';
 import '../notifications/notification_settings_page.dart';
 import '../notifications/api/notification_config_api.dart';
+
 import 'package:url_launcher/url_launcher.dart';
+
 import '../detail/chart_navigation.dart';
 import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
 import '../detail/http_setup_api.dart';
+import '../scorecards/http_scorecard_api.dart';
+import '../scorecards/scorecard_catalog.dart';
+import '../scorecards/scorecard_data.dart';
+import '../scorecards/scorecards_screen.dart';
+import '../scorecards/reliability_chip.dart';
 import '../volatility/http_volatility_api.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
@@ -71,6 +80,7 @@ class OverviewWidget extends StatefulWidget {
   final VolatilityApi? volatilityApi;
   final SocialFeedViewModel? socialFeedViewModel;
   final NotificationConfigApi? notificationConfigApi;
+  final ScorecardApi? scorecardApi;
 
   const OverviewWidget({
     Key? key,
@@ -94,6 +104,7 @@ class OverviewWidget extends StatefulWidget {
     this.volatilityApi,
     this.socialFeedViewModel,
     this.notificationConfigApi,
+    this.scorecardApi,
   }) : super(key: key);
 
   @override
@@ -113,6 +124,7 @@ class OverviewWidgetState extends State<OverviewWidget>
   bool _hiResSparklines = true;
   bool _excludeStablecoins = true;
   bool _showFavourites = false;
+  final ScorecardCatalog _scorecards = ScorecardCatalog();
 
   // True while build() is showing the free-tier upgrade banner (i.e. the
   // list is capped at 15 items) — set at the end of every build so
@@ -130,10 +142,13 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Previous sparkline arrays, keyed by symbol.
   /// Captured before refresh so we can compare after.
   Map<String, List<double>> _previousSparklines = {};
+
   /// Per-symbol flash dot animation controllers.
   final Map<String, AnimationController> _flashControllers = {};
+
   /// Per-symbol flash progress (0→1→0 for the flash envelope).
   final Map<String, double> _flashProgress = {};
+
   /// Per-symbol flash color (green / red / neutral blue).
   final Map<String, Color> _flashColors = {};
   bool _isRefreshing = false;
@@ -159,7 +174,8 @@ class OverviewWidgetState extends State<OverviewWidget>
   PreferencesService? get _prefs => widget.prefs;
 
   /// Capabilities derived from current subscription state.
-  Capabilities get _capabilities => Capabilities.fromBilling(widget.billingManager);
+  Capabilities get _capabilities =>
+      Capabilities.fromBilling(widget.billingManager);
 
   /// Whether auto-refresh is enabled (pro tier).
   bool get _isProUser => _capabilities.isPro;
@@ -220,7 +236,8 @@ class OverviewWidgetState extends State<OverviewWidget>
     vm.onChanged = () {
       // Detect whether this is a successful load (items present, not loading).
       final st = vm.state;
-      final isOffline = st.error != null &&
+      final isOffline =
+          st.error != null &&
           st.error!.contains('Offline') &&
           st.items.isNotEmpty;
       final isSuccessfulLoad =
@@ -256,6 +273,7 @@ class OverviewWidgetState extends State<OverviewWidget>
     };
     _scrollController.addListener(_onScroll);
     vm.loadInitial(_timeframe);
+    _loadScorecards();
 
     // Show the About dialog exactly once on first launch.
     if (_prefs != null && !_prefs!.hasSeenAbout) {
@@ -265,6 +283,22 @@ class OverviewWidgetState extends State<OverviewWidget>
         _showAboutDialog();
       });
     }
+  }
+
+  ScorecardSummaryItem? _badgeReliability(OverviewItem item) {
+    if (item.badgeComponent.isEmpty) return null;
+    final label = badgeScorecardLabel(item.badgeComponent, item.sparkline);
+    return _scorecards.items[scorecardKey('badge', label)];
+  }
+
+  Future<void> _loadScorecards() {
+    return _scorecards.load(
+      api: widget.scorecardApi,
+      timeframe: _timeframe,
+      notify: () {
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   @override
@@ -399,16 +433,16 @@ class OverviewWidgetState extends State<OverviewWidget>
         color = currLast > prevLast
             ? Colors.green
             : currLast < prevLast
-                ? Colors.red
-                : const Color(0xFF64B5F6); // neutral blue
+            ? Colors.red
+            : const Color(0xFF64B5F6); // neutral blue
       } else if (changed) {
         // Brand-new symbol — use sparkline's own direction.
         final sl = item.sparkline;
         color = sl.last > sl.first
             ? Colors.green
             : sl.last < sl.first
-                ? Colors.red
-                : const Color(0xFF64B5F6);
+            ? Colors.red
+            : const Color(0xFF64B5F6);
       } else if (forceFlash) {
         // No data change but auto-refresh wants a "heartbeat" pulse.
         // Use sparkline's own last-candle direction for colour.
@@ -418,8 +452,8 @@ class OverviewWidgetState extends State<OverviewWidget>
           color = sl.last > prev2
               ? Colors.green
               : sl.last < prev2
-                  ? Colors.red
-                  : const Color(0xFF64B5F6);
+              ? Colors.red
+              : const Color(0xFF64B5F6);
         } else {
           color = const Color(0xFF64B5F6);
         }
@@ -512,9 +546,7 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (billing != null && billing.hasFullAccess) return true;
     if (billing == null) return false;
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => UpgradeScreen(billingManager: billing),
-      ),
+      MaterialPageRoute(builder: (_) => UpgradeScreen(billingManager: billing)),
     );
     return false;
   }
@@ -557,6 +589,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             fragilityApi: _isProUser ? widget.fragilityApi : null,
             behaviorApi: _isProUser ? widget.behaviorApi : null,
             volatilityApi: _isProUser ? widget.volatilityApi : null,
+            scorecardApi: widget.scorecardApi,
             isProUser: _isProUser,
             detailContext: DetailContext(
               rank: rank,
@@ -586,9 +619,9 @@ class OverviewWidgetState extends State<OverviewWidget>
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load chart: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load chart: $e')));
     }
   }
 
@@ -631,14 +664,13 @@ class OverviewWidgetState extends State<OverviewWidget>
           // Nav bar + overlay unit — bottom border moves with rollout
           Container(
             decoration: const BoxDecoration(
-              border: Border(bottom: BorderSide(color: Color(0xFF1A1A2E), width: 1)),
+              border: Border(
+                bottom: BorderSide(color: Color(0xFF1A1A2E), width: 1),
+              ),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildNavBar(),
-                _buildOverlayPanel(state),
-              ],
+              children: [_buildNavBar(), _buildOverlayPanel(state)],
             ),
           ),
           Expanded(child: _buildBody(state)),
@@ -673,8 +705,11 @@ class OverviewWidgetState extends State<OverviewWidget>
                 width: 36,
                 height: 44,
                 child: Center(
-                  child: Icon(Icons.arrow_back_ios_new,
-                      color: Colors.white, size: 18),
+                  child: Icon(
+                    Icons.arrow_back_ios_new,
+                    color: Colors.white,
+                    size: 18,
+                  ),
                 ),
               ),
             ),
@@ -692,7 +727,11 @@ class OverviewWidgetState extends State<OverviewWidget>
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () {
-                _scrollController.animateTo(0, duration: const Duration(milliseconds: 300), curve: Curves.easeOut);
+                _scrollController.animateTo(
+                  0,
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOut,
+                );
               },
               child: Padding(
                 padding: const EdgeInsets.only(left: 0, right: 8),
@@ -770,11 +809,8 @@ class OverviewWidgetState extends State<OverviewWidget>
           ? Container(
               key: ValueKey(_overlay),
               width: double.infinity,
-              decoration: const BoxDecoration(
-                color: Color(0xFF1A1A2E),
-              ),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: const BoxDecoration(color: Color(0xFF1A1A2E)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: _overlay == _OverlayKind.settings
                   ? _buildSettingsOverlay(state)
                   : _buildMenuOverlay(),
@@ -786,14 +822,22 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Display label for a sort value.
   static String _sortLabel(String sort) {
     switch (sort) {
-      case 'sideways': return 'Sideways';
-      case 'compression': return 'Compression';
-      case 'breakout': return 'Breakout';
-      case 'trend': return 'Trend';
-      case 'gain': return 'Gainers';
-      case 'losers': return 'Losers';
-      case 'volume': return 'Volume';
-      default: return sort;
+      case 'sideways':
+        return 'Sideways';
+      case 'compression':
+        return 'Compression';
+      case 'breakout':
+        return 'Breakout';
+      case 'trend':
+        return 'Trend';
+      case 'gain':
+        return 'Gainers';
+      case 'losers':
+        return 'Losers';
+      case 'volume':
+        return 'Volume';
+      default:
+        return sort;
     }
   }
 
@@ -807,77 +851,116 @@ class OverviewWidgetState extends State<OverviewWidget>
     return DefaultTextStyle.merge(
       style: TextStyle(fontSize: ctrlFontSize),
       child: Theme(
-        data: Theme.of(context).copyWith(
-          dropdownMenuTheme: const DropdownMenuThemeData(),
-        ),
+        data: Theme.of(
+          context,
+        ).copyWith(dropdownMenuTheme: const DropdownMenuThemeData()),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                _controlRow('Columns', DropdownButton<int>(
-                  value: _columns,
-                  isDense: true,
-                  style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                  items: const [1, 2, 3]
-                      .map((c) => DropdownMenuItem(value: c, child: Text('$c')))
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() => _columns = v ?? 2);
-                    _prefs?.columns = _columns;
-                    SchedulerBinding.instance.addPostFrameCallback((_) {
-                      _checkAndLoadMore();
-                    });
-                  },
-                ), ctrlFontSize),
-                _controlRow('Timeframe', DropdownButton<String>(
-                  value: _timeframe,
-                  isDense: true,
-                  style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                  items: const ['1m', '5m', '15m', '1h', '4h', '1d']
-                      .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() => _timeframe = v ?? '1h');
-                    _prefs?.timeframe = _timeframe;
-                    _stalenessTracker.setTimeframe(_timeframe);
-                    // Pause auto-refresh during reload; it resumes via
-                    // _maybeStartAutoRefresh once new data arrives.
-                    _autoRefreshTimer?.stop();
-                    _autoRefreshTimer = null;
-                    vm.loadInitial(_timeframe);
-                  },
-                ), ctrlFontSize),
-                _controlRow('Sort', PopupMenuButton<String>(
-                  initialValue: state.sort,
-                  onSelected: (v) {
-                    _prefs?.sort = v;
-                    vm.changeSort(v, _timeframe);
-                  },
-                  itemBuilder: (context) => [
-                    if (_isProUser) ...[
-                      PopupMenuItem(value: 'sideways', child: Text('Sideways')),
-                      PopupMenuItem(value: 'compression', child: Text('Compression')),
-                      PopupMenuItem(value: 'breakout', child: Text('Breakout')),
-                      PopupMenuItem(value: 'trend', child: Text('Trend')),
-                      const PopupMenuDivider(),
-                    ],
-                    PopupMenuItem(value: 'gain', child: Text('Gainers')),
-                    PopupMenuItem(value: 'losers', child: Text('Losers')),
-                    PopupMenuItem(value: 'volume', child: Text('Volume')),
-                  ],
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _sortLabel(state.sort),
-                        style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
-                      ),
-                      Icon(Icons.arrow_drop_down, color: Colors.white, size: ctrlFontSize + 4),
-                    ],
+                _controlRow(
+                  'Columns',
+                  DropdownButton<int>(
+                    value: _columns,
+                    isDense: true,
+                    style: TextStyle(
+                      fontSize: ctrlFontSize,
+                      color: Colors.white,
+                    ),
+                    items: const [1, 2, 3]
+                        .map(
+                          (c) => DropdownMenuItem(value: c, child: Text('$c')),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      setState(() => _columns = v ?? 2);
+                      _prefs?.columns = _columns;
+                      SchedulerBinding.instance.addPostFrameCallback((_) {
+                        _checkAndLoadMore();
+                      });
+                    },
                   ),
-                ), ctrlFontSize),
+                  ctrlFontSize,
+                ),
+                _controlRow(
+                  'Timeframe',
+                  DropdownButton<String>(
+                    value: _timeframe,
+                    isDense: true,
+                    style: TextStyle(
+                      fontSize: ctrlFontSize,
+                      color: Colors.white,
+                    ),
+                    items: const ['1m', '5m', '15m', '1h', '4h', '1d']
+                        .map(
+                          (tf) => DropdownMenuItem(value: tf, child: Text(tf)),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      setState(() => _timeframe = v ?? '1h');
+                      _prefs?.timeframe = _timeframe;
+                      _stalenessTracker.setTimeframe(_timeframe);
+                      _loadScorecards();
+                      // Pause auto-refresh during reload; it resumes via
+                      // _maybeStartAutoRefresh once new data arrives.
+                      _autoRefreshTimer?.stop();
+                      _autoRefreshTimer = null;
+                      vm.loadInitial(_timeframe);
+                    },
+                  ),
+                  ctrlFontSize,
+                ),
+                _controlRow(
+                  'Sort',
+                  PopupMenuButton<String>(
+                    initialValue: state.sort,
+                    onSelected: (v) {
+                      _prefs?.sort = v;
+                      vm.changeSort(v, _timeframe);
+                    },
+                    itemBuilder: (context) => [
+                      if (_isProUser) ...[
+                        PopupMenuItem(
+                          value: 'sideways',
+                          child: Text('Sideways'),
+                        ),
+                        PopupMenuItem(
+                          value: 'compression',
+                          child: Text('Compression'),
+                        ),
+                        PopupMenuItem(
+                          value: 'breakout',
+                          child: Text('Breakout'),
+                        ),
+                        PopupMenuItem(value: 'trend', child: Text('Trend')),
+                        const PopupMenuDivider(),
+                      ],
+                      PopupMenuItem(value: 'gain', child: Text('Gainers')),
+                      PopupMenuItem(value: 'losers', child: Text('Losers')),
+                      PopupMenuItem(value: 'volume', child: Text('Volume')),
+                    ],
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _sortLabel(state.sort),
+                          style: TextStyle(
+                            fontSize: ctrlFontSize,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Icon(
+                          Icons.arrow_drop_down,
+                          color: Colors.white,
+                          size: ctrlFontSize + 4,
+                        ),
+                      ],
+                    ),
+                  ),
+                  ctrlFontSize,
+                ),
               ],
             ),
             const SizedBox(height: 20),
@@ -905,36 +988,48 @@ class OverviewWidgetState extends State<OverviewWidget>
                 const SizedBox(width: 6),
                 GestureDetector(
                   onTap: () {
-                    setState(() => _normalizeSparklines = !_normalizeSparklines);
+                    setState(
+                      () => _normalizeSparklines = !_normalizeSparklines,
+                    );
                     _prefs?.normalizeSparklines = _normalizeSparklines;
                   },
                   child: Text(
                     'Normalize sparklines',
-                    style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                    style: TextStyle(
+                      fontSize: ctrlFontSize,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
                 if (showDirection) ...[
                   const Spacer(),
-                  _controlRow('Direction', ToggleButtons(
-                    isSelected: [
-                      state.sortDirection == 'up',
-                      state.sortDirection == 'down',
-                    ],
-                    onPressed: (index) {
-                      final dir = index == 0 ? 'up' : 'down';
-                      _prefs?.sortDirection = dir;
-                      vm.changeSortDirection(dir, _timeframe);
-                    },
-                    constraints: const BoxConstraints(minWidth: 36, minHeight: 28),
-                    borderRadius: BorderRadius.circular(4),
-                    selectedColor: Colors.white,
-                    fillColor: Colors.white24,
-                    color: Colors.white54,
-                    children: const [
-                      Icon(Icons.arrow_upward, size: 16),
-                      Icon(Icons.arrow_downward, size: 16),
-                    ],
-                  ), ctrlFontSize),
+                  _controlRow(
+                    'Direction',
+                    ToggleButtons(
+                      isSelected: [
+                        state.sortDirection == 'up',
+                        state.sortDirection == 'down',
+                      ],
+                      onPressed: (index) {
+                        final dir = index == 0 ? 'up' : 'down';
+                        _prefs?.sortDirection = dir;
+                        vm.changeSortDirection(dir, _timeframe);
+                      },
+                      constraints: const BoxConstraints(
+                        minWidth: 36,
+                        minHeight: 28,
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                      selectedColor: Colors.white,
+                      fillColor: Colors.white24,
+                      color: Colors.white54,
+                      children: const [
+                        Icon(Icons.arrow_upward, size: 16),
+                        Icon(Icons.arrow_downward, size: 16),
+                      ],
+                    ),
+                    ctrlFontSize,
+                  ),
                 ],
               ],
             ),
@@ -959,12 +1054,17 @@ class OverviewWidgetState extends State<OverviewWidget>
                   const SizedBox(width: 6),
                   GestureDetector(
                     onTap: () {
-                      setState(() => _excludeStablecoins = !_excludeStablecoins);
+                      setState(
+                        () => _excludeStablecoins = !_excludeStablecoins,
+                      );
                       _prefs?.excludeStablecoins = _excludeStablecoins;
                     },
                     child: Text(
                       'Exclude stablecoins',
-                      style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                      style: TextStyle(
+                        fontSize: ctrlFontSize,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ],
@@ -977,7 +1077,10 @@ class OverviewWidgetState extends State<OverviewWidget>
                     },
                     child: Text(
                       'Hi res',
-                      style: TextStyle(fontSize: ctrlFontSize, color: Colors.white),
+                      style: TextStyle(
+                        fontSize: ctrlFontSize,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
@@ -997,6 +1100,30 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ],
               ],
             ),
+            if (widget.scorecardApi != null) ...[
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () {
+                    setState(() => _overlay = _OverlayKind.none);
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ScorecardsScreen(
+                          api: widget.scorecardApi!,
+                          timeframe: _timeframe,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.verified_outlined, size: 18),
+                  label: Text(
+                    'Reliability',
+                    style: TextStyle(fontSize: ctrlFontSize),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1051,6 +1178,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     fragilityApi: widget.fragilityApi,
                     behaviorApi: widget.behaviorApi,
                     volatilityApi: widget.volatilityApi,
+                    scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
                   ),
                 ),
@@ -1075,6 +1203,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     regimeApi: widget.regimeApi,
                     transitionApi: widget.transitionApi,
                     regimeHistoryApi: widget.regimeHistoryApi,
+                    scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
                   ),
                 ),
@@ -1112,9 +1241,8 @@ class OverviewWidgetState extends State<OverviewWidget>
               if (!_requireAccess()) return;
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => SocialFeedScreen(
-                    viewModel: widget.socialFeedViewModel!,
-                  ),
+                  builder: (_) =>
+                      SocialFeedScreen(viewModel: widget.socialFeedViewModel!),
                 ),
               );
             },
@@ -1130,9 +1258,8 @@ class OverviewWidgetState extends State<OverviewWidget>
               setState(() => _overlay = _OverlayKind.none);
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => NewsListScreen(
-                    viewModel: widget.newsViewModel!,
-                  ),
+                  builder: (_) =>
+                      NewsListScreen(viewModel: widget.newsViewModel!),
                 ),
               );
             },
@@ -1177,9 +1304,13 @@ class OverviewWidgetState extends State<OverviewWidget>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Pull down to refresh data. Tap on any chart to see detailed view with score breakdown and more info.'),
+                const Text(
+                  'Pull down to refresh data. Tap on any chart to see detailed view with score breakdown and more info.',
+                ),
                 const SizedBox(height: 12),
-                const Text('Scroll to load more items (max 150 tickers). Use settings to change sort, timeframe, and other options.'),
+                const Text(
+                  'Scroll to load more items (max 150 tickers). Use settings to change sort, timeframe, and other options.',
+                ),
                 const SizedBox(height: 12),
                 _linkParagraph(
                   'More detailed help here:',
@@ -1202,16 +1333,12 @@ class OverviewWidgetState extends State<OverviewWidget>
             icon: Icons.workspace_premium,
             label: billing.hasFullAccess
                 ? 'Manage Subscription'
-                : (billing.trialDaysRemaining == 0
-                    ? 'Resume Pro'
-                    : 'Get Pro'),
+                : (billing.trialDaysRemaining == 0 ? 'Resume Pro' : 'Get Pro'),
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) => UpgradeScreen(
-                    billingManager: billing,
-                  ),
+                  builder: (_) => UpgradeScreen(billingManager: billing),
                 ),
               );
             },
@@ -1223,7 +1350,8 @@ class OverviewWidgetState extends State<OverviewWidget>
           _menuDivider(),
           _menuRow(
             icon: Icons.bug_report,
-            label: 'Debug: ${billing.debugOverrideLabel ?? "REAL (${_isProUser ? "pro" : "free"})"}',
+            label:
+                'Debug: ${billing.debugOverrideLabel ?? "REAL (${_isProUser ? "pro" : "free"})"}',
             onTap: () {
               setState(() => _overlay = _OverlayKind.none);
               _showDebugBillingPicker(billing);
@@ -1298,22 +1426,35 @@ class OverviewWidgetState extends State<OverviewWidget>
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('Version $version', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+          Text(
+            'Version $version',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
           const SizedBox(height: 8),
-          const Text('Simple market screener app showcasing a custom technical analysis algorithm. Crypto swiss army knife.'),
+          const Text(
+            'Simple market screener app showcasing a custom technical analysis algorithm. Crypto swiss army knife.',
+          ),
           const SizedBox(height: 12),
-          const Text('Built, because I was lacking exactly such a set of tools for my own trading decisions.'),
+          const Text(
+            'Built, because I was lacking exactly such a set of tools for my own trading decisions.',
+          ),
           const SizedBox(height: 12),
-          const Text('For a start, explore sparkline charts or one of the menu options.'),
+          const Text(
+            'For a start, explore sparkline charts or one of the menu options.',
+          ),
           const SizedBox(height: 12),
-          const Text('There is online help and onboarding available in the menu.'),
+          const Text(
+            'There is online help and onboarding available in the menu.',
+          ),
           const SizedBox(height: 12),
           _linkParagraph(
             'Also read this, if you are new to crypto:',
             'https://panocharts.com/blog.html#how_not_to_get_scammed',
           ),
           const SizedBox(height: 12),
-          const Text('Nothing here is financial advice. Use at your own risk. Always do your own research.'),
+          const Text(
+            'Nothing here is financial advice. Use at your own risk. Always do your own research.',
+          ),
         ],
       ),
     );
@@ -1363,10 +1504,8 @@ class OverviewWidgetState extends State<OverviewWidget>
         Text(text),
         const SizedBox(height: 4),
         GestureDetector(
-          onTap: () => launchUrl(
-            Uri.parse(url),
-            mode: LaunchMode.externalApplication,
-          ),
+          onTap: () =>
+              launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
           child: Text(
             url,
             style: const TextStyle(
@@ -1445,13 +1584,14 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Median of the sort-relevant score for the first [n] items.
   /// Returns 0 when the list is empty so the banner never fires on an
   /// empty grid.
-  static double _medianScore(List<OverviewItem> items, String sort, {int n = 5}) {
+  static double _medianScore(
+    List<OverviewItem> items,
+    String sort, {
+    int n = 5,
+  }) {
     if (items.isEmpty) return 0.0;
-    final scores = items
-        .take(n)
-        .map((i) => _sortRelevantScore(i, sort))
-        .toList()
-      ..sort();
+    final scores =
+        items.take(n).map((i) => _sortRelevantScore(i, sort)).toList()..sort();
     final mid = scores.length ~/ 2;
     return scores.length.isOdd
         ? scores[mid]
@@ -1526,7 +1666,9 @@ class OverviewWidgetState extends State<OverviewWidget>
     // tokens?").
     var showUpgradeBanner = false;
     int hiddenTokenCount = 0;
-    if (!_showFavourites && !_capabilities.fullTokenList && visibleItems.length > 15) {
+    if (!_showFavourites &&
+        !_capabilities.fullTokenList &&
+        visibleItems.length > 15) {
       hiddenTokenCount = visibleItems.length - 15;
       visibleItems = visibleItems.sublist(0, 15);
       showUpgradeBanner = true;
@@ -1549,7 +1691,8 @@ class OverviewWidgetState extends State<OverviewWidget>
     final spacing = _columns == 3 ? 4.0 : 8.0;
     // Pro users never see the stale banner (auto-refresh handles it).
     // The offline banner is shown for all tiers.
-    final bannerKind = _isProUser && _stalenessTracker.kind == OverviewBannerKind.stale
+    final bannerKind =
+        _isProUser && _stalenessTracker.kind == OverviewBannerKind.stale
         ? OverviewBannerKind.none
         : _stalenessTracker.kind;
     final banner = OverviewBanner(kind: bannerKind);
@@ -1566,7 +1709,9 @@ class OverviewWidgetState extends State<OverviewWidget>
               physics: const AlwaysScrollableScrollPhysics(),
               controller: _scrollController,
               padding: EdgeInsets.only(
-                left: 8, right: 8, top: 8,
+                left: 8,
+                right: 8,
+                top: 8,
                 bottom: 8 + MediaQuery.viewPaddingOf(context).bottom,
               ),
               gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -1575,13 +1720,16 @@ class OverviewWidgetState extends State<OverviewWidget>
                 mainAxisSpacing: spacing,
                 childAspectRatio: 2.5,
               ),
-              itemCount: visibleItems.length +
+              itemCount:
+                  visibleItems.length +
                   (showUpgradeBanner ? 1 : 0) +
                   // Suppress the infinite-scroll loading tile once the free-tier
                   // cap has already kicked in — there's nothing more to page in
                   // for this view, and a spinner right after a hard cutoff would
                   // read as "still loading" rather than "upgrade for more".
-                  (!_showFavourites && !showUpgradeBanner && state.hasMore ? 1 : 0),
+                  (!_showFavourites && !showUpgradeBanner && state.hasMore
+                      ? 1
+                      : 0),
               itemBuilder: (context, index) {
                 if (showUpgradeBanner && index == visibleItems.length) {
                   return _UpgradeBannerTile(
@@ -1600,7 +1748,8 @@ class OverviewWidgetState extends State<OverviewWidget>
                       if (billing == null) return;
                       Navigator.of(context).push(
                         MaterialPageRoute(
-                          builder: (_) => UpgradeScreen(billingManager: billing),
+                          builder: (_) =>
+                              UpgradeScreen(billingManager: billing),
                         ),
                       );
                     },
@@ -1622,6 +1771,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     sort: state.sort,
                     flashDotProgress: _flashProgress[item.symbol],
                     flashDotColor: _flashColors[item.symbol],
+                    reliability: _badgeReliability(item),
                   ),
                 );
                 return child;
@@ -1672,8 +1822,11 @@ class _UpgradeBannerTile extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.lock_outline,
-                        color: const Color(0xFF00E6C0), size: fontSize * 1.4),
+                    Icon(
+                      Icons.lock_outline,
+                      color: const Color(0xFF00E6C0),
+                      size: fontSize * 1.4,
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       '+$hiddenCount more tokens with Pro',
@@ -1773,7 +1926,11 @@ Color _signalColor(SignalType signal, {double trendScore = 0}) {
   }
 }
 
-String _signalLabel(SignalType signal, {bool abbreviate = false, double trendScore = 0}) {
+String _signalLabel(
+  SignalType signal, {
+  bool abbreviate = false,
+  double trendScore = 0,
+}) {
   switch (signal) {
     case SignalType.trend:
       final arrow = trendScore >= 0 ? '↑' : '↓';
@@ -1795,6 +1952,7 @@ class _OverviewGridItem extends StatelessWidget {
   final String sort;
   final double? flashDotProgress;
   final Color? flashDotColor;
+  final ScorecardSummaryItem? reliability;
 
   const _OverviewGridItem({
     required this.item,
@@ -1806,6 +1964,7 @@ class _OverviewGridItem extends StatelessWidget {
     required this.sort,
     this.flashDotProgress,
     this.flashDotColor,
+    this.reliability,
   });
 
   @override
@@ -1839,10 +1998,17 @@ class _OverviewGridItem extends StatelessWidget {
                       fontSize: fontSize,
                       fontWeight: FontWeight.w600,
                       color: Colors.white.withAlpha(
-                        ((columns == 1 ? 0.9 : columns == 2 ? 0.8 : 0.7) * 255).round(),
+                        ((columns == 1
+                                    ? 0.9
+                                    : columns == 2
+                                    ? 0.8
+                                    : 0.7) *
+                                255)
+                            .round(),
                       ),
-                      backgroundColor:
-                          Colors.black.withAlpha((0.25 * 255).round()),
+                      backgroundColor: Colors.black.withAlpha(
+                        (0.25 * 255).round(),
+                      ),
                     ),
                   ),
                 ),
@@ -1850,7 +2016,13 @@ class _OverviewGridItem extends StatelessWidget {
                   Positioned(
                     right: pad + 4,
                     top: pad,
-                    child: _buildBadge(item, fontSize),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        _buildBadge(item, fontSize),
+                        ReliabilityChip(item: reliability, dense: true),
+                      ],
+                    ),
                   ),
                 if (isFavourite)
                   Positioned(
@@ -1956,19 +2128,29 @@ class _OverviewGridItem extends StatelessWidget {
     return sparklinePaint;
   }
 
-
   Widget _buildBadge(OverviewItem item, double fontSize) {
     final signal = _parseSignalType(item.badgeComponent);
-    final scale = columns == 1 ? 1.0 : columns == 2 ? 0.9 : 0.8;
+    final scale = columns == 1
+        ? 1.0
+        : columns == 2
+        ? 0.9
+        : 0.8;
     final badgeFontSize = (fontSize * 0.7 * scale).clamp(7.0, 12.0);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
-        color: _signalColor(signal, trendScore: item.trendScore).withAlpha((0.8 * 255).round()),
+        color: _signalColor(
+          signal,
+          trendScore: item.trendScore,
+        ).withAlpha((0.8 * 255).round()),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
-        _signalLabel(signal, abbreviate: columns > 1, trendScore: item.trendScore),
+        _signalLabel(
+          signal,
+          abbreviate: columns > 1,
+          trendScore: item.trendScore,
+        ),
         style: TextStyle(
           fontSize: badgeFontSize,
           fontWeight: FontWeight.bold,
