@@ -49,8 +49,46 @@ func ComputeTrendHealth(state string, price, recentHigh, recentLow, atr, recentR
 	return clamp(health, 0, 1)
 }
 
-// BuildMarketLabel produces a human-readable label based on aggregate
-// trend prevalence and effective trend health.
+// ComputeTrendHealthV2 is the tape health formula (PR-115 / PR-106 items 1–3).
+// Full credit while drawdown ≤ 1 ATR, zero by 3.5 ATR; stale trends lose up
+// to half their health. Crash / squeeze penalty matches V1.
+// Participation fallback keeps ComputeTrendHealth (V1) until PR-106.
+func ComputeTrendHealthV2(state string, price, recentHigh, recentLow, atr14, recentReturn float64, barsSinceExtreme int) float64 {
+	if atr14 == 0 {
+		return 0
+	}
+
+	var dd float64
+	switch state {
+	case "uptrend":
+		dd = (recentHigh - price) / atr14
+	case "downtrend":
+		dd = (price - recentLow) / atr14
+	default:
+		return 0
+	}
+	ddScore := 1 - clamp((dd-1)/2.5, 0, 1)
+	staleness := clamp(float64(barsSinceExtreme)/40, 0, 1)
+	staleScore := 1 - 0.5*staleness
+	health := ddScore * staleScore
+
+	switch state {
+	case "uptrend":
+		if recentReturn < -1.5 {
+			health *= 0.3
+		}
+	case "downtrend":
+		if recentReturn > 1.5 {
+			health *= 0.3
+		}
+	}
+
+	return clamp(health, 0, 1)
+}
+
+// BuildMarketLabel produces a human-readable label for the participation
+// fallback (V1 thresholds). The tape path uses BuildTapeLabel (V2) instead
+// so PR-115 does not silently retune fallback copy before PR-106.
 func BuildMarketLabel(trendPrevalence, effectiveTrend float64) string {
 	if trendPrevalence > 0.6 {
 		if effectiveTrend > 0.5 {
@@ -67,6 +105,34 @@ func BuildMarketLabel(trendPrevalence, effectiveTrend float64) string {
 	}
 
 	return "No clear trend"
+}
+
+// BuildTapeLabel is the tape caption helper (PR-115).
+// Trend captions use V2 health thresholds and appear only when State == trend.
+// Other regimes get a caption that matches state — not a shared empty string.
+func BuildTapeLabel(state mkt.State, effectiveTrend float64) string {
+	switch state {
+	case mkt.StateTrend:
+		if effectiveTrend > 0.75 {
+			return "Strong trend"
+		}
+		if effectiveTrend > 0.4 {
+			return "Trend weakening"
+		}
+		return "Trend breaking down"
+	case mkt.StateCompression:
+		return "Compression"
+	case mkt.StateExpansion:
+		return "Expansion"
+	case mkt.StateSideways:
+		return "Sideways"
+	case mkt.StateIndecisive:
+		return "Mixed conditions"
+	case mkt.StateSilent:
+		return "No clear trend"
+	default:
+		return "No clear trend"
+	}
 }
 
 func clamp(v, min, max float64) float64 {

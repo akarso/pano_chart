@@ -22,18 +22,21 @@ func NewMarketHandler(s *appmarket.MarketStateService) *MarketHandler {
 
 // marketStateResponse is the response DTO for the market state endpoint.
 type marketStateResponse struct {
-	Timeframe      string           `json:"timeframe"`
-	State          string           `json:"state"`
-	Confidence     float64          `json:"confidence"`
-	Breadth        marketBreadthDTO `json:"breadth"`
-	Structure      marketBreadthDTO `json:"structure,omitempty"`
-	RegimeSource   string           `json:"regimeSource,omitempty"`
-	SymbolCount    int              `json:"symbolCount"`
-	Bias           string           `json:"bias"`
-	EffectiveTrend float64          `json:"effectiveTrend"`
-	BreakdownRate  float64          `json:"breakdownRate"`
-	Label          string           `json:"label"`
-	DataQuality    string           `json:"dataQuality"`
+	Timeframe      string                 `json:"timeframe"`
+	State          string                 `json:"state"`
+	Confidence     float64                `json:"confidence"`
+	Breadth        marketBreadthDTO       `json:"breadth"`
+	Structure      marketBreadthDTO       `json:"structure,omitempty"`
+	RegimeSource   string                 `json:"regimeSource,omitempty"`
+	SymbolCount    int                    `json:"symbolCount"`
+	Bias           string                 `json:"bias"`
+	EffectiveTrend float64                `json:"effectiveTrend"`
+	BreakdownRate  float64                `json:"breakdownRate"`
+	Label          string                 `json:"label"`
+	DataQuality    string                 `json:"dataQuality"`
+	WindowBars     int                    `json:"windowBars"`
+	TrendScore     float64                `json:"trendScore"`
+	Participation  marketParticipationDTO `json:"participation"`
 }
 
 type marketBreadthDTO struct {
@@ -41,6 +44,13 @@ type marketBreadthDTO struct {
 	Compression float64 `json:"compression"`
 	Expansion   float64 `json:"expansion"`
 	Trend       float64 `json:"trend"`
+}
+
+type marketParticipationDTO struct {
+	Up      int `json:"up"`
+	Down    int `json:"down"`
+	Ranging int `json:"ranging"`
+	Total   int `json:"total"`
 }
 
 // ServeHTTP implements http.Handler.
@@ -71,6 +81,14 @@ func (h *MarketHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Label:          summary.Label,
 		DataQuality:    string(summary.DataQuality),
 		RegimeSource:   summary.RegimeSource,
+		WindowBars:     summary.WindowBars,
+		TrendScore:     roundTo(summary.TrendScore, 4),
+		Participation: marketParticipationDTO{
+			Up:      summary.Participation.Up,
+			Down:    summary.Participation.Down,
+			Ranging: summary.Participation.Ranging,
+			Total:   summary.Participation.Total,
+		},
 		Breadth: marketBreadthDTO{
 			Sideways:    roundTo(summary.Breadth.Sideways, 4),
 			Compression: roundTo(summary.Breadth.Compression, 4),

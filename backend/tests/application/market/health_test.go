@@ -122,6 +122,21 @@ func TestBuildMarketLabel_NoClearTrend(t *testing.T) {
 	}
 }
 
+func TestBuildTapeLabel_OnlyOnTrendState(t *testing.T) {
+	if got := appmarket.BuildTapeLabel(mkt.StateSideways, 0.9); got != "Sideways" {
+		t.Fatalf("sideways label=%q", got)
+	}
+	if got := appmarket.BuildTapeLabel(mkt.StateCompression, 0.9); got != "Compression" {
+		t.Fatalf("compression label=%q", got)
+	}
+	if got := appmarket.BuildTapeLabel(mkt.StateTrend, 0.6); got != "Trend weakening" {
+		t.Fatalf("2 ATR health label=%q", got)
+	}
+	if got := appmarket.BuildTapeLabel(mkt.StateTrend, 0.8); got != "Strong trend" {
+		t.Fatalf("healthy label=%q", got)
+	}
+}
+
 // ---------- Summary with health fields ----------
 
 func TestCalculate_HealthFieldsPopulated(t *testing.T) {
@@ -232,6 +247,56 @@ func TestCalculate_BreakdownRate(t *testing.T) {
 	// 1 healthy token, 1 breaking token → 50% breakdown rate.
 	if s.BreakdownRate != 0.5 {
 		t.Errorf("expected breakdownRate 0.5, got %f", s.BreakdownRate)
+	}
+}
+
+func TestTrendHealthV2_TwoATRDrawdown(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 100, 110, 90, 5, 0.5, 0)
+	if math.Abs(h-0.6) > 0.01 {
+		t.Errorf("expected ~0.6, got %f", h)
+	}
+}
+
+func TestTrendHealthV2_DowntrendTwoATR(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("downtrend", 100, 120, 90, 5, -0.5, 0)
+	// bounce = (100-90)/5 = 2 → ddScore 0.6
+	if math.Abs(h-0.6) > 0.01 {
+		t.Errorf("expected ~0.6, got %f", h)
+	}
+}
+
+func TestTrendHealthV2_CrashPenalty(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 110, 110, 90, 5, -2.0, 0)
+	if math.Abs(h-0.3) > 0.01 {
+		t.Errorf("expected ~0.3 after crash, got %f", h)
+	}
+}
+
+func TestTrendHealthV2_ZeroATR(t *testing.T) {
+	if h := appmarket.ComputeTrendHealthV2("uptrend", 100, 110, 90, 0, 0.5, 0); h != 0 {
+		t.Errorf("got %f", h)
+	}
+}
+
+func TestTrendHealthV2_PriceAboveHigh(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 115, 110, 90, 5, 0.5, 0)
+	// dd negative → ddScore 1
+	if h != 1.0 {
+		t.Errorf("expected 1.0, got %f", h)
+	}
+}
+
+func TestTrendHealthV2_AtHighFullHealth(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 110, 110, 90, 5, 0.5, 0)
+	if h != 1.0 {
+		t.Errorf("expected 1.0, got %f", h)
+	}
+}
+
+func TestTrendHealthV2_StalenessHalves(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 110, 110, 90, 5, 0.5, 40)
+	if math.Abs(h-0.5) > 0.01 {
+		t.Errorf("expected ~0.5 with full staleness, got %f", h)
 	}
 }
 

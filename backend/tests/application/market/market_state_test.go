@@ -499,6 +499,71 @@ func TestClassify_Silent_FlatWithLowVolume(t *testing.T) {
 	if s.State != mkt.StateSilent {
 		t.Errorf("expected silent for flat low-volume market, got %s", s.State)
 	}
+	if s.Label != "No clear trend" {
+		t.Errorf("silent label=%q want No clear trend", s.Label)
+	}
+}
+
+func TestClassify_Indecisive_DoesNotKeepTrendCaption(t *testing.T) {
+	// High trend mix share but indecisive gap — must not print V1 "Strong trend".
+	// Large |return| keeps this off the Silent override without volume tricks.
+	evals := make([]domain.EvaluationSnapshot, 10)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{
+			TrendScore:    0.55,
+			SidewaysScore: 0.45,
+			ATR:           1,
+			RecentReturn:  2.0, // avgAbsReturn ≥ 0.5 → not silent
+			Volume:        1000,
+			Bias:          "up",
+			Price:         100,
+			RecentHigh:    100,
+			RecentLow:     90,
+		}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != mkt.StateIndecisive {
+		t.Fatalf("expected indecisive, got %s confidence=%f", s.State, s.Confidence)
+	}
+	if s.Label == "Strong trend" || s.Label == "Trend weakening" || s.Label == "Trend breaking down" {
+		t.Fatalf("indecisive kept trend caption %q", s.Label)
+	}
+	if s.Label != "Mixed conditions" {
+		t.Fatalf("label=%q want Mixed conditions", s.Label)
+	}
+}
+
+func TestClassify_Silent_ClearsPriorTrendCaption(t *testing.T) {
+	// Sideways after dampening / quiet volume → Silent must clear captions.
+	evals := make([]domain.EvaluationSnapshot, 10)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{
+			SidewaysScore: 0.9,
+			TrendScore:    0.7, // would be a V1 strong caption if left unchecked
+			Bias:          "up",
+			ATR:           1,
+			RecentReturn:  0.1,
+			Volume:        1000,
+			Price:         100,
+			RecentHigh:    100,
+			RecentLow:     90,
+		}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != mkt.StateSilent {
+		t.Fatalf("expected silent, got %s", s.State)
+	}
+	if s.Label != "No clear trend" {
+		t.Fatalf("silent label=%q want No clear trend", s.Label)
+	}
 }
 
 func TestClassify_NotSilent_HighVolume(t *testing.T) {
@@ -623,5 +688,37 @@ func TestMarketStateService_Calculate_DataQuality_ExactlyHalf_Boundary(t *testin
 	}
 	if s74.DataQuality != mkt.DataQualityDegraded {
 		t.Errorf("expected DataQuality degraded one below half (74/150), got %q", s74.DataQuality)
+	}
+}
+
+func TestMarketHandler_PR115AdditiveFields(t *testing.T) {
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.8, Bias: "up"},
+			{TrendScore: 0.7, Bias: "down"},
+			{TrendScore: 0.2, Bias: "up"},
+			{SidewaysScore: 0.9},
+		},
+	})
+	h := adhttp.NewMarketHandler(svc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/state?timeframe=4h", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["windowBars"].(float64) != 0 {
+		t.Fatalf("participation fallback windowBars=%v want 0", resp["windowBars"])
+	}
+	if _, ok := resp["trendScore"]; !ok {
+		t.Fatal("missing trendScore")
+	}
+	part, ok := resp["participation"].(map[string]interface{})
+	if !ok {
+		t.Fatal("missing participation")
+	}
+	if part["up"].(float64) != 1 || part["down"].(float64) != 1 || part["ranging"].(float64) != 2 || part["total"].(float64) != 4 {
+		t.Fatalf("participation=%v", part)
 	}
 }

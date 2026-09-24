@@ -290,3 +290,41 @@ func TestRegimeHandler_OtherErrorIsInternal(t *testing.T) {
 		t.Fatalf("must not leak error strings: %q", body)
 	}
 }
+
+func TestRegimeHandler_PR115AdditiveFields(t *testing.T) {
+	calc := &fakeRegimeCalc{
+		summary: mkt.Summary{
+			Timeframe:  "4h",
+			State:      mkt.StateTrend,
+			Confidence: 0.72,
+			WindowBars: 110,
+			TrendScore: 0.723456,
+			Participation: mkt.Participation{
+				Up: 12, Down: 3, Ranging: 85, Total: 100,
+			},
+		},
+	}
+	handler := adhttp.NewMarketRegimeHandler(calc)
+	req := httptest.NewRequest(http.MethodGet, "/api/market/regime", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	var resp struct {
+		WindowBars    int     `json:"windowBars"`
+		TrendScore    float64 `json:"trendScore"`
+		Participation struct {
+			Up, Down, Ranging, Total int
+		} `json:"participation"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.WindowBars != 110 {
+		t.Fatalf("windowBars=%d", resp.WindowBars)
+	}
+	if resp.TrendScore != 0.7235 {
+		t.Fatalf("trendScore=%v want rounded 0.7235", resp.TrendScore)
+	}
+	if resp.Participation.Up != 12 || resp.Participation.Total != 100 {
+		t.Fatalf("participation=%+v", resp.Participation)
+	}
+}

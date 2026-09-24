@@ -37,7 +37,7 @@ type RegimeObserver interface {
 }
 
 // candleMetricsWindow is the candle window used for VolatilityExpansion /
-// Dispersion — matches the sparkline precision used elsewhere.
+// Dispersion and for fetching the composite tape.
 const candleMetricsWindow = 110
 
 // candleMetricsFanoutLimit bounds concurrent candle fetches in
@@ -121,6 +121,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 			VolatilityExpansion: 1.0,
 			Label:               BuildMarketLabel(0, 0),
 			DataQuality:         mkt.DataQualityUnavailable,
+			WindowBars:          0,
 		}, nil
 	}
 
@@ -162,6 +163,8 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 	participation.Expansion /= total
 	participation.Trend /= total
 
+	tokenParticipation := countParticipation(evaluations)
+
 	// ---- 2. Prefer composite-tape regime when candles are available (PR-084) ----
 	var (
 		dominant       mkt.State
@@ -171,6 +174,8 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		effectiveTrend float64
 		breakdownRate  float64
 		structure      mkt.Breadth
+		trendScore     float64
+		windowBars     int
 		regimeSource   = "participation"
 	)
 
@@ -182,6 +187,8 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		label = tape.Label
 		effectiveTrend = tape.EffectiveTrend
 		breakdownRate = tape.BreakdownRate
+		trendScore = tape.TrendScore
+		windowBars = tape.WindowBars
 		regimeSource = tape.Source
 	} else {
 		// Legacy fallback: participation + health dampening.
@@ -246,6 +253,12 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		}
 		label = BuildMarketLabel(participation.Trend, effectiveTrend)
 		structure = participation
+		// Trend captions only when the headline is actually TREND — same
+		// rule as the tape path (PR-115). Indecisive / compression / etc.
+		// must not keep a V1 "Strong trend" from mix share alone.
+		if dominant != mkt.StateTrend {
+			label = BuildTapeLabel(dominant, effectiveTrend)
+		}
 	}
 
 	// Silent override still uses per-token activity (flat + quiet volume).
@@ -255,6 +268,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		volumeNormal := hasVolumeData && avgVolume <= medianVolume*1.5
 		if hasVolumeData && avgAbsReturn < 0.5 && volumeNormal {
 			dominant = mkt.StateSilent
+			label = BuildTapeLabel(mkt.StateSilent, 0)
 		}
 	}
 
@@ -278,6 +292,9 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		Label:               label,
 		VolatilityExpansion: 1.0,
 		DataQuality:         dataQuality,
+		WindowBars:          windowBars,
+		TrendScore:          trendScore,
+		Participation:       tokenParticipation,
 	}, nil
 }
 
@@ -298,10 +315,32 @@ func (s *MarketStateService) scoreCompositeTape(ctx context.Context, timeframe s
 	default:
 		return TapeRegime{}, false
 	}
-	if err != nil || tape.PreferredSeries().Len() < 2 {
+	if err != nil || tape.PreferredSeries().Len() < tapeMinBars {
 		return TapeRegime{}, false
 	}
 	return ScoreMarketTape(tape.PreferredSeries(), timeframe, tape.PreferredSource), true
+}
+
+// countParticipation tallies tokens from stored evaluations (PR-115).
+// Up/down require |EvaluationSnapshot.TrendScore| ≥ 0.5 (Trend Predictability)
+// and Bias up/down from the sparkline net move. Everything else is ranging.
+// This is not TapeTrend and not the response field trendScore.
+func countParticipation(evals []domain.EvaluationSnapshot) mkt.Participation {
+	p := mkt.Participation{Total: len(evals)}
+	for _, e := range evals {
+		if math.Abs(e.TrendScore) >= 0.5 {
+			switch e.Bias {
+			case "up":
+				p.Up++
+				continue
+			case "down":
+				p.Down++
+				continue
+			}
+		}
+		p.Ranging++
+	}
+	return p
 }
 
 // CalculateWithCandleMetrics is Calculate plus VolatilityExpansion/Dispersion,

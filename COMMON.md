@@ -89,9 +89,9 @@ these terms.
 |---|---|---|
 | **Tape** | The merged market series (composite OHLCV) | `CompositeIndexService.CalculateTape` |
 | **Regime** | Dominant structure of the tape: trend / sideways / compression / expansion / indecisive / silent | `ScoreMarketTape` |
-| **Tape confidence** | Share of the dominant structure in the tape's score mix (0–1) | `TapeRegime.Confidence` |
+| **Tape confidence** | When state is trend: raw `TapeTrend`. Otherwise: share of the dominant structure in the tape's score mix (0–1) | `TapeRegime.Confidence` |
 | **Structure** | The tape's four-way score mix | `TapeRegime.Structure` |
-| **Participation** | Average per-token score mix across the universe (0–1 each) | `MarketStateService` participation breadth |
+| **Participation** | Count of tokens with Trend Predictability ≥ 0.5 and sparkline bias up/down (else ranging). Legacy JSON `metrics.*Breadth` remains the average per-token score mix | `MarketStateService` `participation` / breadth |
 | **Bias** | Direction of the tape's trend: up / down / neutral | `TapeRegime.Bias` |
 | **Composite (median)** | Equal-weight median rebased index | `CompositeIndex.Points` |
 | **Composite (volume-weighted)** | Quote-volume-weighted mean rebased index | `CompositeIndex.VolumeWeightedPoints` |
@@ -207,20 +207,51 @@ If backend and frontend disagree, this document wins.
 
 `GET /api/market/regime` and `GET /api/market/state` set `regime`/`state`,
 `prevalence`/`confidence`, `label`, and `bias` from scoring the **merged
-composite tape** (volume-weighted when available, else median) with the same
-per-chart calculators as rankings.
+composite tape** (volume-weighted when available, else median). The trend
+leg is `TapeTrend` (PR-115); sideways / compression / expansion still use
+the same calculators as rankings. Rankings / per-token scores are unchanged
+(Trend Predictability).
+
+When `state` is `trend`, `confidence` is the raw `TapeTrend` score. Otherwise
+`confidence` / `prevalence` is the dominant share of the measured structure
+mix.
 
 Additive fields:
 
 * `regimeSource`: `composite_volume_weighted` | `composite_median` | `participation`
 * `structure` (state endpoint): tape score mix
 * regime `scores`: tape structure (not token vote share)
+* `windowBars`: candles actually scored for the headline (`series.Len()`);
+  `0` when the headline fell back to participation or data is unavailable
+* `trendScore`: raw composite `TapeTrend` (0–1) when composite-backed; `0` on
+  the participation fallback. Not the same number as each token's stored
+  Trend Predictability score.
+* `participation`: `{ up, down, ranging, total }` — counts of stored
+  evaluations with `|EvaluationSnapshot.trendScore| ≥ 0.5` (Trend
+  Predictability) and sparkline `bias` up/down; else ranging. Feeds PR-116
+  copy; it is not a TapeTrend vote.
+
+Tape captions (`label`) match `state`:
+* `trend` — V2 health: "Strong trend" (health > 0.75), "Trend weakening"
+  (> 0.4), or "Trend breaking down"
+* `compression` / `expansion` / `sideways` — "Compression" / "Expansion" /
+  "Sideways"
+* `indecisive` — "Mixed conditions"
+* `silent` — "No clear trend"
+
+The adverse-move (crash/squeeze) penalty looks at the last 8 bars' return in
+Wilder true-ATR units, not the full-window net. Compression/expansion on the
+tape still use their own SMA ATR (`rollingATR`); only TapeTrend and tape
+health use Wilder `TrueATR`. The participation fallback still uses the older
+V1 label thresholds when `state` is `trend`, and the same state-matched
+captions otherwise, until PR-106.
 
 ### Participation (metrics)
 
 `metrics.trendBreadth` / `sidewaysBreadth` / `compressionBreadth` /
-`expansionBreadth` remain **per-token participation** averages. UI copy must
-not present these as the headline regime.
+`expansionBreadth` remain **per-token score-mix averages** (legacy). The
+count-based `participation` object is the glossary term for up/down/ranging
+counts. UI copy must not present either as the headline regime.
 
 ### Composite index
 
