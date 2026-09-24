@@ -7,6 +7,7 @@ import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/polling_config.dart';
 import 'composite_chart_painter.dart';
+import 'composite_chart_presentation.dart';
 import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
@@ -57,6 +58,8 @@ const _supportedTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
 class _MarketPulseScreenState extends State<MarketPulseScreen> {
   MarketStateData? _stateData;
   CompositeIndexData? _compositeData;
+  /// Same rebase as backend `CalculateTape` (`tapeMetricsWindow`).
+  CompositeIndexData? _tapeCompositeData;
   RegimeData? _regimeData;
   TransitionData? _transitionData;
   RegimeHistoryData? _regimeHistoryData;
@@ -156,6 +159,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           timeframe: _timeframe,
           limit: compositeChartLimit,
         ),
+        widget.compositeIndexApi.fetch(
+          timeframe: _timeframe,
+          limit: tapeMetricsWindow,
+        ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
         if (widget.transitionApi != null)
@@ -165,7 +172,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       ];
       final results = await Future.wait(futures);
       if (!mounted) return;
-      int idx = 2;
+      int idx = 3;
       RegimeData? regime;
       TransitionData? trans;
       RegimeHistoryData? history;
@@ -183,6 +190,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
+        _tapeCompositeData = results[2] as CompositeIndexData;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
@@ -206,6 +214,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           timeframe: _timeframe,
           limit: compositeChartLimit,
         ),
+        widget.compositeIndexApi.fetch(
+          timeframe: _timeframe,
+          limit: tapeMetricsWindow,
+        ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
         if (widget.transitionApi != null)
@@ -215,7 +227,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       ];
       final results = await Future.wait(futures);
       if (!mounted) return;
-      int idx = 2;
+      int idx = 3;
       RegimeData? regime;
       TransitionData? trans;
       RegimeHistoryData? history;
@@ -233,6 +245,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
+        _tapeCompositeData = results[2] as CompositeIndexData;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
@@ -522,12 +535,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            _headlineSubline(
-              data.regimeSource,
-              data.windowBars,
-              _chartPointCount(),
+            _headlineCaption(
+              regimeSource: data.regimeSource,
+              windowBars: data.windowBars,
               timeframe: data.timeframe,
-              matchesTape: _displayedSeriesMatchesTape(),
             ),
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
@@ -536,60 +547,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  int _chartPointCount() {
-    final data = _compositeData;
-    if (data == null) return 0;
-    final pts = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? data.volumeWeightedPoints
-        : data.points;
-    return pts.length;
-  }
-
-  /// Whether the displayed series length matches the scored tape window so
-  /// dimming/OLS describe the same first-close rebase the backend scored.
-  bool _chartAlignedWithTape(int chartLen, int windowBars) {
-    if (!_displayedSeriesMatchesTape() || windowBars <= 0) return false;
-    // Equal: chart is the tape. Shorter: partial history, still same rebase.
-    // Longer: last N of a longer rebase ≠ the N-bar tape — context only.
-    return chartLen <= windowBars;
-  }
-
-  /// Caption for the scored window. Uses min(windowBars, chart length) and a
-  /// different sentence when the chart is shorter than the tape. Must not
-  /// claim the chart is scored when the displayed series is not the tape.
-  String _headlineSubline(
-    String regimeSource,
-    int windowBars,
-    int chartLen, {
+  String _headlineCaption({
+    required String regimeSource,
+    required int windowBars,
     required String timeframe,
-    required bool matchesTape,
   }) {
-    if (!isKnownCompositeSource(regimeSource)) {
-      return regimeSource == 'participation' || regimeSource.isEmpty
-          ? 'From token participation (tape unavailable)'
-          : 'From merged market tape (same structure as one chart)';
-    }
-    if (!matchesTape) {
-      return 'Headline scored on the tape; chart shows another series';
-    }
-    if (windowBars <= 0) {
-      return 'From merged market tape (same structure as one chart)';
-    }
-    if (chartLen <= 0) {
-      return 'Scored on $windowBars bars • $timeframe';
-    }
-    if (chartLen > windowBars) {
-      return 'Headline scored on a $windowBars-bar tape · '
-          'chart shows $chartLen-bar context • $timeframe';
-    }
-    final shown = math.min(windowBars, chartLen);
-    if (windowBars > chartLen) {
-      return 'Scored on $windowBars bars; chart shows $chartLen • $timeframe';
-    }
-    if (windowBars == chartLen) {
-      return 'Scored on these $shown bars • $timeframe';
-    }
-    return 'Scored on the last $shown bars shown • $timeframe';
+    final view = _compositePresentation();
+    return headlineSubline(
+      regimeSource: regimeSource,
+      windowBars: windowBars,
+      chartLen: view?.chartPoints.length ?? 0,
+      timeframe: timeframe,
+      matchesTape: view?.matchesTape ?? false,
+      hasScoredEvidence: view?.hasScoredEvidence ?? false,
+    );
+  }
+
+  CompositeChartPresentation? _compositePresentation() {
+    final data = _compositeData;
+    if (data == null) return null;
+    return CompositeChartPresentation.resolve(
+      context: data,
+      tape: _tapeCompositeData,
+      regimeSource: _regimeSource(),
+      windowBars: _scoredWindowBars(),
+      useVolumeWeighted: _useVolumeWeighted,
+    );
   }
 
   Widget _regimeScoreBar(String label, double value, Color color) {
@@ -1049,12 +1032,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            _headlineSubline(
-              data.regimeSource,
-              data.windowBars,
-              _chartPointCount(),
+            _headlineCaption(
+              regimeSource: data.regimeSource,
+              windowBars: data.windowBars,
               timeframe: data.timeframe,
-              matchesTape: _displayedSeriesMatchesTape(),
             ),
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
@@ -1066,7 +1047,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Composite Index Chart Card ----------
 
   Widget _buildCompositeCard(CompositeIndexData data) {
-    final view = _compositeChartView(data);
+    final view = _compositePresentation() ??
+        CompositeChartPresentation.resolve(
+          context: data,
+          tape: _tapeCompositeData,
+          regimeSource: _regimeSource(),
+          windowBars: _scoredWindowBars(),
+          useVolumeWeighted: _useVolumeWeighted,
+        );
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1111,51 +1099,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  _CompositeChartView _compositeChartView(CompositeIndexData data) {
-    final src = _regimeSource();
-    final isCompositeTape = isKnownCompositeSource(src);
-    final matchesTape = _displayedSeriesMatchesTape();
-    final chartPoints = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? data.volumeWeightedPoints
-        : data.points;
-    final windowBars = _scoredWindowBars();
-    final aligned = _chartAlignedWithTape(chartPoints.length, windowBars);
-    // Scored dimming/OLS only when the chart rebase matches the tape window.
-    final scoredWin = aligned ? math.min(windowBars, chartPoints.length) : 0;
-    final scoredStart = scoredWindowStart(chartPoints.length, scoredWin);
-    final change = _compositePercentChange(chartPoints, scoredStart);
-    final changeScope = isCompositeTape && !matchesTape
-        ? 'series change'
-        : (aligned && scoredWin > 0 && scoredWin < chartPoints.length
-            ? 'scored-window change'
-            : (matchesTape && chartPoints.length > windowBars && windowBars > 0
-                ? 'context change'
-                : 'window change'));
-    return _CompositeChartView(
-      chartPoints: chartPoints,
-      hasPoints: chartPoints.isNotEmpty,
-      isCompositeTape: isCompositeTape,
-      matchesTape: matchesTape,
-      scoredWin: scoredWin,
-      change: change,
-      changeScope: changeScope,
-      seriesLabel: (_useVolumeWeighted && data.hasVolumeWeighted)
-          ? 'Volume weighted'
-          : 'equal weight (median)',
-      showRegression: aligned && scoredWin >= 2,
-    );
-  }
-
-  /// Percent change from [scoredStart] to the last point. Zero when there are
-  /// fewer than two points or the start value is zero.
-  double _compositePercentChange(List<IndexPoint> chartPoints, int scoredStart) {
-    if (chartPoints.length <= 1) return 0.0;
-    final start = chartPoints[scoredStart].value;
-    if (start == 0.0) return 0.0;
-    return (chartPoints.last.value / start - 1.0) * 100.0;
-  }
-
-  Widget _buildCompositeHeader(_CompositeChartView view) {
+  Widget _buildCompositeHeader(CompositeChartPresentation view) {
     final changeStr = view.change >= 0
         ? '+${view.change.toStringAsFixed(2)}'
         : view.change.toStringAsFixed(2);
@@ -1221,7 +1165,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  Widget _buildCompositePaint(_CompositeChartView view) {
+  Widget _buildCompositePaint(CompositeChartPresentation view) {
     final changeColor =
         view.change >= 0 ? Colors.greenAccent : Colors.redAccent;
     return CustomPaint(
@@ -1275,23 +1219,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       return _stateData!.windowBars;
     }
     return 0;
-  }
-
-  /// True when the chart series is the same path as `regimeSource`.
-  /// Exact contract values only: `composite_volume_weighted` /
-  /// `composite_median`.
-  bool _displayedSeriesMatchesTape() {
-    final src = _regimeSource();
-    final data = _compositeData;
-    if (data == null) return false;
-    final showingVw = _useVolumeWeighted && data.hasVolumeWeighted;
-    if (src == 'composite_volume_weighted') {
-      return showingVw;
-    }
-    if (src == 'composite_median') {
-      return !showingVw;
-    }
-    return false;
   }
 
   bool _isTrendHeadline() {
@@ -1725,31 +1652,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
     return regime.toUpperCase();
   }
-}
-
-/// View-model for the composite chart card (keeps [_buildCompositeCard] thin).
-class _CompositeChartView {
-  final List<IndexPoint> chartPoints;
-  final bool hasPoints;
-  final bool isCompositeTape;
-  final bool matchesTape;
-  final int scoredWin;
-  final double change;
-  final String changeScope;
-  final String seriesLabel;
-  final bool showRegression;
-
-  const _CompositeChartView({
-    required this.chartPoints,
-    required this.hasPoints,
-    required this.isCompositeTape,
-    required this.matchesTape,
-    required this.scoredWin,
-    required this.change,
-    required this.changeScope,
-    required this.seriesLabel,
-    required this.showRegression,
-  });
 }
 
 /// Shown instead of the regime/state card when DataQuality is

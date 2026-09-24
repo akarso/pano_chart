@@ -17,8 +17,8 @@ void main() {
   });
 
   group('MarketPulseScreen PR-116', () {
-    testWidgets('fetches composite with compositeChartLimit', (tester) async {
-      final compositeApi = _RecordingCompositeApi(_baseComposite(n: 110));
+    testWidgets('fetches context and tape-window composites', (tester) async {
+      final compositeApi = _RecordingCompositeApi(_baseComposite(n: 200));
       await tester.pumpWidget(MaterialApp(
         home: MarketPulseScreen(
           marketStateApi: _FakeStateApi(_baseState()),
@@ -28,8 +28,8 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(compositeApi.lastLimit, compositeChartLimit);
-      expect(compositeApi.lastLimit, 200);
+      expect(compositeApi.limits, containsAll([compositeChartLimit, tapeMetricsWindow]));
+      expect(compositeApi.limits, containsAll([200, 110]));
     });
 
     testWidgets('card order: headline above composite above participation',
@@ -89,7 +89,7 @@ void main() {
       expect(find.textContaining('last 48 bars shown'), findsNothing);
     });
 
-    testWidgets('longer chart is context only — no scored dimming claim',
+    testWidgets('longer chart splices tape suffix — scored dimming present',
         (tester) async {
       await _pumpTall(tester, home: MarketPulseScreen(
         marketStateApi: _FakeStateApi(_baseState()),
@@ -98,20 +98,16 @@ void main() {
       ));
 
       expect(
-        find.text(
-          'Headline scored on a 110-bar tape · '
-          'chart shows 200-bar context • 4h',
-        ),
+        find.text('Scored on the last 110 bars shown • 4h'),
         findsOneWidget,
       );
-      expect(find.textContaining('Scored on these'), findsNothing);
-      expect(find.text('context change'), findsOneWidget);
+      expect(find.text('scored-window change'), findsOneWidget);
       final paint = tester.widget<CustomPaint>(
         find.byKey(const Key('mp-composite-paint')),
       );
       final painter = paint.painter! as CompositeChartPainter;
-      expect(painter.windowBars, 0);
-      expect(painter.solidRegression, isFalse);
+      expect(painter.windowBars, 110);
+      expect(painter.solidRegression, isTrue);
     });
 
     testWidgets('VW source without VW series is not treated as the tape',
@@ -468,13 +464,13 @@ class _FakeCompositeApi implements CompositeIndexApi {
     String timeframe = '4h',
     int limit = compositeChartLimit,
   }) async =>
-      data;
+      _compositeForLimit(data, limit);
 }
 
 class _RecordingCompositeApi implements CompositeIndexApi {
   _RecordingCompositeApi(this.data);
   final CompositeIndexData data;
-  int? lastLimit;
+  final limits = <int>[];
   int fetchCount = 0;
 
   @override
@@ -483,9 +479,35 @@ class _RecordingCompositeApi implements CompositeIndexApi {
     int limit = compositeChartLimit,
   }) async {
     fetchCount++;
-    lastLimit = limit;
-    return data;
+    limits.add(limit);
+    return _compositeForLimit(data, limit);
   }
+}
+
+/// Mimics backend: shorter limit = last N closes rebased to 100 at first.
+CompositeIndexData _compositeForLimit(CompositeIndexData full, int limit) {
+  final n = full.points.length < limit ? full.points.length : limit;
+  if (n == full.points.length) return full;
+  final start = full.points.length - n;
+  List<IndexPoint> rebase(List<IndexPoint> pts) {
+    final slice = pts.sublist(start);
+    if (slice.isEmpty) return slice;
+    final base = slice.first.value;
+    if (base == 0) return List<IndexPoint>.from(slice);
+    return [
+      for (final p in slice)
+        IndexPoint(timestamp: p.timestamp, value: 100.0 * p.value / base),
+    ];
+  }
+
+  return CompositeIndexData(
+    timeframe: full.timeframe,
+    symbolCount: full.symbolCount,
+    points: rebase(full.points),
+    volumeWeightedPoints: full.volumeWeightedPoints.isEmpty
+        ? const []
+        : rebase(full.volumeWeightedPoints),
+  );
 }
 
 class _FakeRegimeApi implements RegimeApi {
