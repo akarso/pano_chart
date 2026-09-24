@@ -88,6 +88,30 @@ func TestCompositeIndex_VolumeWeightedPrefersHeavierSymbol(t *testing.T) {
 	}
 }
 
+func TestScoreMarketTape_ShortSeriesRejected(t *testing.T) {
+	sym := domain.NewSymbolUnsafe("COMPOSITE")
+	tf, _ := domain.NewTimeframe("15m")
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	// 10 bars is enough to look directional but too short for Wilder ATR(14).
+	candles := make([]domain.Candle, 10)
+	for i := range candles {
+		v := 100 + float64(i)
+		ts := base.Add(time.Duration(i) * 15 * time.Minute)
+		candles[i] = domain.NewCandleUnsafe(sym, tf, ts, v, v+0.05, v-0.05, v, 1000)
+	}
+	series, err := domain.NewCandleSeries(sym, tf, candles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tape := appmarket.ScoreMarketTape(series, "15m", "composite_median")
+	if tape.TrendScore != 0 || tape.Confidence != 0 {
+		t.Fatalf("short series must not score: %+v", tape)
+	}
+	if tape.State != mkt.StateSideways {
+		t.Fatalf("state=%s", tape.State)
+	}
+}
+
 func TestScoreMarketTape_RisingSeriesIsTrendBiased(t *testing.T) {
 	sym := domain.NewSymbolUnsafe("COMPOSITE")
 	tf, _ := domain.NewTimeframe("15m")

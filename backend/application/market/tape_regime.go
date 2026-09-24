@@ -11,6 +11,11 @@ const (
 	tapeTrendGate = 0.5
 	// crashTailBars is the lookback for the adverse-move penalty.
 	crashTailBars = 8
+	// tapeATRPeriod is the Wilder ATR window used by TapeTrend / tape health.
+	tapeATRPeriod = 14
+	// tapeMinBars is TrueATR(period) needs period+1 candles; shorter series
+	// cannot produce a usable Mag and must not be scored as a composite tape.
+	tapeMinBars = tapeATRPeriod + 1
 )
 
 // TapeRegime is the market regime derived by scoring a merged composite
@@ -39,13 +44,13 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 		Confidence: 0,
 		WindowBars: series.Len(),
 	}
-	if series.Len() < 2 {
+	if series.Len() < tapeMinBars {
 		return empty
 	}
 
 	closes := closesFromSeries(series)
 	candles := series.All()
-	atr14 := scoring.TrueATR(candles, 14)
+	atr14 := scoring.TrueATR(candles, tapeATRPeriod)
 	trendScore, trendBias := scoring.TapeTrend(closes, atr14)
 
 	sidewaysCalc := &scoring.SidewaysV5ScoreCalculator{
@@ -97,9 +102,9 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 	return tape
 }
 
-// classifyTape turns raw calculator scores into a TapeRegime. Exported for
-// tests that need coexistence / weak-grind fixtures without fighting the
-// real Sideways/Compression calculators.
+// classifyTape turns raw calculator scores into a TapeRegime.
+// White-box tests in this package call it directly for coexistence /
+// weak-grind fixtures without fighting the real calculators.
 func classifyTape(
 	trendScore float64,
 	trendBias string,
@@ -109,7 +114,10 @@ func classifyTape(
 	trend := trendScore
 	total := trend + sideways + compression + expansion
 	var structure mkt.Breadth
-	if total < 0.05 {
+	// Structure is always the measured mix. Only a true zero total has no
+	// measurement to normalise — never invent sideways weight for a tiny
+	// but positive sum (sideways may have measured 0).
+	if total <= 0 {
 		structure = mkt.Breadth{Sideways: 1}
 	} else {
 		structure = mkt.Breadth{

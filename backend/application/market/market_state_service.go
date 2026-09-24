@@ -315,7 +315,7 @@ func (s *MarketStateService) scoreCompositeTape(ctx context.Context, timeframe s
 	default:
 		return TapeRegime{}, false
 	}
-	if err != nil || tape.PreferredSeries().Len() < 2 {
+	if err != nil || tape.PreferredSeries().Len() < tapeMinBars {
 		return TapeRegime{}, false
 	}
 	return ScoreMarketTape(tape.PreferredSeries(), timeframe, tape.PreferredSource), true

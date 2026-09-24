@@ -1,10 +1,26 @@
 package market
 
 import (
+	"math"
 	"testing"
 
 	mkt "pano_chart/backend/domain/market"
 )
+
+func TestClassifyTape_TinyPositiveTotalNormalizes(t *testing.T) {
+	// A positive but tiny total must not invent sideways weight when the
+	// sideways calculator measured zero.
+	tape := classifyTape(0.04, "up", 0, 0, 0, 0, 0)
+	if tape.Structure.Sideways != 0 {
+		t.Fatalf("Structure.Sideways=%.4f want 0 (measured)", tape.Structure.Sideways)
+	}
+	if math.Abs(tape.Structure.Trend-1) > 1e-9 {
+		t.Fatalf("Structure.Trend=%.4f want 1", tape.Structure.Trend)
+	}
+	if tape.State == mkt.StateTrend {
+		t.Fatal("weak TapeTrend must not become TREND via mix share")
+	}
+}
 
 func TestClassifyTape_WeakTapeTrendNotPromoted(t *testing.T) {
 	// Weak TapeTrend with other raw scores ≈ 0: mix share would be ~100% trend,
