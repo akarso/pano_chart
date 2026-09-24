@@ -1,4 +1,5 @@
 import 'data_quality.dart';
+import 'participation_counts.dart';
 
 /// Data model for the market regime API response.
 class RegimeData {
@@ -14,6 +15,11 @@ class RegimeData {
   final String dataQuality;
   /// How the headline regime was chosen — e.g. composite_volume_weighted.
   final String regimeSource;
+  /// Candles scored for the headline (0 on participation fallback).
+  final int windowBars;
+  /// Raw composite TapeTrend (0 on participation fallback).
+  final double trendScore;
+  final ParticipationCounts participation;
 
   const RegimeData({
     required this.timeframe,
@@ -27,6 +33,9 @@ class RegimeData {
     this.label = '',
     this.dataQuality = 'ok',
     this.regimeSource = '',
+    this.windowBars = 0,
+    this.trendScore = 0.0,
+    this.participation = ParticipationCounts.empty,
   });
 
   /// Whether this reading reflects a real market read, as opposed to a
@@ -49,6 +58,9 @@ class RegimeData {
       label: json['label'] as String? ?? '',
       dataQuality: json['dataQuality'] as String? ?? 'ok',
       regimeSource: json['regimeSource'] as String? ?? '',
+      windowBars: (json['windowBars'] as num?)?.toInt() ?? 0,
+      trendScore: (json['trendScore'] as num?)?.toDouble() ?? 0.0,
+      participation: ParticipationCounts.fromJson(json['participation']),
     );
   }
 }

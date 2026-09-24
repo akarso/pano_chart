@@ -11,6 +11,7 @@ import 'package:pano_chart_frontend/features/market_state/http_market_state_api.
 import 'package:pano_chart_frontend/features/market_state/http_composite_index_api.dart';
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/composite_index_data.dart';
+import 'package:pano_chart_frontend/features/market_state/participation_counts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -55,6 +56,73 @@ void main() {
       expect(data.metrics.compressionBreadth, 0.34);
       expect(data.metrics.volatilityExpansion, 0.82);
       expect(data.metrics.dispersion, 0.21);
+      expect(data.windowBars, 0);
+      expect(data.trendScore, 0.0);
+      expect(data.participation.hasData, isFalse);
+    });
+
+    test('fromJson parses windowBars, trendScore, participation', () {
+      final json = {
+        'timeframe': '4h',
+        'regime': 'trend',
+        'prevalence': 0.72,
+        'bias': 'up',
+        'regimeSource': 'composite_median',
+        'windowBars': 48,
+        'trendScore': 0.72,
+        'participation': {
+          'up': 62,
+          'down': 8,
+          'ranging': 30,
+          'total': 100,
+        },
+        'scores': {
+          'expansion': 0.05,
+          'compression': 0.08,
+          'trend': 0.72,
+          'sideways': 0.15,
+        },
+        'metrics': {
+          'trendBreadth': 0.5,
+          'sidewaysBreadth': 0.2,
+          'expansionBreadth': 0.1,
+          'compressionBreadth': 0.2,
+          'volatilityExpansion': 1.0,
+          'dispersion': 0.03,
+        },
+      };
+
+      final data = RegimeData.fromJson(json);
+      expect(data.windowBars, 48);
+      expect(data.trendScore, 0.72);
+      expect(data.participation.up, 62);
+      expect(data.participation.total, 100);
+    });
+
+    test('fromJson tolerates non-map participation', () {
+      final json = {
+        'timeframe': '4h',
+        'regime': 'trend',
+        'prevalence': 0.72,
+        'scores': {
+          'expansion': 0.05,
+          'compression': 0.08,
+          'trend': 0.72,
+          'sideways': 0.15,
+        },
+        'metrics': {
+          'trendBreadth': 0.5,
+          'sidewaysBreadth': 0.2,
+          'expansionBreadth': 0.1,
+          'compressionBreadth': 0.2,
+          'volatilityExpansion': 1.0,
+          'dispersion': 0.03,
+        },
+        'participation': 'bogus',
+      };
+
+      final data = RegimeData.fromJson(json);
+      expect(data.participation.hasData, isFalse);
     });
 
     test('fromJson handles integer values', () {
@@ -333,15 +401,15 @@ void main() {
       // legitimate (if empty) "Sideways" reading.
       expect(find.text('SIDEWAYS'), findsNothing);
       expect(find.text('0% tape confidence  •  4h'), findsNothing);
-      // Nor the metrics/breadth cards, which would otherwise render the
+      // Nor the metrics/participation cards, which would otherwise render the
       // unavailable response's placeholder values as if they were real
-      // volatility/dispersion/breadth measurements (PR-074 CR Issue 1).
+      // volatility/dispersion measurements (PR-074 CR Issue 1).
       expect(find.text('Market Metrics'), findsNothing);
-      expect(find.text('Token Participation'), findsNothing);
+      expect(find.text('Market participation'), findsNothing);
     });
 
     testWidgets(
-        'headline and breadth card both fall back to healthy state data '
+        'headline and participation card both fall back to healthy state data '
         'when only regime is unavailable', (tester) async {
       final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
@@ -351,6 +419,9 @@ void main() {
           sideways: 0.1, compression: 0.1, expansion: 0.1, trend: 0.6,
         ),
         symbolCount: 120,
+        participation: ParticipationCounts(
+          up: 72, down: 12, ranging: 36, total: 120,
+        ),
       ));
       final compositeApi = _FakeCompositeApi(const CompositeIndexData(
         timeframe: '4h',
@@ -386,12 +457,12 @@ void main() {
 
       // State's own data is fine — the headline must show state's real
       // reading, not a banner (PR-074 CR follow-up: showing "Data
-      // unavailable" while the breadth card right below it renders real
+      // unavailable" while the participation card right below it renders real
       // numbers from a healthy state response was self-contradictory).
       expect(find.text('Data unavailable'), findsNothing);
       expect(find.text('TREND'), findsOneWidget);
-      // And the breadth card still shows its real numbers.
-      expect(find.text('Token Participation'), findsOneWidget);
+      // And the participation card still shows its real numbers.
+      expect(find.text('Market participation'), findsOneWidget);
     });
 
     testWidgets('shows state card as fallback without regimeApi',
@@ -515,7 +586,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
   _FakeCompositeApi(this.data);
 
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 200}) async => data;
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = tapeMetricsWindow}) async => data;
 }
 
 class _FakeRegimeApi implements RegimeApi {
@@ -535,7 +606,7 @@ class _NeverCompleteStateApi implements MarketStateApi {
 
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 200}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = tapeMetricsWindow}) {
     return Completer<CompositeIndexData>().future;
   }
 }

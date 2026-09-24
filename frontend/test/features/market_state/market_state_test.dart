@@ -31,6 +31,38 @@ void main() {
       expect(data.breadth.compression, 0.22);
       expect(data.breadth.trend, 0.16);
       expect(data.breadth.expansion, 0.08);
+      expect(data.windowBars, 0);
+      expect(data.participation.hasData, isFalse);
+    });
+
+    test('fromJson parses windowBars, trendScore, participation', () {
+      final json = {
+        'timeframe': '4h',
+        'state': 'trend',
+        'confidence': 0.72,
+        'regimeSource': 'composite_volume_weighted',
+        'windowBars': 48,
+        'trendScore': 0.72,
+        'participation': {
+          'up': 62,
+          'down': 8,
+          'ranging': 30,
+          'total': 100,
+        },
+        'breadth': {
+          'sideways': 0.1,
+          'compression': 0.1,
+          'trend': 0.7,
+          'expansion': 0.1,
+        },
+        'symbolCount': 150,
+      };
+
+      final data = MarketStateData.fromJson(json);
+      expect(data.windowBars, 48);
+      expect(data.trendScore, 0.72);
+      expect(data.participation.up, 62);
+      expect(data.confidenceLabel, 'tape confidence');
     });
 
     test('fromJson handles integer confidence', () {
