@@ -154,7 +154,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
-          limit: tapeMetricsWindow,
+          limit: compositeChartLimit,
         ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
@@ -204,7 +204,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
-          limit: tapeMetricsWindow,
+          limit: compositeChartLimit,
         ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
@@ -526,6 +526,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               data.regimeSource,
               data.windowBars,
               _chartPointCount(),
+              timeframe: data.timeframe,
               matchesTape: _displayedSeriesMatchesTape(),
             ),
             style: const TextStyle(color: Colors.white54, fontSize: 12),
@@ -544,6 +545,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return pts.length;
   }
 
+  /// Whether the displayed series length matches the scored tape window so
+  /// dimming/OLS describe the same first-close rebase the backend scored.
+  bool _chartAlignedWithTape(int chartLen, int windowBars) {
+    if (!_displayedSeriesMatchesTape() || windowBars <= 0) return false;
+    // Equal: chart is the tape. Shorter: partial history, still same rebase.
+    // Longer: last N of a longer rebase ≠ the N-bar tape — context only.
+    return chartLen <= windowBars;
+  }
+
   /// Caption for the scored window. Uses min(windowBars, chart length) and a
   /// different sentence when the chart is shorter than the tape. Must not
   /// claim the chart is scored when the displayed series is not the tape.
@@ -551,6 +561,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     String regimeSource,
     int windowBars,
     int chartLen, {
+    required String timeframe,
     required bool matchesTape,
   }) {
     if (!isKnownCompositeSource(regimeSource)) {
@@ -565,16 +576,20 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       return 'From merged market tape (same structure as one chart)';
     }
     if (chartLen <= 0) {
-      return 'Scored on $windowBars bars';
+      return 'Scored on $windowBars bars • $timeframe';
+    }
+    if (chartLen > windowBars) {
+      return 'Headline scored on a $windowBars-bar tape · '
+          'chart shows $chartLen-bar context • $timeframe';
     }
     final shown = math.min(windowBars, chartLen);
     if (windowBars > chartLen) {
-      return 'Scored on $windowBars bars; chart shows $chartLen';
+      return 'Scored on $windowBars bars; chart shows $chartLen • $timeframe';
     }
     if (windowBars == chartLen) {
-      return 'Scored on these $shown bars';
+      return 'Scored on these $shown bars • $timeframe';
     }
-    return 'Scored on the last $shown bars shown';
+    return 'Scored on the last $shown bars shown • $timeframe';
   }
 
   Widget _regimeScoreBar(String label, double value, Color color) {
@@ -1038,6 +1053,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               data.regimeSource,
               data.windowBars,
               _chartPointCount(),
+              timeframe: data.timeframe,
               matchesTape: _displayedSeriesMatchesTape(),
             ),
             style: const TextStyle(color: Colors.white54, fontSize: 12),
@@ -1050,34 +1066,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Composite Index Chart Card ----------
 
   Widget _buildCompositeCard(CompositeIndexData data) {
-    final src = _regimeSource();
-    final isCompositeTape = isKnownCompositeSource(src);
-    final matchesTape = _displayedSeriesMatchesTape();
-    final chartPoints = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? data.volumeWeightedPoints
-        : data.points;
-    final hasPoints = chartPoints.isNotEmpty;
-    final scoredWin = matchesTape ? _scoredWindowBars() : 0;
-    final scoredStart = scoredWindowStart(chartPoints.length, scoredWin);
-    final change = hasPoints && chartPoints.length > 1
-        ? chartPoints.last.value - chartPoints[scoredStart].value
-        : 0.0;
-    final changeStr = change >= 0
-        ? '+${change.toStringAsFixed(2)}'
-        : change.toStringAsFixed(2);
-    final changeColor = change >= 0 ? Colors.greenAccent : Colors.redAccent;
-    final seriesLabel = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? 'Volume weighted'
-        : 'equal weight (median)';
-    final showRegression = matchesTape && scoredWin >= 2;
-    final changeScope = isCompositeTape && !matchesTape
-        ? 'series change'
-        : (matchesTape &&
-                scoredWin > 0 &&
-                scoredWin < chartPoints.length
-            ? 'scored-window change'
-            : 'window change');
-
+    final view = _compositeChartView(data);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1087,88 +1076,27 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Market Composite Index',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '$changeStr%',
-                    style: TextStyle(color: changeColor, fontSize: 14),
-                  ),
-                  Text(
-                    changeScope,
-                    style: const TextStyle(color: Colors.white38, fontSize: 10),
-                  ),
-                ],
-              ),
-            ],
-          ),
+          _buildCompositeHeader(view),
           const SizedBox(height: 4),
           Text(
-            '${data.symbolCount} symbols  •  $seriesLabel  •  base 100${_timeRangeLabel(chartPoints)}',
+            '${data.symbolCount} symbols  •  ${view.seriesLabel}  •  base 100${_timeRangeLabel(view.chartPoints)}',
             style: const TextStyle(color: Colors.grey, fontSize: 11),
           ),
           if (data.hasVolumeWeighted) ...[
             const SizedBox(height: 8),
-            Row(
-              children: [
-                _compositeSeriesChip(
-                  label: 'Volume weighted',
-                  selected: _useVolumeWeighted,
-                  onTap: () => setState(() => _useVolumeWeighted = true),
-                ),
-                const SizedBox(width: 8),
-                _compositeSeriesChip(
-                  label: 'Median',
-                  selected: !_useVolumeWeighted,
-                  onTap: () => setState(() => _useVolumeWeighted = false),
-                ),
-              ],
+            _buildCompositeSeriesChips(
+              showMismatch: view.isCompositeTape && !view.matchesTape,
             ),
-            if (isCompositeTape && !matchesTape)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  'Showing a different series than the headline tape — '
-                  'regression hidden',
-                  style: TextStyle(color: Colors.white38, fontSize: 10),
-                ),
-              ),
           ],
           const SizedBox(height: 12),
           SizedBox(
             height: 200,
-            child: hasPoints
+            child: view.hasPoints
                 ? Column(
                     children: [
-                      Expanded(
-                        child: CustomPaint(
-                          key: const Key('mp-composite-paint'),
-                          size: Size.infinite,
-                          painter: CompositeChartPainter(
-                            points: chartPoints,
-                            lineColor: changeColor,
-                            regressionColor: showRegression
-                                ? _headlineChartColor()
-                                : Colors.transparent,
-                            windowBars: showRegression ? scoredWin : 0,
-                            solidRegression:
-                                showRegression && _isTrendHeadline(),
-                          ),
-                        ),
-                      ),
+                      Expanded(child: _buildCompositePaint(view)),
                       const SizedBox(height: 4),
-                      _buildTimeLabels(chartPoints),
+                      _buildTimeLabels(view.chartPoints),
                     ],
                   )
                 : const Center(
@@ -1179,6 +1107,133 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  _CompositeChartView _compositeChartView(CompositeIndexData data) {
+    final src = _regimeSource();
+    final isCompositeTape = isKnownCompositeSource(src);
+    final matchesTape = _displayedSeriesMatchesTape();
+    final chartPoints = (_useVolumeWeighted && data.hasVolumeWeighted)
+        ? data.volumeWeightedPoints
+        : data.points;
+    final windowBars = _scoredWindowBars();
+    final aligned = _chartAlignedWithTape(chartPoints.length, windowBars);
+    // Scored dimming/OLS only when the chart rebase matches the tape window.
+    final scoredWin = aligned ? math.min(windowBars, chartPoints.length) : 0;
+    final scoredStart = scoredWindowStart(chartPoints.length, scoredWin);
+    final change = _compositePercentChange(chartPoints, scoredStart);
+    final changeScope = isCompositeTape && !matchesTape
+        ? 'series change'
+        : (aligned && scoredWin > 0 && scoredWin < chartPoints.length
+            ? 'scored-window change'
+            : (matchesTape && chartPoints.length > windowBars && windowBars > 0
+                ? 'context change'
+                : 'window change'));
+    return _CompositeChartView(
+      chartPoints: chartPoints,
+      hasPoints: chartPoints.isNotEmpty,
+      isCompositeTape: isCompositeTape,
+      matchesTape: matchesTape,
+      scoredWin: scoredWin,
+      change: change,
+      changeScope: changeScope,
+      seriesLabel: (_useVolumeWeighted && data.hasVolumeWeighted)
+          ? 'Volume weighted'
+          : 'equal weight (median)',
+      showRegression: aligned && scoredWin >= 2,
+    );
+  }
+
+  /// Percent change from [scoredStart] to the last point. Zero when there are
+  /// fewer than two points or the start value is zero.
+  double _compositePercentChange(List<IndexPoint> chartPoints, int scoredStart) {
+    if (chartPoints.length <= 1) return 0.0;
+    final start = chartPoints[scoredStart].value;
+    if (start == 0.0) return 0.0;
+    return (chartPoints.last.value / start - 1.0) * 100.0;
+  }
+
+  Widget _buildCompositeHeader(_CompositeChartView view) {
+    final changeStr = view.change >= 0
+        ? '+${view.change.toStringAsFixed(2)}'
+        : view.change.toStringAsFixed(2);
+    final changeColor =
+        view.change >= 0 ? Colors.greenAccent : Colors.redAccent;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        const Text(
+          'Market Composite Index',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              '$changeStr%',
+              style: TextStyle(color: changeColor, fontSize: 14),
+            ),
+            Text(
+              view.changeScope,
+              style: const TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompositeSeriesChips({required bool showMismatch}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _compositeSeriesChip(
+              label: 'Volume weighted',
+              selected: _useVolumeWeighted,
+              onTap: () => setState(() => _useVolumeWeighted = true),
+            ),
+            const SizedBox(width: 8),
+            _compositeSeriesChip(
+              label: 'Median',
+              selected: !_useVolumeWeighted,
+              onTap: () => setState(() => _useVolumeWeighted = false),
+            ),
+          ],
+        ),
+        if (showMismatch)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'Showing a different series than the headline tape — '
+              'regression hidden',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCompositePaint(_CompositeChartView view) {
+    final changeColor =
+        view.change >= 0 ? Colors.greenAccent : Colors.redAccent;
+    return CustomPaint(
+      key: const Key('mp-composite-paint'),
+      size: Size.infinite,
+      painter: CompositeChartPainter(
+        points: view.chartPoints,
+        lineColor: changeColor,
+        regressionColor:
+            view.showRegression ? _headlineChartColor() : Colors.transparent,
+        windowBars: view.showRegression ? view.scoredWin : 0,
+        solidRegression: view.showRegression && _isTrendHeadline(),
       ),
     );
   }
@@ -1670,6 +1725,31 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
     return regime.toUpperCase();
   }
+}
+
+/// View-model for the composite chart card (keeps [_buildCompositeCard] thin).
+class _CompositeChartView {
+  final List<IndexPoint> chartPoints;
+  final bool hasPoints;
+  final bool isCompositeTape;
+  final bool matchesTape;
+  final int scoredWin;
+  final double change;
+  final String changeScope;
+  final String seriesLabel;
+  final bool showRegression;
+
+  const _CompositeChartView({
+    required this.chartPoints,
+    required this.hasPoints,
+    required this.isCompositeTape,
+    required this.matchesTape,
+    required this.scoredWin,
+    required this.change,
+    required this.changeScope,
+    required this.seriesLabel,
+    required this.showRegression,
+  });
 }
 
 /// Shown instead of the regime/state card when DataQuality is

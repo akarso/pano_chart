@@ -331,7 +331,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
 
   @override
   Future<CompositeIndexData> fetch(
-      {String timeframe = '4h', int limit = tapeMetricsWindow}) async =>
+      {String timeframe = '4h', int limit = compositeChartLimit}) async =>
       data;
 }
 

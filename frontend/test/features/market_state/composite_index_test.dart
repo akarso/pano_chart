@@ -124,7 +124,7 @@ void main() {
       await api.fetch();
       expect(
         capturedUri.toString(),
-        'http://localhost:8080/api/market/composite?timeframe=4h&limit=110',
+        'http://localhost:8080/api/market/composite?timeframe=4h&limit=200',
       );
     });
 
@@ -334,7 +334,7 @@ class _NeverCompleteStateApi implements MarketStateApi {
 
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = tapeMetricsWindow}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) {
     return Completer<CompositeIndexData>().future;
   }
 }
@@ -348,7 +348,7 @@ class _ErrorStateApi implements MarketStateApi {
 
 class _ErrorCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = tapeMetricsWindow}) async {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async {
     throw Exception('network error');
   }
 }
@@ -366,5 +366,5 @@ class _FakeCompositeApi implements CompositeIndexApi {
   _FakeCompositeApi(this.data);
 
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = tapeMetricsWindow}) async => data;
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async => data;
 }

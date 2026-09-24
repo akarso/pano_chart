@@ -17,7 +17,7 @@ void main() {
   });
 
   group('MarketPulseScreen PR-116', () {
-    testWidgets('fetches composite with tapeMetricsWindow limit', (tester) async {
+    testWidgets('fetches composite with compositeChartLimit', (tester) async {
       final compositeApi = _RecordingCompositeApi(_baseComposite(n: 110));
       await tester.pumpWidget(MaterialApp(
         home: MarketPulseScreen(
@@ -28,8 +28,8 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      expect(compositeApi.lastLimit, tapeMetricsWindow);
-      expect(compositeApi.lastLimit, 110);
+      expect(compositeApi.lastLimit, compositeChartLimit);
+      expect(compositeApi.lastLimit, 200);
     });
 
     testWidgets('card order: headline above composite above participation',
@@ -73,7 +73,7 @@ void main() {
       expect(find.byKey(const Key('mp-structure-bar-Compression')), findsNothing);
       expect(find.text('Compression'), findsNothing);
       expect(find.text('Expansion'), findsNothing);
-      expect(find.text('Scored on these 110 bars'), findsOneWidget);
+      expect(find.text('Scored on these 110 bars • 4h'), findsOneWidget);
       expect(find.text('Avg trend mix'), findsOneWidget);
     });
 
@@ -85,8 +85,33 @@ void main() {
         regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 48)),
       ));
 
-      expect(find.text('Scored on 48 bars; chart shows 3'), findsOneWidget);
+      expect(find.text('Scored on 48 bars; chart shows 3 • 4h'), findsOneWidget);
       expect(find.textContaining('last 48 bars shown'), findsNothing);
+    });
+
+    testWidgets('longer chart is context only — no scored dimming claim',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 200)),
+        regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+      ));
+
+      expect(
+        find.text(
+          'Headline scored on a 110-bar tape · '
+          'chart shows 200-bar context • 4h',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Scored on these'), findsNothing);
+      expect(find.text('context change'), findsOneWidget);
+      final paint = tester.widget<CustomPaint>(
+        find.byKey(const Key('mp-composite-paint')),
+      );
+      final painter = paint.painter! as CompositeChartPainter;
+      expect(painter.windowBars, 0);
+      expect(painter.solidRegression, isFalse);
     });
 
     testWidgets('VW source without VW series is not treated as the tape',
@@ -124,7 +149,7 @@ void main() {
         regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
       ));
 
-      expect(find.text('Scored on these 110 bars'), findsOneWidget);
+      expect(find.text('Scored on these 110 bars • 4h'), findsOneWidget);
 
       await tester.tap(find.text('Median'));
       await tester.pumpAndSettle();
@@ -155,7 +180,7 @@ void main() {
         regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
       ));
 
-      expect(find.text('Scored on these 110 bars'), findsOneWidget);
+      expect(find.text('Scored on these 110 bars • 4h'), findsOneWidget);
       final fetchesAfterLoad = compositeApi.fetchCount;
 
       await tester.tap(find.text('Median'));
@@ -441,7 +466,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = tapeMetricsWindow,
+    int limit = compositeChartLimit,
   }) async =>
       data;
 }
@@ -455,7 +480,7 @@ class _RecordingCompositeApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = tapeMetricsWindow,
+    int limit = compositeChartLimit,
   }) async {
     fetchCount++;
     lastLimit = limit;

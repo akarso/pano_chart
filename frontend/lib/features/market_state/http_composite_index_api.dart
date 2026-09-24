@@ -3,9 +3,11 @@ import 'package:http/http.dart' as http;
 import 'composite_index_data.dart';
 
 /// Candle window used by backend `CalculateTape` (`candleMetricsWindow`).
-/// Market Pulse must fetch the composite with this limit so the rebase
-/// starts on the same first close as the scored tape.
 const tapeMetricsWindow = 110;
+
+/// Composite chart fetch limit (ROADMAP historical context). Longer than
+/// [tapeMetricsWindow]; the last N of a longer rebase is not the scored tape.
+const compositeChartLimit = 200;
 
 /// Known composite `regimeSource` values that pair with a chart series.
 bool isKnownCompositeSource(String src) =>
@@ -25,7 +27,7 @@ class HttpCompositeIndexApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = tapeMetricsWindow,
+    int limit = compositeChartLimit,
   }) async {
     final uri = Uri.parse(
       '$baseUrl/api/market/composite?timeframe=$timeframe&limit=$limit',

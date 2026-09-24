@@ -242,8 +242,9 @@ class _RecordingCanvas implements Canvas {
   final log = <String>[];
 
   String _tag(Paint paint) {
-    final c = paint.color;
-    return 'a=${c.alpha}:0x${c.value.toRadixString(16).padLeft(8, '0').toUpperCase()}';
+    final argb = paint.color.toARGB32();
+    final alpha = (argb >> 24) & 0xff;
+    return 'a=$alpha:0x${argb.toRadixString(16).padLeft(8, '0').toUpperCase()}';
   }
 
   @override

@@ -348,7 +348,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
 
   @override
   Future<CompositeIndexData> fetch(
-      {String timeframe = '4h', int limit = tapeMetricsWindow}) async =>
+      {String timeframe = '4h', int limit = compositeChartLimit}) async =>
       data;
 }
 
@@ -378,7 +378,7 @@ class _NeverCompleteStateApi implements MarketStateApi {
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch(
-      {String timeframe = '4h', int limit = tapeMetricsWindow}) {
+      {String timeframe = '4h', int limit = compositeChartLimit}) {
     return Completer<CompositeIndexData>().future;
   }
 }
