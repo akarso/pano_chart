@@ -6,13 +6,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/app_lifecycle_manager.dart';
 import '../../core/auto_refresh_timer.dart';
 import '../../core/polling_config.dart';
+import 'composite_chart_painter.dart';
+import 'composite_chart_presentation.dart';
 import 'composite_index_data.dart';
 import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
 import 'http_regime_history_api.dart';
 import 'http_transition_api.dart';
+import 'market_pulse_selection.dart';
 import 'market_state_data.dart';
+import 'participation_counts.dart';
 import 'regime_data.dart';
 import 'regime_history_data.dart';
 import 'transition_data.dart';
@@ -55,6 +59,8 @@ const _supportedTimeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
 class _MarketPulseScreenState extends State<MarketPulseScreen> {
   MarketStateData? _stateData;
   CompositeIndexData? _compositeData;
+  /// Same rebase as backend `CalculateTape` (`tapeMetricsWindow`).
+  CompositeIndexData? _tapeCompositeData;
   RegimeData? _regimeData;
   TransitionData? _transitionData;
   RegimeHistoryData? _regimeHistoryData;
@@ -65,6 +71,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   /// When true and volume-weighted series exists, chart that path (PR-084).
   bool _useVolumeWeighted = true;
+
+  /// Last `regimeSource` that drove `_useVolumeWeighted`. Chip taps must
+  /// survive refresh; we only re-lock when the source string itself changes.
+  String? _syncedRegimeSource;
 
   AutoRefreshTimer? _autoRefreshTimer;
   Pausable? _pausable;
@@ -141,12 +151,28 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     _autoRefreshTimer!.start();
   }
 
+  Future<CompositeIndexData?> _fetchTapeComposite() async {
+    try {
+      return await widget.compositeIndexApi.fetch(
+        timeframe: _timeframe,
+        limit: tapeMetricsWindow,
+      );
+    } catch (_) {
+      // Optional scored-window series — must not block market data.
+      return null;
+    }
+  }
+
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
     try {
+      final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
-        widget.compositeIndexApi.fetch(timeframe: _timeframe, limit: 200),
+        widget.compositeIndexApi.fetch(
+          timeframe: _timeframe,
+          limit: compositeChartLimit,
+        ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
         if (widget.transitionApi != null)
@@ -155,6 +181,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
       ];
       final results = await Future.wait(futures);
+      final tape = await tapeFuture;
       if (!mounted) return;
       int idx = 2;
       RegimeData? regime;
@@ -174,9 +201,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
+        _tapeCompositeData = tape;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
+        _syncSeriesToRegimeSourceIfChanged();
       });
     } catch (_) {
       // Silently ignore — next tick will retry.
@@ -190,9 +219,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     });
     _loadScorecards();
     try {
+      final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
-        widget.compositeIndexApi.fetch(timeframe: _timeframe, limit: 200),
+        widget.compositeIndexApi.fetch(
+          timeframe: _timeframe,
+          limit: compositeChartLimit,
+        ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
         if (widget.transitionApi != null)
@@ -201,6 +234,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
       ];
       final results = await Future.wait(futures);
+      final tape = await tapeFuture;
       if (!mounted) return;
       int idx = 2;
       RegimeData? regime;
@@ -220,10 +254,12 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
+        _tapeCompositeData = tape;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
         _loading = false;
+        _syncSeriesToRegimeSourceIfChanged();
       });
     } catch (e) {
       if (!mounted) return;
@@ -233,6 +269,21 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       });
     }
   }
+
+  /// Lock the chart series to the tape only when [regimeSource] changes.
+  /// Chip taps survive auto-refresh.
+  void _syncSeriesToRegimeSourceIfChanged() {
+    final src = _regimeSource();
+    if (src == _syncedRegimeSource) return;
+    _syncedRegimeSource = src;
+    if (src == 'composite_volume_weighted') {
+      _useVolumeWeighted = true;
+    } else if (src == 'composite_median') {
+      _useVolumeWeighted = false;
+    }
+  }
+
+  String _regimeSource() => selectRegimeSource(_regimeData, _stateData);
 
   @override
   Widget build(BuildContext context) {
@@ -320,10 +371,36 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         children: [
-          _buildHeadlineCard(),
+          KeyedSubtree(
+            key: const Key('mp-headline'),
+            child: _buildHeadlineCard(),
+          ),
           const SizedBox(height: 16),
-          if (_compositeData != null) _buildCompositeCard(_compositeData!),
-          const SizedBox(height: 16),
+          if (_compositeData != null)
+            KeyedSubtree(
+              key: const Key('mp-composite'),
+              child: _buildCompositeCard(_compositeData!),
+            ),
+          if (_compositeData != null) const SizedBox(height: 16),
+          Builder(
+            builder: (context) {
+              final participation = ParticipationCardModel.resolve(
+                regime: _regimeData,
+                state: _stateData,
+              );
+              if (participation == null) return const SizedBox.shrink();
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  KeyedSubtree(
+                    key: const Key('mp-participation'),
+                    child: _buildParticipationCard(participation),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              );
+            },
+          ),
           if (_regimeData != null && !_regimeData!.isDataUnavailable)
             _buildMetricsCard(_regimeData!),
           if (_regimeData != null && !_regimeData!.isDataUnavailable)
@@ -333,8 +410,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           if (_regimeHistoryData != null)
             _buildRegimeHistoryCard(_regimeHistoryData!),
           if (_regimeHistoryData != null) const SizedBox(height: 16),
-          _buildBreadthCard(),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
         ],
       ),
     );
@@ -410,7 +486,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                     )],
               ),
               GestureDetector(
-                onTap: _showRegimeInfo,
+                key: const Key('mp-regime-help'),
+                onTap: () => _showRegimeInfo(data),
                 child: const Padding(
                   padding: EdgeInsets.all(4),
                   child: Icon(
@@ -448,27 +525,50 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
           const SizedBox(height: 2),
           Text(
-            data.regimeSource.startsWith('composite')
-                ? 'From merged market tape (same structure as one chart)'
-                : 'From token participation (tape unavailable)',
-            style: const TextStyle(color: Colors.white24, fontSize: 10),
+            _headlineCaption(
+              regimeSource: data.regimeSource,
+              windowBars: data.windowBars,
+              timeframe: data.timeframe,
+            ),
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
-          const SizedBox(height: 16),
-          _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
-          const SizedBox(height: 6),
-          _regimeScoreBar('Sideways', data.scores.sideways, Colors.blueGrey),
-          const SizedBox(height: 6),
-          _regimeScoreBar('Compression', data.scores.compression, Colors.amber),
-          const SizedBox(height: 6),
-          _regimeScoreBar('Expansion', data.scores.expansion, Colors.redAccent),
         ],
       ),
+    );
+  }
+
+  String _headlineCaption({
+    required String regimeSource,
+    required int windowBars,
+    required String timeframe,
+  }) {
+    final view = _compositePresentation();
+    return headlineSubline(
+      regimeSource: regimeSource,
+      windowBars: windowBars,
+      chartLen: view?.chartPoints.length ?? 0,
+      timeframe: timeframe,
+      matchesTape: view?.matchesTape ?? false,
+      hasScoredEvidence: view?.hasScoredEvidence ?? false,
+    );
+  }
+
+  CompositeChartPresentation? _compositePresentation() {
+    final data = _compositeData;
+    if (data == null) return null;
+    return CompositeChartPresentation.resolve(
+      context: data,
+      tape: _tapeCompositeData,
+      regimeSource: _regimeSource(),
+      windowBars: _scoredWindowBars(),
+      useVolumeWeighted: _useVolumeWeighted,
     );
   }
 
   Widget _regimeScoreBar(String label, double value, Color color) {
     final pct = (value * 100).toStringAsFixed(0);
     return Row(
+      key: Key('mp-structure-bar-$label'),
       children: [
         SizedBox(
           width: 90,
@@ -532,13 +632,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                 onTap: () => _showInfoDialog(
                   title: 'Market Metrics',
                   body:
-                      'Participation — average per-token score mix across the '
-                      'universe (0–1 each).\n\n'
+                      'Avg mix — average per-token score mix across the '
+                      'universe (0–1 each). Not the count-based Market '
+                      'participation card.\n\n'
                       'Volatility — short-term ATR / long-term ATR ratio.\n'
                       '  • < 0.8 low  •  0.8–1.3 normal  •  > 1.3 high\n\n'
                       'Dispersion — how differently assets move from each other.\n'
                       '  • < 2% low  •  2–5% moderate  •  > 5% high\n\n'
-                      'Participation rows are not the headline. The headline '
+                      'Avg mix rows are not the headline. The headline '
                       'comes from the merged market tape.',
                 ),
                 child: const Icon(
@@ -559,25 +660,25 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           _metricRow('Dispersion', dispLabel, _dispersionColor(m.dispersion)),
           const SizedBox(height: 8),
           _metricRow(
-            'Trend participation',
+            'Avg trend mix',
             '${(m.trendBreadth * 100).toStringAsFixed(1)}%',
             Colors.tealAccent,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Sideways participation',
+            'Avg sideways mix',
             '${(m.sidewaysBreadth * 100).toStringAsFixed(1)}%',
             Colors.blueGrey,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Compression participation',
+            'Avg compression mix',
             '${(m.compressionBreadth * 100).toStringAsFixed(1)}%',
             Colors.amber,
           ),
           const SizedBox(height: 8),
           _metricRow(
-            'Expansion participation',
+            'Avg expansion mix',
             '${(m.expansionBreadth * 100).toStringAsFixed(1)}%',
             Colors.redAccent,
           ),
@@ -919,6 +1020,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
             '$pct% ${data.confidenceLabel}  •  ${data.symbolCount} symbols  •  ${data.timeframe}',
             style: const TextStyle(color: Colors.grey, fontSize: 12),
           ),
+          const SizedBox(height: 2),
+          Text(
+            _headlineCaption(
+              regimeSource: data.regimeSource,
+              windowBars: data.windowBars,
+              timeframe: data.timeframe,
+            ),
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
         ],
       ),
     );
@@ -927,21 +1037,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   // ---------- Composite Index Chart Card ----------
 
   Widget _buildCompositeCard(CompositeIndexData data) {
-    final chartPoints = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? data.volumeWeightedPoints
-        : data.points;
-    final hasPoints = chartPoints.isNotEmpty;
-    final change = hasPoints && chartPoints.length > 1
-        ? chartPoints.last.value - chartPoints.first.value
-        : 0.0;
-    final changeStr = change >= 0
-        ? '+${change.toStringAsFixed(2)}'
-        : change.toStringAsFixed(2);
-    final changeColor = change >= 0 ? Colors.greenAccent : Colors.redAccent;
-    final seriesLabel = (_useVolumeWeighted && data.hasVolumeWeighted)
-        ? 'Volume weighted'
-        : 'Equal weight (median)';
-
+    final view = _compositePresentation() ??
+        CompositeChartPresentation.resolve(
+          context: data,
+          tape: _tapeCompositeData,
+          regimeSource: _regimeSource(),
+          windowBars: _scoredWindowBars(),
+          useVolumeWeighted: _useVolumeWeighted,
+        );
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -951,63 +1054,27 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Market Composite Index',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              Text(
-                '$changeStr%',
-                style: TextStyle(color: changeColor, fontSize: 14),
-              ),
-            ],
-          ),
+          _buildCompositeHeader(view),
           const SizedBox(height: 4),
           Text(
-            '${data.symbolCount} symbols  •  $seriesLabel  •  base 100${_timeRangeLabel(chartPoints)}',
+            '${data.symbolCount} symbols  •  ${view.seriesLabel}  •  base 100${_timeRangeLabel(view.chartPoints)}',
             style: const TextStyle(color: Colors.grey, fontSize: 11),
           ),
           if (data.hasVolumeWeighted) ...[
             const SizedBox(height: 8),
-            Row(
-              children: [
-                _compositeSeriesChip(
-                  label: 'Volume weighted',
-                  selected: _useVolumeWeighted,
-                  onTap: () => setState(() => _useVolumeWeighted = true),
-                ),
-                const SizedBox(width: 8),
-                _compositeSeriesChip(
-                  label: 'Median',
-                  selected: !_useVolumeWeighted,
-                  onTap: () => setState(() => _useVolumeWeighted = false),
-                ),
-              ],
+            _buildCompositeSeriesChips(
+              showMismatch: view.isCompositeTape && !view.matchesTape,
             ),
           ],
           const SizedBox(height: 12),
           SizedBox(
             height: 200,
-            child: hasPoints
+            child: view.hasPoints
                 ? Column(
                     children: [
-                      Expanded(
-                        child: CustomPaint(
-                          size: Size.infinite,
-                          painter: _CompositeChartPainter(
-                            points: chartPoints,
-                            lineColor: changeColor,
-                          ),
-                        ),
-                      ),
+                      Expanded(child: _buildCompositePaint(view)),
                       const SizedBox(height: 4),
-                      _buildTimeLabels(chartPoints),
+                      _buildTimeLabels(view.chartPoints),
                     ],
                   )
                 : const Center(
@@ -1018,6 +1085,89 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCompositeHeader(CompositeChartPresentation view) {
+    final changeStr = view.change >= 0
+        ? '+${view.change.toStringAsFixed(2)}'
+        : view.change.toStringAsFixed(2);
+    final changeColor =
+        view.change >= 0 ? Colors.greenAccent : Colors.redAccent;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        const Text(
+          'Market Composite Index',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              '$changeStr%',
+              style: TextStyle(color: changeColor, fontSize: 14),
+            ),
+            Text(
+              view.changeScope,
+              style: const TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompositeSeriesChips({required bool showMismatch}) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _compositeSeriesChip(
+              label: 'Volume weighted',
+              selected: _useVolumeWeighted,
+              onTap: () => setState(() => _useVolumeWeighted = true),
+            ),
+            const SizedBox(width: 8),
+            _compositeSeriesChip(
+              label: 'Median',
+              selected: !_useVolumeWeighted,
+              onTap: () => setState(() => _useVolumeWeighted = false),
+            ),
+          ],
+        ),
+        if (showMismatch)
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'Showing a different series than the headline tape — '
+              'regression hidden',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildCompositePaint(CompositeChartPresentation view) {
+    final changeColor =
+        view.change >= 0 ? Colors.greenAccent : Colors.redAccent;
+    return CustomPaint(
+      key: const Key('mp-composite-paint'),
+      size: Size.infinite,
+      painter: CompositeChartPainter(
+        points: view.chartPoints,
+        lineColor: changeColor,
+        regressionColor:
+            view.showRegression ? _headlineChartColor() : Colors.transparent,
+        windowBars: view.showRegression ? view.scoredWin : 0,
+        solidRegression: view.showRegression && _isTrendHeadline(),
       ),
     );
   }
@@ -1045,6 +1195,43 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         ),
       ),
     );
+  }
+
+  int _scoredWindowBars() {
+    if (_regimeData != null &&
+        !_regimeData!.isDataUnavailable &&
+        _regimeData!.windowBars > 0) {
+      return _regimeData!.windowBars;
+    }
+    if (_stateData != null &&
+        !_stateData!.isDataUnavailable &&
+        _stateData!.windowBars > 0) {
+      return _stateData!.windowBars;
+    }
+    return 0;
+  }
+
+  bool _isTrendHeadline() {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
+      return _regimeData!.regime == 'trend';
+    }
+    if (_stateData != null && !_stateData!.isDataUnavailable) {
+      return _stateData!.state == 'trend';
+    }
+    return false;
+  }
+
+  Color _headlineChartColor() {
+    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
+      final d = _regimeData!;
+      return d.regime == 'trend'
+          ? _trendBiasColor(d.bias)
+          : _regimeColor(d.regime);
+    }
+    if (_stateData != null && !_stateData!.isDataUnavailable) {
+      return _stateColor(_stateData!.state, _stateData!.bias);
+    }
+    return Colors.tealAccent;
   }
 
   // ---------- Participation Card ----------
@@ -1108,29 +1295,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return '  \u2022  ~${days.round()}d';
   }
 
-  Widget _buildBreadthCard() {
-    // Prefer regime metrics (same pipeline as regime card) so the numbers
-    // are consistent.  Fall back to state participation when regime is
-    // unavailable. Neither source's placeholder values (zeros, "normal"
-    // defaults) are real measurements when isDataUnavailable — see PR-074 —
-    // so skip a source entirely rather than let its outage-time zeros read
-    // as "the market has 0% participation right now."
-    double sideways, compression, expansion, trend;
-    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
-      final m = _regimeData!.metrics;
-      sideways = m.sidewaysBreadth;
-      compression = m.compressionBreadth;
-      expansion = m.expansionBreadth;
-      trend = m.trendBreadth;
-    } else if (_stateData != null && !_stateData!.isDataUnavailable) {
-      sideways = _stateData!.breadth.sideways;
-      compression = _stateData!.breadth.compression;
-      expansion = _stateData!.breadth.expansion;
-      trend = _stateData!.breadth.trend;
-    } else {
-      return const SizedBox.shrink();
-    }
-
+  Widget _buildParticipationCard(ParticipationCardModel model) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1140,84 +1305,87 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Text(
-                'Token Participation',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 4),
-              GestureDetector(
-                onTap: () => _showInfoDialog(
-                  title: 'Token Participation',
-                  body:
-                      'Participation — average per-token score mix across '
-                      'the universe (0–1 each).\n\n'
-                      'Shown here as 0–100%. This is NOT the headline regime '
-                      '— that comes from scoring the merged market tape like '
-                      'one chart.\n\n'
-                      '• Trend — tokens with clean directional structure\n'
-                      '• Sideways — range-bound structure\n'
-                      '• Compression — narrowing ranges\n'
-                      '• Expansion — breakout / volatility expansion',
-                ),
-                child: const Icon(
-                  Icons.help_outline,
-                  size: 13,
-                  color: Colors.white30,
-                ),
-              ),
-            ],
-          ),
+          _participationTitleRow(),
           const SizedBox(height: 12),
-          _breadthRow('Trend', trend, Colors.tealAccent),
-          const SizedBox(height: 6),
-          _breadthRow('Sideways', sideways, Colors.blueGrey),
-          const SizedBox(height: 6),
-          _breadthRow('Compression', compression, Colors.amber),
-          const SizedBox(height: 6),
-          _breadthRow('Expansion', expansion, Colors.redAccent),
+          _participationBar(model.counts),
+          const SizedBox(height: 8),
+          Text(
+            'Up ${model.upPct}% · Ranging ${model.rangingPct}% · '
+            'Down ${model.downPct}%',
+            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          ),
+          if (model.reading.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              model.reading,
+              style: const TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _breadthRow(String label, double value, Color color) {
-    final pct = (value * 100).toStringAsFixed(1);
+  Widget _participationTitleRow() {
     return Row(
       children: [
-        SizedBox(
-          width: 90,
-          child: Text(
-            label,
-            style: const TextStyle(fontSize: 13, color: Colors.white70),
+        const Text(
+          'Market participation',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
           ),
         ),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: value,
-              backgroundColor: Colors.white12,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-              minHeight: 8,
-            ),
+        const SizedBox(width: 4),
+        GestureDetector(
+          key: const Key('mp-participation-help'),
+          onTap: () => _showInfoDialog(
+            title: 'Market participation',
+            body:
+                'Participation — share of tokens whose own chart is '
+                'currently in an uptrend, a downtrend, or ranging. It '
+                'can differ from the headline: averaging 150 noisy '
+                'charts removes noise, so the tape can trend cleanly '
+                'while many single tokens still look range-bound — or '
+                'a few heavyweights can pull the tape while most '
+                'tokens sit still.',
           ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 44,
-          child: Text(
-            '$pct%',
-            style: const TextStyle(fontSize: 12, color: Colors.grey),
-            textAlign: TextAlign.right,
+          child: const Icon(
+            Icons.help_outline,
+            size: 13,
+            color: Colors.white30,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _participationBar(ParticipationCounts counts) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: SizedBox(
+        height: 14,
+        child: Row(
+          children: [
+            if (counts.up > 0)
+              Expanded(
+                flex: counts.up,
+                child: Container(color: Colors.tealAccent),
+              ),
+            if (counts.ranging > 0)
+              Expanded(
+                flex: counts.ranging,
+                child: Container(color: Colors.blueGrey),
+              ),
+            if (counts.down > 0)
+              Expanded(
+                flex: counts.down,
+                child: Container(color: Colors.redAccent),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1248,37 +1416,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   // ---------- Helpers ----------
 
-  void _showRegimeInfo() {
+  void _showRegimeInfo(RegimeData data) {
     final api = widget.scorecardApi;
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Regime'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Regime — dominant structure of the tape: trend / '
-              'sideways / compression / expansion / indecisive / silent.\n\n'
-              'The headline is that structure on the merged market tape.',
-            ),
-            if (api != null) ...[
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(dialogContext).pop();
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          ScorecardsScreen(api: api, timeframe: _timeframe),
-                    ),
-                  );
-                },
-                child: const Text('Reliability'),
-              ),
-            ],
-          ],
+        content: SingleChildScrollView(
+          child: _regimeInfoContent(data, dialogContext, api),
         ),
         actions: [
           TextButton(
@@ -1287,6 +1432,69 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _regimeInfoContent(
+    RegimeData data,
+    BuildContext dialogContext,
+    ScorecardApi? api,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Regime — dominant structure of the tape: trend / '
+          'sideways / compression / expansion / indecisive / silent.\n\n'
+          'The headline is that structure on the merged market tape.',
+        ),
+        const SizedBox(height: 16),
+        _regimeStructureMixSection(data),
+        if (api != null) ...[
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ScorecardsScreen(api: api, timeframe: _timeframe),
+                ),
+              );
+            },
+            child: const Text('Reliability'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _regimeStructureMixSection(RegimeData data) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Structure mix',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
+        const SizedBox(height: 6),
+        _regimeScoreBar('Sideways', data.scores.sideways, Colors.blueGrey),
+        const SizedBox(height: 6),
+        _regimeScoreBar(
+          'Compression',
+          data.scores.compression,
+          Colors.amber,
+        ),
+        const SizedBox(height: 6),
+        _regimeScoreBar(
+          'Expansion',
+          data.scores.expansion,
+          Colors.redAccent,
+        ),
+      ],
     );
   }
 
@@ -1426,76 +1634,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       }
     }
     return regime.toUpperCase();
-  }
-}
-
-// ---------- Chart Painter ----------
-
-class _CompositeChartPainter extends CustomPainter {
-  final List<IndexPoint> points;
-  final Color lineColor;
-
-  _CompositeChartPainter({required this.points, required this.lineColor});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (points.length < 2) return;
-
-    final values = points.map((p) => p.value).toList();
-    final minV = values.reduce(math.min);
-    final maxV = values.reduce(math.max);
-    final range = maxV - minV;
-    if (range == 0) return;
-
-    // Draw baseline at 100
-    final baseY = size.height - ((100 - minV) / range) * size.height;
-    final basePaint = Paint()
-      ..color = Colors.white24
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-
-    if (baseY >= 0 && baseY <= size.height) {
-      canvas.drawLine(Offset(0, baseY), Offset(size.width, baseY), basePaint);
-    }
-
-    // Draw line
-    final linePaint = Paint()
-      ..color = lineColor
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeJoin = StrokeJoin.round;
-
-    final path = Path();
-    for (var i = 0; i < points.length; i++) {
-      final x = (i / (points.length - 1)) * size.width;
-      final y = size.height - ((values[i] - minV) / range) * size.height;
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
-    }
-    canvas.drawPath(path, linePaint);
-
-    // Draw gradient fill
-    final fillPath = Path.from(path)
-      ..lineTo(size.width, size.height)
-      ..lineTo(0, size.height)
-      ..close();
-
-    final fillPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [lineColor.withAlpha(60), lineColor.withAlpha(0)],
-      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height));
-
-    canvas.drawPath(fillPath, fillPaint);
-  }
-
-  @override
-  bool shouldRepaint(covariant _CompositeChartPainter other) {
-    return other.points != points || other.lineColor != lineColor;
   }
 }
 

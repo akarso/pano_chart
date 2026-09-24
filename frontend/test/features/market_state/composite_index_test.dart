@@ -9,6 +9,7 @@ import 'package:pano_chart_frontend/features/market_state/http_composite_index_a
 import 'package:pano_chart_frontend/features/market_state/http_market_state_api.dart';
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/market_pulse_screen.dart';
+import 'package:pano_chart_frontend/features/market_state/participation_counts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -191,6 +192,12 @@ void main() {
           trend: 0.2,
         ),
         symbolCount: 100,
+        participation: const ParticipationCounts(
+          up: 20,
+          down: 15,
+          ranging: 65,
+          total: 100,
+        ),
       ));
       final compositeApi = _FakeCompositeApi(CompositeIndexData(
         timeframe: '4h',
@@ -215,10 +222,10 @@ void main() {
       // Composite card
       expect(find.text('Market Composite Index'), findsOneWidget);
       expect(find.textContaining('+1.50'), findsOneWidget);
-      // Breadth card
-      expect(find.text('Token Participation'), findsOneWidget);
-      expect(find.text('Sideways'), findsOneWidget);
-      expect(find.text('Compression'), findsOneWidget);
+      // Participation card (by count)
+      expect(find.text('Market participation'), findsOneWidget);
+      expect(find.textContaining('Up 20%'), findsOneWidget);
+      expect(find.textContaining('Ranging 65%'), findsOneWidget);
     });
 
     testWidgets('back button pops navigation', (tester) async {
@@ -304,6 +311,16 @@ void main() {
       expect(find.text('1m').last, findsOneWidget);
     });
   });
+
+  group('isKnownCompositeSource', () {
+    test('accepts only the two contract strings', () {
+      expect(isKnownCompositeSource('composite_volume_weighted'), isTrue);
+      expect(isKnownCompositeSource('composite_median'), isTrue);
+      expect(isKnownCompositeSource('composite_v3'), isFalse);
+      expect(isKnownCompositeSource('participation'), isFalse);
+      expect(isKnownCompositeSource(''), isFalse);
+    });
+  });
 }
 
 // ---- Fakes ----
@@ -317,7 +334,7 @@ class _NeverCompleteStateApi implements MarketStateApi {
 
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 200}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) {
     return Completer<CompositeIndexData>().future;
   }
 }
@@ -331,7 +348,7 @@ class _ErrorStateApi implements MarketStateApi {
 
 class _ErrorCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 200}) async {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async {
     throw Exception('network error');
   }
 }
@@ -349,5 +366,5 @@ class _FakeCompositeApi implements CompositeIndexApi {
   _FakeCompositeApi(this.data);
 
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 200}) async => data;
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async => data;
 }

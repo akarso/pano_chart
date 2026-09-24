@@ -1,4 +1,5 @@
 import 'data_quality.dart';
+import 'participation_counts.dart';
 
 /// Data model for the market state API response.
 class MarketStateData {
@@ -14,6 +15,9 @@ class MarketStateData {
   final String dataQuality;
   /// Backend regime source (`composite_*` vs `participation`).
   final String regimeSource;
+  final int windowBars;
+  final double trendScore;
+  final ParticipationCounts participation;
 
   const MarketStateData({
     required this.timeframe,
@@ -27,6 +31,9 @@ class MarketStateData {
     this.label = '',
     this.dataQuality = 'ok',
     this.regimeSource = '',
+    this.windowBars = 0,
+    this.trendScore = 0,
+    this.participation = ParticipationCounts.empty,
   });
 
   /// Whether this reading reflects a real market read, as opposed to a
@@ -60,6 +67,9 @@ class MarketStateData {
       label: json['label'] as String? ?? '',
       dataQuality: dataQuality,
       regimeSource: json['regimeSource'] as String? ?? '',
+      windowBars: (json['windowBars'] as num?)?.toInt() ?? 0,
+      trendScore: (json['trendScore'] as num?)?.toDouble() ?? 0,
+      participation: ParticipationCounts.fromJson(json['participation']),
     );
   }
 }
