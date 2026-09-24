@@ -110,6 +110,31 @@ void main() {
       expect(painter.solidRegression, isTrue);
     });
 
+    testWidgets('tape-window fetch failure still shows market data',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _TapeFailingCompositeApi(_baseComposite(n: 200)),
+        regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+      ));
+
+      expect(find.text('UPTREND'), findsOneWidget);
+      expect(find.byKey(const Key('mp-composite')), findsOneWidget);
+      expect(find.textContaining('Exception'), findsNothing);
+      expect(
+        find.text(
+          'Headline scored on a 110-bar tape · '
+          'chart shows 200-bar context • 4h',
+        ),
+        findsOneWidget,
+      );
+      final paint = tester.widget<CustomPaint>(
+        find.byKey(const Key('mp-composite-paint')),
+      );
+      final painter = paint.painter! as CompositeChartPainter;
+      expect(painter.windowBars, 0);
+    });
+
     testWidgets('VW source without VW series is not treated as the tape',
         (tester) async {
       await _pumpTall(tester, home: MarketPulseScreen(
@@ -465,6 +490,23 @@ class _FakeCompositeApi implements CompositeIndexApi {
     int limit = compositeChartLimit,
   }) async =>
       _compositeForLimit(data, limit);
+}
+
+/// Context fetch succeeds; tape-window fetch throws.
+class _TapeFailingCompositeApi implements CompositeIndexApi {
+  _TapeFailingCompositeApi(this.data);
+  final CompositeIndexData data;
+
+  @override
+  Future<CompositeIndexData> fetch({
+    String timeframe = '4h',
+    int limit = compositeChartLimit,
+  }) async {
+    if (limit == tapeMetricsWindow) {
+      throw Exception('tape window unavailable');
+    }
+    return _compositeForLimit(data, limit);
+  }
 }
 
 class _RecordingCompositeApi implements CompositeIndexApi {

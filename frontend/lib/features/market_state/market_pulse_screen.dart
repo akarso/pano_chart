@@ -14,6 +14,7 @@ import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
 import 'http_regime_history_api.dart';
 import 'http_transition_api.dart';
+import 'market_pulse_selection.dart';
 import 'market_state_data.dart';
 import 'participation_counts.dart';
 import 'regime_data.dart';
@@ -150,18 +151,27 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     _autoRefreshTimer!.start();
   }
 
+  Future<CompositeIndexData?> _fetchTapeComposite() async {
+    try {
+      return await widget.compositeIndexApi.fetch(
+        timeframe: _timeframe,
+        limit: tapeMetricsWindow,
+      );
+    } catch (_) {
+      // Optional scored-window series — must not block market data.
+      return null;
+    }
+  }
+
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
     try {
+      final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
           limit: compositeChartLimit,
-        ),
-        widget.compositeIndexApi.fetch(
-          timeframe: _timeframe,
-          limit: tapeMetricsWindow,
         ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
@@ -171,8 +181,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
       ];
       final results = await Future.wait(futures);
+      final tape = await tapeFuture;
       if (!mounted) return;
-      int idx = 3;
+      int idx = 2;
       RegimeData? regime;
       TransitionData? trans;
       RegimeHistoryData? history;
@@ -190,7 +201,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
-        _tapeCompositeData = results[2] as CompositeIndexData;
+        _tapeCompositeData = tape;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
@@ -208,15 +219,12 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     });
     _loadScorecards();
     try {
+      final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
           limit: compositeChartLimit,
-        ),
-        widget.compositeIndexApi.fetch(
-          timeframe: _timeframe,
-          limit: tapeMetricsWindow,
         ),
         if (widget.regimeApi != null)
           widget.regimeApi!.fetch(timeframe: _timeframe),
@@ -226,8 +234,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
       ];
       final results = await Future.wait(futures);
+      final tape = await tapeFuture;
       if (!mounted) return;
-      int idx = 3;
+      int idx = 2;
       RegimeData? regime;
       TransitionData? trans;
       RegimeHistoryData? history;
@@ -245,7 +254,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       setState(() {
         _stateData = results[0] as MarketStateData;
         _compositeData = results[1] as CompositeIndexData;
-        _tapeCompositeData = results[2] as CompositeIndexData;
+        _tapeCompositeData = tape;
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
@@ -274,29 +283,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  String _regimeSource() {
-    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
-      return _regimeData!.regimeSource;
-    }
-    if (_stateData != null && !_stateData!.isDataUnavailable) {
-      return _stateData!.regimeSource;
-    }
-    return '';
-  }
-
-  ParticipationCounts? _participationCounts() {
-    if (_regimeData != null &&
-        !_regimeData!.isDataUnavailable &&
-        _regimeData!.participation.hasData) {
-      return _regimeData!.participation;
-    }
-    if (_stateData != null &&
-        !_stateData!.isDataUnavailable &&
-        _stateData!.participation.hasData) {
-      return _stateData!.participation;
-    }
-    return null;
-  }
+  String _regimeSource() => selectRegimeSource(_regimeData, _stateData);
 
   @override
   Widget build(BuildContext context) {
@@ -397,7 +384,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           if (_compositeData != null) const SizedBox(height: 16),
           Builder(
             builder: (context) {
-              final participation = _participationCounts();
+              final participation = ParticipationCardModel.resolve(
+                regime: _regimeData,
+                state: _stateData,
+              );
               if (participation == null) return const SizedBox.shrink();
               return Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1305,16 +1295,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return '  \u2022  ~${days.round()}d';
   }
 
-  Widget _buildParticipationCard(ParticipationCounts counts) {
-    final (upPct, rangingPct, downPct) = participationPercents(counts);
-    final bias = _headlineBias();
-    final regime = _headlineRegime();
-    final reading = participationReading(
-      counts,
-      bias: bias,
-      regime: regime,
-    );
-
+  Widget _buildParticipationCard(ParticipationCardModel model) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -1324,73 +1305,19 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              const Text(
-                'Market participation',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(width: 4),
-              GestureDetector(
-                key: const Key('mp-participation-help'),
-                onTap: () => _showInfoDialog(
-                  title: 'Market participation',
-                  body:
-                      'Participation — share of tokens whose own chart is '
-                      'currently in an uptrend, a downtrend, or ranging. It '
-                      'can differ from the headline: averaging 150 noisy '
-                      'charts removes noise, so the tape can trend cleanly '
-                      'while many single tokens still look range-bound — or '
-                      'a few heavyweights can pull the tape while most '
-                      'tokens sit still.',
-                ),
-                child: const Icon(
-                  Icons.help_outline,
-                  size: 13,
-                  color: Colors.white30,
-                ),
-              ),
-            ],
-          ),
+          _participationTitleRow(),
           const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: SizedBox(
-              height: 14,
-              child: Row(
-                children: [
-                  if (counts.up > 0)
-                    Expanded(
-                      flex: counts.up,
-                      child: Container(color: Colors.tealAccent),
-                    ),
-                  if (counts.ranging > 0)
-                    Expanded(
-                      flex: counts.ranging,
-                      child: Container(color: Colors.blueGrey),
-                    ),
-                  if (counts.down > 0)
-                    Expanded(
-                      flex: counts.down,
-                      child: Container(color: Colors.redAccent),
-                    ),
-                ],
-              ),
-            ),
-          ),
+          _participationBar(model.counts),
           const SizedBox(height: 8),
           Text(
-            'Up $upPct% · Ranging $rangingPct% · Down $downPct%',
+            'Up ${model.upPct}% · Ranging ${model.rangingPct}% · '
+            'Down ${model.downPct}%',
             style: const TextStyle(color: Colors.white54, fontSize: 12),
           ),
-          if (reading.isNotEmpty) ...[
+          if (model.reading.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              reading,
+              model.reading,
               style: const TextStyle(color: Colors.white38, fontSize: 12),
             ),
           ],
@@ -1399,24 +1326,67 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     );
   }
 
-  String _headlineBias() {
-    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
-      return _regimeData!.bias;
-    }
-    if (_stateData != null && !_stateData!.isDataUnavailable) {
-      return _stateData!.bias;
-    }
-    return '';
+  Widget _participationTitleRow() {
+    return Row(
+      children: [
+        const Text(
+          'Market participation',
+          style: TextStyle(
+            color: Colors.white70,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 4),
+        GestureDetector(
+          key: const Key('mp-participation-help'),
+          onTap: () => _showInfoDialog(
+            title: 'Market participation',
+            body:
+                'Participation — share of tokens whose own chart is '
+                'currently in an uptrend, a downtrend, or ranging. It '
+                'can differ from the headline: averaging 150 noisy '
+                'charts removes noise, so the tape can trend cleanly '
+                'while many single tokens still look range-bound — or '
+                'a few heavyweights can pull the tape while most '
+                'tokens sit still.',
+          ),
+          child: const Icon(
+            Icons.help_outline,
+            size: 13,
+            color: Colors.white30,
+          ),
+        ),
+      ],
+    );
   }
 
-  String _headlineRegime() {
-    if (_regimeData != null && !_regimeData!.isDataUnavailable) {
-      return _regimeData!.regime;
-    }
-    if (_stateData != null && !_stateData!.isDataUnavailable) {
-      return _stateData!.state;
-    }
-    return '';
+  Widget _participationBar(ParticipationCounts counts) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(4),
+      child: SizedBox(
+        height: 14,
+        child: Row(
+          children: [
+            if (counts.up > 0)
+              Expanded(
+                flex: counts.up,
+                child: Container(color: Colors.tealAccent),
+              ),
+            if (counts.ranging > 0)
+              Expanded(
+                flex: counts.ranging,
+                child: Container(color: Colors.blueGrey),
+              ),
+            if (counts.down > 0)
+              Expanded(
+                flex: counts.down,
+                child: Container(color: Colors.redAccent),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ---------- Trend Health Helpers ----------
@@ -1453,57 +1423,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Regime'),
         content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Regime — dominant structure of the tape: trend / '
-                'sideways / compression / expansion / indecisive / silent.\n\n'
-                'The headline is that structure on the merged market tape.',
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Structure mix',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
-              const SizedBox(height: 6),
-              _regimeScoreBar(
-                'Sideways',
-                data.scores.sideways,
-                Colors.blueGrey,
-              ),
-              const SizedBox(height: 6),
-              _regimeScoreBar(
-                'Compression',
-                data.scores.compression,
-                Colors.amber,
-              ),
-              const SizedBox(height: 6),
-              _regimeScoreBar(
-                'Expansion',
-                data.scores.expansion,
-                Colors.redAccent,
-              ),
-              if (api != null) ...[
-                const SizedBox(height: 8),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(dialogContext).pop();
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            ScorecardsScreen(api: api, timeframe: _timeframe),
-                      ),
-                    );
-                  },
-                  child: const Text('Reliability'),
-                ),
-              ],
-            ],
-          ),
+          child: _regimeInfoContent(data, dialogContext, api),
         ),
         actions: [
           TextButton(
@@ -1512,6 +1432,69 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _regimeInfoContent(
+    RegimeData data,
+    BuildContext dialogContext,
+    ScorecardApi? api,
+  ) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Regime — dominant structure of the tape: trend / '
+          'sideways / compression / expansion / indecisive / silent.\n\n'
+          'The headline is that structure on the merged market tape.',
+        ),
+        const SizedBox(height: 16),
+        _regimeStructureMixSection(data),
+        if (api != null) ...[
+          const SizedBox(height: 8),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      ScorecardsScreen(api: api, timeframe: _timeframe),
+                ),
+              );
+            },
+            child: const Text('Reliability'),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _regimeStructureMixSection(RegimeData data) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Structure mix',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        _regimeScoreBar('Trend', data.scores.trend, Colors.tealAccent),
+        const SizedBox(height: 6),
+        _regimeScoreBar('Sideways', data.scores.sideways, Colors.blueGrey),
+        const SizedBox(height: 6),
+        _regimeScoreBar(
+          'Compression',
+          data.scores.compression,
+          Colors.amber,
+        ),
+        const SizedBox(height: 6),
+        _regimeScoreBar(
+          'Expansion',
+          data.scores.expansion,
+          Colors.redAccent,
+        ),
+      ],
     );
   }
 
