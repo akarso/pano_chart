@@ -78,23 +78,38 @@ func (b barOHLCV) positive() bool {
 }
 
 type symbolBars struct {
-	byTS   map[int64]barOHLCV
-	weight float64 // quote-volume over the fetched window
+	byTS    map[int64]barOHLCV
+	ordered []int64 // ascending timestamps with positive close (lazy)
+	weight  float64 // quote-volume over the fetched window
 }
 
 // closeBefore returns the last positive close strictly before ts.
+// Uses a sorted predecessor index so each lookup is O(log n) after one build.
 func (p *symbolBars) closeBefore(ts int64) (float64, bool) {
-	var bestTS int64 = math.MinInt64
-	var best float64
-	found := false
+	if p == nil || len(p.byTS) == 0 {
+		return 0, false
+	}
+	p.ensureOrdered()
+	i := sort.Search(len(p.ordered), func(i int) bool { return p.ordered[i] >= ts })
+	if i == 0 {
+		return 0, false
+	}
+	b := p.byTS[p.ordered[i-1]]
+	return b.close, true
+}
+
+func (p *symbolBars) ensureOrdered() {
+	if p.ordered != nil {
+		return
+	}
+	ordered := make([]int64, 0, len(p.byTS))
 	for t, b := range p.byTS {
-		if t < ts && b.close > 0 && (!found || t > bestTS) {
-			bestTS = t
-			best = b.close
-			found = true
+		if b.close > 0 {
+			ordered = append(ordered, t)
 		}
 	}
-	return best, found
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	p.ordered = ordered
 }
 
 // CalculateTape produces both composite paths and synthetic OHLCV series.
@@ -111,17 +126,31 @@ func (s *CompositeIndexService) CalculateTape(ctx context.Context, timeframe str
 	if err != nil {
 		return CompositeTape{}, err
 	}
-
-	empty := func(n int) CompositeTape {
-		return CompositeTape{
-			Index:           mkt.CompositeIndex{Timeframe: timeframe, SymbolCount: n},
-			PreferredSource: "composite_median",
-		}
-	}
 	if len(symbols) == 0 {
-		return empty(0), nil
+		return emptyTape(timeframe, 0), nil
 	}
 
+	paths := s.fetchSymbolBars(ctx, symbols, tf, limit)
+	if len(paths) == 0 {
+		return emptyTape(timeframe, 0), nil
+	}
+	return assembleTape(timeframe, tf, paths, limit), nil
+}
+
+func emptyTape(timeframe string, n int) CompositeTape {
+	return CompositeTape{
+		Index:           mkt.CompositeIndex{Timeframe: timeframe, SymbolCount: n},
+		PreferredSource: "composite_median",
+	}
+}
+
+// fetchSymbolBars fans out candle fetches and builds per-symbol bar maps.
+func (s *CompositeIndexService) fetchSymbolBars(
+	ctx context.Context,
+	symbols []domain.Symbol,
+	tf domain.Timeframe,
+	limit int,
+) map[string]*symbolBars {
 	var mu sync.Mutex
 	paths := make(map[string]*symbolBars)
 	sem := make(chan struct{}, s.workerLimit)
@@ -168,26 +197,56 @@ func (s *CompositeIndexService) CalculateTape(ctx context.Context, timeframe str
 		}()
 	}
 	wg.Wait()
+	return paths
+}
 
-	// SymbolCount is the active set that built the tape (never raw universe).
-	if len(paths) == 0 {
-		return empty(0), nil
-	}
-
+// assembleTape selects the active set, builds the reference timeline, and
+// aggregates median + volume-weighted synthetic series.
+func assembleTape(timeframe string, tf domain.Timeframe, paths map[string]*symbolBars, limit int) CompositeTape {
 	active := activePaths(paths)
 	if len(active) == 0 {
 		active = paths
 	}
 	ref := referenceTimeline(active, limit)
 	if len(ref) == 0 {
-		return empty(len(active)), nil
+		return emptyTape(timeframe, len(active))
 	}
 
-	medianPts := make([]mkt.IndexPoint, 0, len(ref))
-	weightedPts := make([]mkt.IndexPoint, 0, len(ref))
-	medianCandles := make([]domain.Candle, 0, len(ref))
-	weightedCandles := make([]domain.Candle, 0, len(ref))
+	medianPts, weightedPts, medianCandles, weightedCandles := aggregateAlongTimeline(active, tf, ref)
+
+	medianSeries, _ := domain.NewCandleSeries(domain.NewSymbolUnsafe("COMPOSITE"), tf, medianCandles)
+	weightedSeries, _ := domain.NewCandleSeries(domain.NewSymbolUnsafe("COMPOSITE"), tf, weightedCandles)
+
+	source := "composite_median"
+	if weightedSeries.Len() >= 2 {
+		source = "composite_volume_weighted"
+	}
+
+	return CompositeTape{
+		Index: mkt.CompositeIndex{
+			Timeframe:            timeframe,
+			Points:               medianPts,
+			VolumeWeightedPoints: weightedPts,
+			SymbolCount:          len(active),
+		},
+		MedianSeries:    medianSeries,
+		WeightedSeries:  weightedSeries,
+		PreferredSource: source,
+	}
+}
+
+// aggregateAlongTimeline walks the reference timestamps and emits index points
+// plus synthetic OHLCV candles for both median and volume-weighted paths.
+func aggregateAlongTimeline(
+	active map[string]*symbolBars,
+	tf domain.Timeframe,
+	ref []int64,
+) (medianPts, weightedPts []mkt.IndexPoint, medianCandles, weightedCandles []domain.Candle) {
 	synthSym := domain.NewSymbolUnsafe("COMPOSITE")
+	medianPts = make([]mkt.IndexPoint, 0, len(ref))
+	weightedPts = make([]mkt.IndexPoint, 0, len(ref))
+	medianCandles = make([]domain.Candle, 0, len(ref))
+	weightedCandles = make([]domain.Candle, 0, len(ref))
 
 	var medV, wV float64 = 100, 100
 	for i, ts := range ref {
@@ -240,26 +299,7 @@ func (s *CompositeIndexService) CalculateTape(ctx context.Context, timeframe str
 			synthSym, tf, t, wOpen, wHigh, wLow, wV, mAgg.vol,
 		))
 	}
-
-	medianSeries, _ := domain.NewCandleSeries(synthSym, tf, medianCandles)
-	weightedSeries, _ := domain.NewCandleSeries(synthSym, tf, weightedCandles)
-
-	source := "composite_median"
-	if weightedSeries.Len() >= 2 {
-		source = "composite_volume_weighted"
-	}
-
-	return CompositeTape{
-		Index: mkt.CompositeIndex{
-			Timeframe:            timeframe,
-			Points:               medianPts,
-			VolumeWeightedPoints: weightedPts,
-			SymbolCount:          len(active),
-		},
-		MedianSeries:    medianSeries,
-		WeightedSeries:  weightedSeries,
-		PreferredSource: source,
-	}, nil
+	return medianPts, weightedPts, medianCandles, weightedCandles
 }
 
 // referenceTimeline builds the emit timeline from an already-selected active set:
