@@ -80,8 +80,8 @@ func TestCompositeIndex_VolumeWeightedPrefersHeavierSymbol(t *testing.T) {
 	if len(idx.Points) != 2 || len(idx.VolumeWeightedPoints) != 2 {
 		t.Fatalf("points=%d vw=%d", len(idx.Points), len(idx.VolumeWeightedPoints))
 	}
-	if math.Abs(idx.Points[1].Value-150) > 0.01 {
-		t.Errorf("median expected ~150, got %.2f", idx.Points[1].Value)
+	if math.Abs(idx.Points[1].Value-100*math.Sqrt(2)) > 0.01 {
+		t.Errorf("median expected ~%.2f (log), got %.2f", 100*math.Sqrt(2), idx.Points[1].Value)
 	}
 	if idx.VolumeWeightedPoints[1].Value > 105 {
 		t.Errorf("volume-weighted should stay near 100, got %.2f", idx.VolumeWeightedPoints[1].Value)

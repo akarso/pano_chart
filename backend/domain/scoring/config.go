@@ -18,6 +18,34 @@ type AppConfig struct {
 	Sideways    SidewaysYAML    `yaml:"sideways"`
 	Compression CompressionYAML `yaml:"compression"`
 	Breakout    BreakoutYAML    `yaml:"breakout"`
+	Composite   CompositeYAML   `yaml:"composite"`
+}
+
+// CompositeYAML configures CompositeIndexService exclusions (PR-095).
+type CompositeYAML struct {
+	Exclude []string `yaml:"exclude"`
+	// ExcludePattern is a Go regexp matched against the full symbol string
+	// (case-insensitive). Empty means list-only exclusions — it does not
+	// inject a default pattern. Use EffectiveComposite when a missing YAML
+	// block should fall back to DefaultAppConfig().
+	ExcludePattern string `yaml:"exclude_pattern"`
+	// DisableExclusions, when true, forces an empty filter (no skips). Use this
+	// explicitly; a bare `composite: {}` still means "apply defaults".
+	DisableExclusions bool `yaml:"disable_exclusions"`
+}
+
+// EffectiveComposite resolves exclusions after LoadConfig:
+//   - disable_exclusions: true → empty filter (exclude nothing)
+//   - empty exclude + empty pattern → DefaultAppConfig().Composite
+//   - otherwise → c as written
+func EffectiveComposite(c CompositeYAML) CompositeYAML {
+	if c.DisableExclusions {
+		return CompositeYAML{DisableExclusions: true}
+	}
+	if len(c.Exclude) == 0 && c.ExcludePattern == "" {
+		return DefaultAppConfig().Composite
+	}
+	return c
 }
 
 // --- Sideways ---
@@ -266,6 +294,13 @@ func DefaultAppConfig() *AppConfig {
 				SuppressSidewaysThreshold: 0.7,
 				SidewaysSuppressionFactor: 0.3,
 			},
+		},
+		Composite: CompositeYAML{
+			Exclude: []string{
+				"USDCUSDT", "FDUSDUSDT", "TUSDUSDT",
+				"WBTCUSDT", "WBETHUSDT", "DAIUSDT", "EURUSDT",
+			},
+			ExcludePattern: `^(USD|EUR)`,
 		},
 	}
 }

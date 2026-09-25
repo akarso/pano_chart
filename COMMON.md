@@ -93,8 +93,8 @@ these terms.
 | **Structure** | The tape's four-way score mix | `TapeRegime.Structure` |
 | **Participation** | Count of tokens with Trend Predictability ≥ 0.5 and sparkline bias up/down (else ranging). Legacy JSON `metrics.*Breadth` remains the average per-token score mix | `MarketStateService` `participation` / breadth |
 | **Bias** | Direction of the tape's trend: up / down / neutral | `TapeRegime.Bias` |
-| **Composite (median)** | Equal-weight median rebased index | `CompositeIndex.Points` |
-| **Composite (volume-weighted)** | Quote-volume-weighted mean rebased index | `CompositeIndex.VolumeWeightedPoints` |
+| **Composite (median)** | Equal-weight median of aligned log-returns, index from 100 | `CompositeIndex.Points` |
+| **Composite (volume-weighted)** | Quote-volume-weighted mean of aligned log-returns, index from 100 | `CompositeIndex.VolumeWeightedPoints` |
 | **Relative strength (RS)** | Symbol return minus composite return over the same window | Track C |
 | **Signal** | Any user-facing call the app makes at a point in time (badge, setup, regime, transition) | Track B |
 | **Outcome** | What happened after a signal over a fixed horizon | Track B |
@@ -257,8 +257,9 @@ counts. UI copy must not present either as the headline regime.
 
 `GET /api/market/composite`:
 
-* `points` — equal-weight median (unchanged)
-* `volumeWeightedPoints` — quote-volume-weighted mean (additive)
+* `points` — equal-weight median of log-returns, coverage-aligned (PR-095)
+* `volumeWeightedPoints` — quote-volume-weighted mean of the same log-returns
+* Stables / wrappers listed under `composite.exclude` in `config.yaml` are skipped
 
 ---
 

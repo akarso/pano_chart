@@ -88,7 +88,7 @@ func TestRedisCachedComposite_CalculateTape_RoundTrip(t *testing.T) {
 	}
 	svc := metrics.NewCompositeIndexService(spy, 4)
 	redis := newFakeCompositeRedis()
-	cached := NewRedisCachedComposite(svc, redis, 3*time.Minute, "market_composite_v2")
+	cached := NewRedisCachedComposite(svc, redis, 3*time.Minute, "market_composite_v3")
 
 	first, err := cached.CalculateTape(context.Background(), "1h", 110)
 	if err != nil {
@@ -121,7 +121,7 @@ func TestRedisCachedComposite_CalculateTape_RoundTrip(t *testing.T) {
 			firstClose.Close(), lastClose.Close(), first2.Close(), last2.Close())
 	}
 
-	key := "market_composite_v2:tape:1h:110"
+	key := "market_composite_v3:tape:1h:110"
 	if _, ok := redis.store[key]; !ok {
 		t.Errorf("expected cache key %q", key)
 	}
@@ -149,7 +149,7 @@ func TestRedisCachedComposite_CalculateTape_TimeframeAwareTTL(t *testing.T) {
 	}
 	svc := metrics.NewCompositeIndexService(spy, 4)
 	redis := newFakeCompositeRedis()
-	cached := NewRedisCachedComposite(svc, redis, 3*time.Minute, "market_composite_v2")
+	cached := NewRedisCachedComposite(svc, redis, 3*time.Minute, "market_composite_v3")
 
 	if _, err := cached.CalculateTape(context.Background(), "1m", 50); err != nil {
 		t.Fatalf("CalculateTape: %v", err)
