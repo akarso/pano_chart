@@ -69,9 +69,9 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 		return usecases.RankingsResult{}, err
 	}
 
-	// 3. Store in Redis (best-effort). Never cache RS-unavailable payloads —
-	// a tape miss on sort=total would otherwise stick for the full TTL.
-	// RSDisabled (no tape provider) still caches score rankings as before.
+	// 3. Store in Redis (best-effort). Skip transient tape failures and
+	// leaders/laggards fallbacks; still cache non-RS sorts when RS is stably
+	// unavailable (overlap floor / exclude) or intentionally disabled.
 	if shouldCacheRankings(results) {
 		cacheItems := toCached(results)
 		data, marshalErr := json.Marshal(cacheItems)
@@ -84,10 +84,14 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 }
 
 func shouldCacheRankings(out usecases.RankingsResult) bool {
-	if out.RSDisabled || len(out.Results) == 0 {
-		return true
+	if out.RSTransientFail {
+		return false
 	}
-	return out.RSAvailable
+	// Never poison leaders/laggards keys with fallback or empty boards.
+	if out.RequestedSort == usecases.SortByLeaders || out.RequestedSort == usecases.SortByLaggards {
+		return out.RSAvailable
+	}
+	return true
 }
 
 func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {

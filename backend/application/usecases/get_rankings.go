@@ -25,11 +25,16 @@ type RankingsUseCase interface {
 
 // RankingsResult is the full rankings response including RS metadata (PR-096).
 type RankingsResult struct {
-	Results       []RankedResult
-	RSAvailable   bool     // true only when ≥1 row was scored against a usable tape
-	RSDisabled    bool     // true when no tape provider is configured (RS intentionally off)
-	Sort          SortMode // effective sort (may fall back from leaders/laggards)
-	RequestedSort SortMode // sort from the request (before fallback)
+	Results     []RankedResult
+	RSAvailable bool // true only when ≥1 row was scored against a usable tape
+	RSDisabled  bool // true when no tape provider is configured (RS intentionally off)
+	// RSTransientFail is true when the tape fetch failed or was unusable.
+	// Redis must not cache these payloads — recovery would stick until TTL.
+	// Stable unscored cases (overlap floor / exclude) leave this false so
+	// non-RS sorts can still be cached.
+	RSTransientFail bool
+	Sort            SortMode // effective sort (may fall back from leaders/laggards)
+	RequestedSort   SortMode // sort from the request (before fallback)
 }
 
 // SortMode represents the sorting strategy for rankings.
@@ -361,11 +366,12 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 	signAdjustTrend(results)
 
 	return RankingsResult{
-		Results:       results,
-		RSAvailable:   rs.available,
-		RSDisabled:    rs.disabled,
-		Sort:          sortMode,
-		RequestedSort: req.Sort,
+		Results:         results,
+		RSAvailable:     rs.available,
+		RSDisabled:      rs.disabled,
+		RSTransientFail: rs.transient,
+		Sort:            sortMode,
+		RequestedSort:   req.Sort,
 	}, nil
 }
 
@@ -638,11 +644,12 @@ func sortValue(r RankedResult, mode SortMode) float64 {
 type rsAnnotateOutcome struct {
 	available bool // ≥1 row scored
 	disabled  bool // no tape provider configured
+	transient bool // tape fetch/short — skip Redis SET until recovery
 }
 
 // annotateRelativeStrength fills RS fields from timestamp overlap with the tape.
-// Nil provider → disabled (intentional). Tape errors/short/zero-scored log and
-// leave available=false.
+// Nil provider → disabled (intentional). Tape errors/short mark transient so
+// Redis does not cache; zero-scored with a usable tape is stable (config/exclude).
 func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult) rsAnnotateOutcome {
 	if g.tape == nil {
 		return rsAnnotateOutcome{disabled: true}
@@ -653,12 +660,12 @@ func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Ti
 	tape, err := g.tape.CalculateTape(ctx, tf.String(), metrics.CompositeTapeWindow)
 	if err != nil {
 		log.Printf("[rankings] relative strength: tape unavailable: %v", err)
-		return rsAnnotateOutcome{}
+		return rsAnnotateOutcome{transient: true}
 	}
 	byTS := tapeCloseByTS(tape)
 	if len(byTS) < 2 {
 		log.Printf("[rankings] relative strength: tape too short (%d stamps)", len(byTS))
-		return rsAnnotateOutcome{}
+		return rsAnnotateOutcome{transient: true}
 	}
 	scored := applyRelativeStrength(results, byTS, g.rsFilter)
 	if scored == 0 {

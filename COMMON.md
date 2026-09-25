@@ -290,10 +290,10 @@ Names matching `composite.exclude` are left unscored for RS. Show the RS chip on
 when `rsAvailable && rs != null`. A real `rs: 0` (matched the tape) still shows;
 omitted `rs` (excluded / short overlap) and `rsAvailable: false` hide the chip.
 
-Redis rankings (`rankings_v2`) are not written when RS was attempted and
-`rsAvailable` is false — a transient tape miss must not stick for the TTL on
-`total`/`gain`/… or leaders/laggards. Empty result sets and intentional
-RS-off (no tape provider) still cache.
+Redis rankings (`rankings_v2`) skip `SET` on transient tape failures (any sort)
+and on leaders/laggards when `rsAvailable` is false (fallback or empty board).
+Stable unscored cases (overlap floor / exclude) and intentional RS-off still
+cache non-RS sorts so full-universe scoring is not repeated every request.
 
 `requestedSort` is the query `sort` before any leaders/laggards → `total` fallback.
 

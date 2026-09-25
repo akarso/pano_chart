@@ -241,7 +241,11 @@ func TestNextErrorPropagated(t *testing.T) {
 
 func TestEmptyResultsCached(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
-	uc := &fakeRankingsUC{result: usecases.RankingsResult{Results: []usecases.RankedResult{}, Sort: usecases.SortByTotal}}
+	uc := &fakeRankingsUC{result: usecases.RankingsResult{
+		Results:       []usecases.RankedResult{},
+		Sort:          usecases.SortByTotal,
+		RequestedSort: usecases.SortByTotal,
+	}}
 	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
 
 	req := usecases.GetRankingsRequest{
@@ -488,9 +492,10 @@ func TestTotalTapeMissDoesNotPoisonCache(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			fr := &fakeRedis{store: map[string]string{}}
 			failing := &fakeRankingsUC{result: usecases.RankingsResult{
-				RSAvailable:   false,
-				Sort:          mode,
-				RequestedSort: mode,
+				RSAvailable:     false,
+				RSTransientFail: true,
+				Sort:            mode,
+				RequestedSort:   mode,
 				Results: []usecases.RankedResult{{
 					Symbol:     domain.NewSymbolUnsafe("BTCUSDT"),
 					TotalScore: 0.9,
@@ -541,12 +546,70 @@ func TestTotalTapeMissDoesNotPoisonCache(t *testing.T) {
 	}
 }
 
+func TestEmptyLeadersDoesNotPoisonCache(t *testing.T) {
+	for _, mode := range []usecases.SortMode{usecases.SortByLeaders, usecases.SortByLaggards} {
+		mode := mode
+		t.Run(string(mode), func(t *testing.T) {
+			fr := &fakeRedis{store: map[string]string{}}
+			empty := &fakeRankingsUC{result: usecases.RankingsResult{
+				RSAvailable:   false,
+				Sort:          usecases.SortByTotal,
+				RequestedSort: mode,
+				Results:       []usecases.RankedResult{},
+			}}
+			cache := NewRedisCachedRankings(empty, fr, time.Minute, "rankings_v2")
+			req := usecases.GetRankingsRequest{
+				Timeframe: domain.NewTimeframeUnsafe("1h"),
+				Sort:      mode,
+			}
+			_, err := cache.Execute(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := "rankings_v2:1h:" + string(mode) + ":default"
+			if _, ok := fr.store[key]; ok {
+				t.Fatalf("must not SET empty %s board", key)
+			}
+		})
+	}
+}
+
+func TestStableUnscoredNonRSStillCaches(t *testing.T) {
+	// Usable tape but zero RS rows (e.g. sparkline precision below overlap floor):
+	// non-RS sorts must still cache to avoid repeating full-universe scoring.
+	fr := &fakeRedis{store: map[string]string{}}
+	uc := &fakeRankingsUC{result: usecases.RankingsResult{
+		RSAvailable:     false,
+		RSTransientFail: false,
+		Sort:            usecases.SortByTotal,
+		RequestedSort:   usecases.SortByTotal,
+		Results: []usecases.RankedResult{{
+			Symbol:     domain.NewSymbolUnsafe("BTCUSDT"),
+			TotalScore: 0.9,
+		}},
+	}}
+	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
+	req := usecases.GetRankingsRequest{
+		Timeframe: domain.NewTimeframeUnsafe("1h"),
+		Sort:      usecases.SortByTotal,
+	}
+	_, err := cache.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "rankings_v2:1h:total:default"
+	if _, ok := fr.store[key]; !ok {
+		t.Fatalf("stable unscored total must SET %s", key)
+	}
+}
+
 func TestRSDisabledStillCaches(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
 	uc := &fakeRankingsUC{result: usecases.RankingsResult{
-		RSAvailable: false,
-		RSDisabled:  true,
-		Sort:        usecases.SortByTotal,
+		RSAvailable:   false,
+		RSDisabled:    true,
+		Sort:          usecases.SortByTotal,
+		RequestedSort: usecases.SortByTotal,
 		Results: []usecases.RankedResult{{
 			Symbol:     domain.NewSymbolUnsafe("BTCUSDT"),
 			TotalScore: 0.5,
