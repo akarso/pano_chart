@@ -217,10 +217,10 @@ func (g *GetRankings) SetRSFilter(f symbolSkipper) {
 	g.rsFilter = f
 }
 
-// Execute computes the full ranking, annotates with volume, and sorts by mode.
+// Execute computes the full ranking for the requested sort mode.
 func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error) {
 	empty := RankingsResult{Sort: req.Sort, RequestedSort: req.Sort}
-	// 1. Resolve universe
+
 	symbols, err := g.universe.Symbols(ctx, g.exchangeInfoURL, g.tickerURL)
 	if err != nil {
 		return empty, fmt.Errorf("universe fetch failed: %w", err)
@@ -234,17 +234,32 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		}, nil
 	}
 
-	// 2. Fetch volumes
 	volMap, err := g.volumes.Volumes(ctx)
 	if err != nil {
 		return empty, fmt.Errorf("volume fetch failed: %w", err)
 	}
 
-	// 3. Fetch candles + score each symbol in a bounded worker pool.
-	//    Each worker fetches candles and scores the symbol independently.
-	//    Results are written by index — no mutex needed for the slice.
+	scored, err := g.fetchAndScoreSymbols(ctx, symbols, req)
+	if err != nil {
+		return empty, err
+	}
+
+	results := buildRankedRows(scored, volMap)
+	return g.finalizeRankings(ctx, req, results, len(symbols)), nil
+}
+
+// scoredSymbol is one universe member after a successful candle fetch + score.
+type scoredSymbol struct {
+	symbol domain.Symbol
+	series domain.CandleSeries
+	ranked RankedSymbol
+}
+
+// fetchAndScoreSymbols fetches candles and scores each symbol in a bounded pool.
+// Partial fetch/score failures are skipped (tolerated).
+func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain.Symbol, req GetRankingsRequest) ([]scoredSymbol, error) {
 	ranker := g.rankerForAlgo(req.SidewaysAlgo)
-	type fetchResult struct {
+	type slot struct {
 		symbol    domain.Symbol
 		series    domain.CandleSeries
 		ranked    RankedSymbol
@@ -253,32 +268,27 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 
 	sem := semaphore.NewWeighted(g.workerLimit)
 	grp, gCtx := errgroup.WithContext(ctx)
+	slots := make([]slot, len(symbols))
 
-	fetchResults := make([]fetchResult, len(symbols))
 	for i, sym := range symbols {
 		i, sym := i, sym
-
 		if err := sem.Acquire(gCtx, 1); err != nil {
 			break // context cancelled
 		}
-
 		grp.Go(func() error {
 			defer sem.Release(1)
 
 			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.precision)
 			if err != nil {
-				return nil // skip symbols with fetch errors (partial failure tolerance)
+				return nil // skip symbols with fetch errors
 			}
 
-			// Score inline — avoids building a full map and re-iterating.
 			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
 			ranked, err := ranker.Rank(gCtx, singleSeries)
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}
 
-			// Run structural regime detectors (compression → breakout)
-			// and inject into scores map. These do NOT affect TotalScore.
 			candles := cs.All()
 			compResult := scoring.DetectCompression(candles, scoring.DefaultCompressionConfig())
 			breakResult := scoring.DetectBreakout(candles, scoring.DefaultBreakoutConfig(), compResult.Score)
@@ -286,37 +296,40 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
 			ranked[0].Scores["Breakout Down"] = breakResult.DownScore
 
-			fetchResults[i] = fetchResult{
+			slots[i] = slot{
 				symbol:    sym,
 				series:    cs,
 				ranked:    ranked[0],
 				hasSeries: true,
 			}
 
-			// Log evaluation snapshot (fire-and-forget, non-blocking).
 			if g.snapshotLogger != nil {
 				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
 				_ = g.snapshotLogger.Log(snap)
 			}
-
 			return nil
 		})
 	}
 
 	if err := grp.Wait(); err != nil {
-		return empty, fmt.Errorf("parallel fetch+score failed: %w", err)
+		return nil, fmt.Errorf("parallel fetch+score failed: %w", err)
 	}
 
-	// 4. Build results with volume annotation and sparkline (+ timestamps for RS).
-	results := make([]RankedResult, 0, len(symbols))
-	for _, fr := range fetchResults {
-		if !fr.hasSeries {
+	out := make([]scoredSymbol, 0, len(symbols))
+	for _, s := range slots {
+		if !s.hasSeries {
 			continue
 		}
+		out = append(out, scoredSymbol{symbol: s.symbol, series: s.series, ranked: s.ranked})
+	}
+	return out, nil
+}
 
-		vol := volMap[fr.symbol.String()]
-
-		all := fr.series.All()
+// buildRankedRows annotates scored symbols with volume, sparkline, and signal fields.
+func buildRankedRows(scored []scoredSymbol, volMap map[string]float64) []RankedResult {
+	results := make([]RankedResult, 0, len(scored))
+	for _, s := range scored {
+		all := s.series.All()
 		sparkline := make([]float64, len(all))
 		sparkTS := make([]int64, len(all))
 		for k, c := range all {
@@ -326,44 +339,32 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		var signalPrice, signalATR float64
 		if len(all) > 0 {
 			signalPrice = all[len(all)-1].Close()
-			signalATR = SimpleATR(fr.series, 14)
+			signalATR = SimpleATR(s.series, 14)
 		}
-
 		results = append(results, RankedResult{
-			Symbol:      fr.ranked.Symbol,
-			TotalScore:  fr.ranked.TotalScore,
-			Scores:      fr.ranked.Scores,
-			Volume:      vol,
+			Symbol:      s.ranked.Symbol,
+			TotalScore:  s.ranked.TotalScore,
+			Scores:      s.ranked.Scores,
+			Volume:      volMap[s.symbol.String()],
 			Sparkline:   sparkline,
 			SignalPrice: signalPrice,
 			SignalATR:   signalATR,
 			sparkTS:     sparkTS,
 		})
 	}
+	return results
+}
 
-	// 5. Relative strength vs composite tape (timestamp overlap).
-	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, len(symbols))
+// finalizeRankings applies RS annotation, sort, percentiles, badges, and trend sign.
+func (g *GetRankings) finalizeRankings(ctx context.Context, req GetRankingsRequest, results []RankedResult, universeN int) RankingsResult {
+	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, universeN)
 	sortMode := effectiveSort(req.Sort, rs.available)
 
-	// 6. Sort by effective mode (metric desc, then symbol asc).
 	sortResults(results, sortMode)
-
-	// 7. Percentile is position after the effective sort (not RSRank).
-	n := len(results)
-	for i := range results {
-		if n <= 1 {
-			results[i].Percentile = 1.0
-		} else {
-			results[i].Percentile = 1.0 - float64(i)/float64(n-1)
-		}
-	}
-
-	// 8. Compute per-component percentiles + badge assignment.
+	assignPositionPercentiles(results)
 	computeComponentPercentiles(results)
 	assignBadges(results)
 	g.emitBadgeSignals(ctx, req.Timeframe.String(), results)
-
-	// 9. Sign-adjust trend score for directional display.
 	signAdjustTrend(results)
 
 	return RankingsResult{
@@ -373,7 +374,7 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		RSTransientFail: rs.transient,
 		Sort:            sortMode,
 		RequestedSort:   req.Sort,
-	}, nil
+	}
 }
 
 func effectiveSort(requested SortMode, rsOK bool) SortMode {
@@ -381,6 +382,18 @@ func effectiveSort(requested SortMode, rsOK bool) SortMode {
 		return SortByTotal
 	}
 	return requested
+}
+
+// assignPositionPercentiles sets overall percentile from position after the effective sort.
+func assignPositionPercentiles(results []RankedResult) {
+	n := len(results)
+	for i := range results {
+		if n <= 1 {
+			results[i].Percentile = 1.0
+		} else {
+			results[i].Percentile = 1.0 - float64(i)/float64(n-1)
+		}
+	}
 }
 
 // computeComponentPercentiles ranks symbols per component score (desc)
