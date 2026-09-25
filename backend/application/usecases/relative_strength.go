@@ -106,12 +106,14 @@ func applyRelativeStrength(results []RankedResult, tape map[int64]float64, skip 
 // unaligned rows may recover; precision below the floor, all-excluded, and
 // all-short history are treated as stable.
 func rsZeroScoredTransient(results []RankedResult, tape map[int64]float64, skip symbolSkipper, precision, universeN int) bool {
-	if universeN > 0 && len(results) < universeN {
-		return true
-	}
 	need := minOverlapRequired(len(tape))
+	// Config cannot score anyone — check before incomplete coverage so a
+	// single skipped candle fetch does not disable non-RS caching forever.
 	if precision > 0 && precision < need {
 		return false
+	}
+	if universeN > 0 && len(results) < universeN {
+		return true
 	}
 	eligible, capable := 0, 0
 	for i := range results {
