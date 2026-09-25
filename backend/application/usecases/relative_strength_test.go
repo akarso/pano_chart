@@ -268,3 +268,63 @@ func TestMinOverlapRequired(t *testing.T) {
 		t.Fatalf("2 → %d want 2", minOverlapRequired(2))
 	}
 }
+
+func TestRSZeroScoredTransient(t *testing.T) {
+	tape := map[int64]float64{}
+	for i := int64(0); i < 40; i++ {
+		tape[i] = 100 + float64(i)
+	}
+	need := minOverlapRequired(len(tape)) // 20
+	short := RankedResult{
+		Symbol: domain.NewSymbolUnsafe("SHORTUSDT"),
+		sparkTS: func() []int64 {
+			ts := make([]int64, need-1)
+			for i := range ts {
+				ts[i] = int64(i)
+			}
+			return ts
+		}(),
+	}
+	capable := RankedResult{
+		Symbol: domain.NewSymbolUnsafe("FULLUSDT"),
+		sparkTS: func() []int64 {
+			ts := make([]int64, need)
+			for i := range ts {
+				ts[i] = int64(1000 + i) // no overlap with tape keys
+			}
+			return ts
+		}(),
+	}
+	excluded := RankedResult{Symbol: domain.NewSymbolUnsafe("USDCUSDT"), sparkTS: capable.sparkTS}
+	skip := skipFn(func(s string) bool { return s == "USDCUSDT" })
+
+	t.Run("incompleteUniverse", func(t *testing.T) {
+		if !rsZeroScoredTransient([]RankedResult{short}, tape, nil, 110, 10) {
+			t.Fatal("partial coverage must be transient")
+		}
+	})
+	t.Run("precisionBelowFloor", func(t *testing.T) {
+		if rsZeroScoredTransient([]RankedResult{short}, tape, nil, 10, 1) {
+			t.Fatal("precision < need is stable")
+		}
+	})
+	t.Run("allShortHistory", func(t *testing.T) {
+		if rsZeroScoredTransient([]RankedResult{short}, tape, nil, 110, 1) {
+			t.Fatal("all eligible short is stable")
+		}
+	})
+	t.Run("capableUnaligned", func(t *testing.T) {
+		if !rsZeroScoredTransient([]RankedResult{capable}, tape, nil, 110, 1) {
+			t.Fatal("capable but unscored must be transient")
+		}
+	})
+	t.Run("allExcluded", func(t *testing.T) {
+		if rsZeroScoredTransient([]RankedResult{excluded}, tape, skip, 110, 1) {
+			t.Fatal("only excluded names is stable")
+		}
+	})
+}
+
+type skipFn func(string) bool
+
+func (f skipFn) Skip(s string) bool { return f(s) }

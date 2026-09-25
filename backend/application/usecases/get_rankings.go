@@ -28,10 +28,11 @@ type RankingsResult struct {
 	Results     []RankedResult
 	RSAvailable bool // true only when ≥1 row was scored against a usable tape
 	RSDisabled  bool // true when no tape provider is configured (RS intentionally off)
-	// RSTransientFail is true when the tape fetch failed or was unusable.
-	// Redis must not cache these payloads — recovery would stick until TTL.
-	// Stable unscored cases (overlap floor / exclude) leave this false so
-	// non-RS sorts can still be cached.
+	// RSTransientFail is true when the tape fetch failed/was short, candle
+	// coverage is incomplete, or rows were capable of the overlap floor but
+	// still unscored (alignment). Redis must not cache these — recovery would
+	// stick until TTL. Stable unscored cases (precision below floor / exclude /
+	// all-short history) leave this false so non-RS sorts can still be cached.
 	RSTransientFail bool
 	Sort            SortMode // effective sort (may fall back from leaders/laggards)
 	RequestedSort   SortMode // sort from the request (before fallback)
@@ -341,7 +342,7 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 	}
 
 	// 5. Relative strength vs composite tape (timestamp overlap).
-	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results)
+	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, len(symbols))
 	sortMode := effectiveSort(req.Sort, rs.available)
 
 	// 6. Sort by effective mode (metric desc, then symbol asc).
@@ -648,13 +649,18 @@ type rsAnnotateOutcome struct {
 }
 
 // annotateRelativeStrength fills RS fields from timestamp overlap with the tape.
-// Nil provider → disabled (intentional). Tape errors/short mark transient so
-// Redis does not cache; zero-scored with a usable tape is stable (config/exclude).
-func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult) rsAnnotateOutcome {
+// Nil provider → disabled (intentional). Tape errors/short and recoverable
+// zero-scored cases mark transient so Redis does not cache; stable unscored
+// (precision below floor / all excluded / all short history) does not.
+func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult, universeN int) rsAnnotateOutcome {
 	if g.tape == nil {
 		return rsAnnotateOutcome{disabled: true}
 	}
 	if len(results) == 0 {
+		// Universe was non-empty but every candle fetch/score failed.
+		if universeN > 0 {
+			return rsAnnotateOutcome{transient: true}
+		}
 		return rsAnnotateOutcome{}
 	}
 	tape, err := g.tape.CalculateTape(ctx, tf.String(), metrics.CompositeTapeWindow)
@@ -669,7 +675,11 @@ func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Ti
 	}
 	scored := applyRelativeStrength(results, byTS, g.rsFilter)
 	if scored == 0 {
-		log.Printf("[rankings] relative strength: usable tape but zero scored rows (overlap/exclude)")
+		if rsZeroScoredTransient(results, byTS, g.rsFilter, g.precision, universeN) {
+			log.Printf("[rankings] relative strength: zero scored rows (incomplete coverage or alignment)")
+			return rsAnnotateOutcome{transient: true}
+		}
+		log.Printf("[rankings] relative strength: usable tape but zero scored rows (overlap floor/exclude)")
 		return rsAnnotateOutcome{}
 	}
 	return rsAnnotateOutcome{available: true}

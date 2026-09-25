@@ -290,10 +290,12 @@ Names matching `composite.exclude` are left unscored for RS. Show the RS chip on
 when `rsAvailable && rs != null`. A real `rs: 0` (matched the tape) still shows;
 omitted `rs` (excluded / short overlap) and `rsAvailable: false` hide the chip.
 
-Redis rankings (`rankings_v2`) skip `SET` on transient tape failures (any sort)
-and on leaders/laggards when `rsAvailable` is false (fallback or empty board).
-Stable unscored cases (overlap floor / exclude) and intentional RS-off still
-cache non-RS sorts so full-universe scoring is not repeated every request.
+Redis rankings (`rankings_v2`) skip `SET` on transient tape failures, incomplete
+candle coverage, and capable-but-unaligned zero-scored boards (any sort), and on
+leaders/laggards when `rsAvailable` is false (fallback or empty board). Stable
+unscored cases (precision below the overlap floor / all excluded / all short
+history) and intentional RS-off still cache non-RS sorts so full-universe
+scoring is not repeated every request.
 
 `requestedSort` is the query `sort` before any leaders/laggards → `total` fallback.
 
