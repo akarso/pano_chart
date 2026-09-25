@@ -84,13 +84,14 @@ func TestGetRankings_PercentileComputation(t *testing.T) {
 		nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
@@ -142,13 +143,14 @@ func TestGetRankings_SingleSymbolPercentileIsOne(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -192,13 +194,14 @@ func TestGetRankings_PercentileInZeroOneRange(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 
 	for _, r := range results {
 		if r.Percentile < 0 || r.Percentile > 1 {
@@ -257,13 +260,14 @@ func TestGetRankings_TrendScoreSignedByDirection(t *testing.T) {
 		3, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTrend,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}

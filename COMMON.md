@@ -95,7 +95,7 @@ these terms.
 | **Bias** | Direction of the tape's trend: up / down / neutral | `TapeRegime.Bias` |
 | **Composite (median)** | Equal-weight median of aligned log-returns, index from 100 | `CompositeIndex.Points` |
 | **Composite (volume-weighted)** | Quote-volume-weighted mean of aligned log-returns, index from 100 | `CompositeIndex.VolumeWeightedPoints` |
-| **Relative strength (RS)** | Symbol return minus composite return over the same window | Track C |
+| **Relative strength (RS)** | Symbol log-return minus tape log-return on shared timestamps (`rs`); also `beta`, `rsRank`, `rsAvailable` | Track C / PR-096 |
 | **Signal** | Any user-facing call the app makes at a point in time (badge, setup, regime, transition) | Track B |
 | **Outcome** | What happened after a signal over a fixed horizon | Track B |
 | **Hit rate** | Fraction of signals whose outcome met the success rule | Track B |
@@ -260,6 +260,37 @@ counts. UI copy must not present either as the headline regime.
 * `points` — equal-weight median of log-returns, coverage-aligned (PR-095)
 * `volumeWeightedPoints` — quote-volume-weighted mean of the same log-returns
 * Stables / wrappers listed under `composite.exclude` in `config.yaml` are skipped
+
+### Rankings relative strength (PR-096)
+
+`GET /api/rankings` includes response-level and per-row fields:
+
+| Field | JSON | Meaning |
+|-------|------|---------|
+| RS available | `rsAvailable` | `true` only when a usable tape scored ≥1 row |
+| Effective sort | `sort` | May fall back from `leaders`/`laggards` → `total` when `rsAvailable` is false |
+| Requested sort | `requestedSort` | Query `sort` before fallback |
+| Relative strength | `rs` | Log excess return on that symbol’s timestamp overlap with the tape (omitted when unset). Overlap must be at least `max(2, min(20, ceil(n/2)))` shared stamps (`n` = tape length) — not a universe-wide first/last timestamp |
+| Beta | `beta` | OLS slope on the **same** aligned return pairs (omitted when unset) |
+| RS rank | `rsRank` | Percentile among scored RS rows only (omitted when unset) |
+
+`percentile` remains position after the effective sort (score/total/volume/…), not `rsRank`.
+
+Tape window for RS is `metrics.CompositeTapeWindow` (110) — the same limit as Market
+Pulse — so both share the Redis composite key. If `OVERVIEW_SPARKLINE_PRECISION` is
+set below the overlap floor (20 on a 110-stamp tape), every row stays unscored,
+`rsAvailable` stays false, and leaders/laggards always fall back to `total`.
+
+Sort modes (query `sort=`):
+
+* `leaders` — highest `rs` first (unscored / excluded names last)
+* `laggards` — lowest `rs` first (unscored / excluded names last)
+
+Names matching `composite.exclude` are left unscored for RS. Show the RS chip only
+when `rsAvailable && rs != null`. A real `rs: 0` (matched the tape) still shows;
+omitted `rs` (excluded / short overlap) and `rsAvailable: false` hide the chip.
+
+`requestedSort` is the query `sort` before any leaders/laggards → `total` fallback.
 
 ---
 

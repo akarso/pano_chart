@@ -3,12 +3,14 @@ package usecases
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
+	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/ports"
 	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/domain"
@@ -18,7 +20,15 @@ import (
 
 // RankingsUseCase defines the boundary for the rankings v2 use case.
 type RankingsUseCase interface {
-	Execute(ctx context.Context, req GetRankingsRequest) ([]RankedResult, error)
+	Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error)
+}
+
+// RankingsResult is the full rankings response including RS metadata (PR-096).
+type RankingsResult struct {
+	Results       []RankedResult
+	RSAvailable   bool     // true only when ≥1 row was scored against a usable tape
+	Sort          SortMode // effective sort (may fall back from leaders/laggards)
+	RequestedSort SortMode // sort from the request (before fallback)
 }
 
 // SortMode represents the sorting strategy for rankings.
@@ -30,9 +40,12 @@ const (
 	SortBySideways SortMode = "sideways"
 	SortByTrend    SortMode = "trend"
 	SortByVolume   SortMode = "volume"
+	SortByLeaders  SortMode = "leaders"  // RS descending (PR-096)
+	SortByLaggards SortMode = "laggards" // RS ascending (PR-096)
 )
 
 // ScoreKeyForSort maps sort modes to score calculator names.
+// Leaders/laggards are not calculator scores — see sortValue.
 var ScoreKeyForSort = map[SortMode]string{
 	SortByGain:     "Gain/Loss",
 	SortBySideways: "Sideways Consistency",
@@ -42,11 +55,19 @@ var ScoreKeyForSort = map[SortMode]string{
 // ParseSortMode converts a string to a SortMode, defaulting to SortByTotal.
 func ParseSortMode(s string) SortMode {
 	switch SortMode(s) {
-	case SortByTotal, SortByGain, SortBySideways, SortByTrend, SortByVolume:
+	case SortByTotal, SortByGain, SortBySideways, SortByTrend, SortByVolume,
+		SortByLeaders, SortByLaggards:
 		return SortMode(s)
 	default:
 		return SortByTotal
 	}
+}
+
+// CompositeTapeProvider supplies a market tape for relative-strength fields.
+// Same shape as application/market.TapeProvider and signal.TapeSource.
+// Optional on GetRankings — see SetTapeProvider.
+type CompositeTapeProvider interface {
+	CalculateTape(ctx context.Context, timeframe string, limit int) (metrics.CompositeTape, error)
 }
 
 // SidewaysAlgoMode identifies which sideways scoring algorithm to use.
@@ -101,6 +122,14 @@ type RankedResult struct {
 	// badge logging. Not part of the public rankings JSON contract.
 	SignalPrice float64
 	SignalATR   float64
+
+	// Relative strength vs the composite tape (PR-096).
+	// Nil means unset (skipped / RS unavailable) — distinct from a real 0.
+	RelativeStrength *float64 // ln(sym) − ln(tape) on timestamp overlap
+	Beta             *float64 // OLS on the same aligned return pairs
+	RSRank           *float64 // percentile among scored RS rows only (0–1)
+
+	sparkTS []int64 // candle timestamps parallel to Sparkline (not JSON)
 }
 
 // GetRankings computes full ranked results for the universe.
@@ -119,8 +148,10 @@ type GetRankings struct {
 	exchangeInfoURL string
 	tickerURL       string
 
-	snapshotLogger ports.SnapshotLogger // optional; nil = no logging
-	signalEmitter  ports.SignalEmitter  // optional; nil = no signal log (PR-090)
+	snapshotLogger ports.SnapshotLogger  // optional; nil = no logging
+	signalEmitter  ports.SignalEmitter   // optional; nil = no signal log (PR-090)
+	tape           CompositeTapeProvider // optional; nil → RS unavailable (PR-096)
+	rsFilter       symbolSkipper         // optional; composite.exclude names skip RS
 }
 
 // NewGetRankings constructs the use case.
@@ -167,21 +198,38 @@ func (g *GetRankings) SetSignalEmitter(e ports.SignalEmitter) {
 	g.signalEmitter = e
 }
 
+// SetTapeProvider attaches an optional composite tape source for RS/Beta/RSRank.
+// When nil (default), RSAvailable stays false and leaders/laggards fall back to total.
+func (g *GetRankings) SetTapeProvider(tp CompositeTapeProvider) {
+	g.tape = tp
+}
+
+// SetRSFilter skips RS for names that match the composite exclude list
+// (stables / wrappers). Pass nil to score every symbol.
+func (g *GetRankings) SetRSFilter(f symbolSkipper) {
+	g.rsFilter = f
+}
+
 // Execute computes the full ranking, annotates with volume, and sorts by mode.
-func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]RankedResult, error) {
+func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error) {
+	empty := RankingsResult{Sort: req.Sort, RequestedSort: req.Sort}
 	// 1. Resolve universe
 	symbols, err := g.universe.Symbols(ctx, g.exchangeInfoURL, g.tickerURL)
 	if err != nil {
-		return nil, fmt.Errorf("universe fetch failed: %w", err)
+		return empty, fmt.Errorf("universe fetch failed: %w", err)
 	}
 	if len(symbols) == 0 {
-		return []RankedResult{}, nil
+		return RankingsResult{
+			Results:       []RankedResult{},
+			Sort:          effectiveSort(req.Sort, false),
+			RequestedSort: req.Sort,
+		}, nil
 	}
 
 	// 2. Fetch volumes
 	volMap, err := g.volumes.Volumes(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("volume fetch failed: %w", err)
+		return empty, fmt.Errorf("volume fetch failed: %w", err)
 	}
 
 	// 3. Fetch candles + score each symbol in a bounded worker pool.
@@ -248,11 +296,10 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 	}
 
 	if err := grp.Wait(); err != nil {
-		return nil, fmt.Errorf("parallel fetch+score failed: %w", err)
+		return empty, fmt.Errorf("parallel fetch+score failed: %w", err)
 	}
 
-	// 4. Build results with volume annotation and sparkline.
-	//    Collect only successful results (partial failure tolerance).
+	// 4. Build results with volume annotation and sparkline (+ timestamps for RS).
 	results := make([]RankedResult, 0, len(symbols))
 	for _, fr := range fetchResults {
 		if !fr.hasSeries {
@@ -261,11 +308,12 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 
 		vol := volMap[fr.symbol.String()]
 
-		// Extract sparkline from already-fetched series
 		all := fr.series.All()
 		sparkline := make([]float64, len(all))
+		sparkTS := make([]int64, len(all))
 		for k, c := range all {
 			sparkline[k] = c.Close()
+			sparkTS[k] = c.Timestamp().Unix()
 		}
 		var signalPrice, signalATR float64
 		if len(all) > 0 {
@@ -281,14 +329,18 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 			Sparkline:   sparkline,
 			SignalPrice: signalPrice,
 			SignalATR:   signalATR,
+			sparkTS:     sparkTS,
 		})
 	}
 
-	// 5. Sort by requested mode (deterministic: metric desc, symbol asc)
-	sortResults(results, req.Sort)
+	// 5. Relative strength vs composite tape (timestamp overlap).
+	rsOK := g.annotateRelativeStrength(ctx, req.Timeframe, results)
+	sortMode := effectiveSort(req.Sort, rsOK)
 
-	// 6. Compute percentile rank based on position after sorting.
-	//    Top symbol → 1.0, bottom → 0.0, single symbol → 1.0.
+	// 6. Sort by effective mode (metric desc, then symbol asc).
+	sortResults(results, sortMode)
+
+	// 7. Percentile is position after the effective sort (not RSRank).
 	n := len(results)
 	for i := range results {
 		if n <= 1 {
@@ -298,19 +350,27 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) ([]Ra
 		}
 	}
 
-	// 7. Compute per-component percentiles + badge assignment.
+	// 8. Compute per-component percentiles + badge assignment.
 	computeComponentPercentiles(results)
 	assignBadges(results)
 	g.emitBadgeSignals(ctx, req.Timeframe.String(), results)
 
-	// 8. Sign-adjust trend score for directional display.
-	//    Positive = uptrend, negative = downtrend.
-	//    Applied AFTER TotalScore, percentiles, and badges so they remain
-	//    based on absolute trendiness.  The frontend re-sorts locally using
-	//    the signed value so "trend up" puts uptrends first.
+	// 9. Sign-adjust trend score for directional display.
 	signAdjustTrend(results)
 
-	return results, nil
+	return RankingsResult{
+		Results:       results,
+		RSAvailable:   rsOK,
+		Sort:          sortMode,
+		RequestedSort: req.Sort,
+	}, nil
+}
+
+func effectiveSort(requested SortMode, rsOK bool) SortMode {
+	if !rsOK && (requested == SortByLeaders || requested == SortByLaggards) {
+		return SortByTotal
+	}
+	return requested
 }
 
 // computeComponentPercentiles ranks symbols per component score (desc)
@@ -539,7 +599,7 @@ func swapSidewaysCalculator(weights []ScoreWeight, algo SidewaysAlgoMode) []Scor
 }
 
 // sortResults sorts results in-place by the given mode.
-// Primary: selected metric descending. Secondary: volume descending. Tertiary: symbol ascending.
+// Primary: selected metric descending. Secondary: symbol ascending.
 func sortResults(results []RankedResult, mode SortMode) {
 	sort.SliceStable(results, func(i, j int) bool {
 		vi := sortValue(results[i], mode)
@@ -558,6 +618,10 @@ func sortValue(r RankedResult, mode SortMode) float64 {
 		return r.TotalScore
 	case SortByVolume:
 		return r.Volume
+	case SortByLeaders:
+		return rsSortKey(r, false)
+	case SortByLaggards:
+		return rsSortKey(r, true)
 	default:
 		key, ok := ScoreKeyForSort[mode]
 		if !ok {
@@ -565,6 +629,31 @@ func sortValue(r RankedResult, mode SortMode) float64 {
 		}
 		return r.Scores[key]
 	}
+}
+
+// annotateRelativeStrength fills RS fields from timestamp overlap with the tape.
+// Returns true only when a usable tape yielded at least one scored row.
+// Nil provider is silent (RS disabled by design); tape errors/short/zero-scored log.
+func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult) bool {
+	if g.tape == nil || len(results) == 0 {
+		return false
+	}
+	tape, err := g.tape.CalculateTape(ctx, tf.String(), metrics.CompositeTapeWindow)
+	if err != nil {
+		log.Printf("[rankings] relative strength: tape unavailable: %v", err)
+		return false
+	}
+	byTS := tapeCloseByTS(tape)
+	if len(byTS) < 2 {
+		log.Printf("[rankings] relative strength: tape too short (%d stamps)", len(byTS))
+		return false
+	}
+	scored := applyRelativeStrength(results, byTS, g.rsFilter)
+	if scored == 0 {
+		log.Printf("[rankings] relative strength: usable tape but zero scored rows (overlap/exclude)")
+		return false
+	}
+	return true
 }
 
 // signAdjustTrend negates the "Trend Predictability" score for symbols whose

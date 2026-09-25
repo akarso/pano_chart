@@ -47,19 +47,17 @@ func (r *RedisCachedRankings) SetSignalEmitter(e ports.SignalEmitter) {
 }
 
 // Execute implements RankingsUseCase.
-func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error) {
+func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error) {
 	key := r.buildKey(req)
 
 	// 1. Attempt Redis GET
 	cached, err := r.redis.Get(ctx, key)
 	if err == nil && cached != "" {
-		var items []cachedRankedResult
-		if unmarshalErr := json.Unmarshal([]byte(cached), &items); unmarshalErr == nil {
-			out, convErr := fromCached(items)
+		var payload cachedRankingsPayload
+		if unmarshalErr := json.Unmarshal([]byte(cached), &payload); unmarshalErr == nil {
+			out, convErr := fromCached(payload)
 			if convErr == nil {
-				// Cache hit bypasses GetRankings.Execute — still log badges for
-				// the current candle (Emitter bar-dedupes repeats).
-				usecases.EmitBadgeSignals(ctx, r.signalEmitter, req.Timeframe.String(), out)
+				usecases.EmitBadgeSignals(ctx, r.signalEmitter, req.Timeframe.String(), out.Results)
 				return out, nil
 			}
 		}
@@ -68,17 +66,30 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 	// 2. Cache miss — call underlying use case (emits badges itself)
 	results, err := r.next.Execute(ctx, req)
 	if err != nil {
-		return nil, err
+		return usecases.RankingsResult{}, err
 	}
 
-	// 3. Store in Redis (best-effort, never fail the request)
-	cacheItems := toCached(results)
-	data, marshalErr := json.Marshal(cacheItems)
-	if marshalErr == nil {
-		_ = r.redis.Set(ctx, key, string(data), r.ttl)
+	// 3. Store in Redis (best-effort). Never poison leaders/laggards keys with a
+	// fallback payload — that would stick for the full TTL after a tape miss.
+	if shouldCacheRankings(req.Sort, results) {
+		cacheItems := toCached(results)
+		data, marshalErr := json.Marshal(cacheItems)
+		if marshalErr == nil {
+			_ = r.redis.Set(ctx, key, string(data), r.ttl)
+		}
 	}
 
 	return results, nil
+}
+
+func shouldCacheRankings(requested usecases.SortMode, out usecases.RankingsResult) bool {
+	if out.RSAvailable {
+		return true
+	}
+	if requested == usecases.SortByLeaders || requested == usecases.SortByLaggards {
+		return false
+	}
+	return true
 }
 
 func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
@@ -87,6 +98,13 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 		algo = "default"
 	}
 	return fmt.Sprintf("%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo)
+}
+
+type cachedRankingsPayload struct {
+	RSAvailable   bool                 `json:"rsAvailable"`
+	Sort          string               `json:"sort"`
+	RequestedSort string               `json:"requestedSort,omitempty"`
+	Results       []cachedRankedResult `json:"results"`
 }
 
 // cachedRankedResult is the JSON-serialisable representation of RankedResult.
@@ -105,12 +123,15 @@ type cachedRankedResult struct {
 	BadgeComponent     string             `json:"badgeComponent"`
 	SignalPrice        float64            `json:"signalPrice,omitempty"`
 	SignalATR          float64            `json:"signalATR,omitempty"`
+	RelativeStrength   *float64           `json:"rs,omitempty"`
+	Beta               *float64           `json:"beta,omitempty"`
+	RSRank             *float64           `json:"rsRank,omitempty"`
 }
 
-func toCached(results []usecases.RankedResult) []cachedRankedResult {
-	out := make([]cachedRankedResult, len(results))
-	for i, r := range results {
-		out[i] = cachedRankedResult{
+func toCached(out usecases.RankingsResult) cachedRankingsPayload {
+	rows := make([]cachedRankedResult, len(out.Results))
+	for i, r := range out.Results {
+		rows[i] = cachedRankedResult{
 			Symbol:             r.Symbol.String(),
 			TotalScore:         r.TotalScore,
 			Percentile:         r.Percentile,
@@ -125,17 +146,25 @@ func toCached(results []usecases.RankedResult) []cachedRankedResult {
 			BadgeComponent:     r.BadgeComponent,
 			SignalPrice:        r.SignalPrice,
 			SignalATR:          r.SignalATR,
+			RelativeStrength:   r.RelativeStrength,
+			Beta:               r.Beta,
+			RSRank:             r.RSRank,
 		}
 	}
-	return out
+	return cachedRankingsPayload{
+		RSAvailable:   out.RSAvailable,
+		Sort:          string(out.Sort),
+		RequestedSort: string(out.RequestedSort),
+		Results:       rows,
+	}
 }
 
-func fromCached(items []cachedRankedResult) ([]usecases.RankedResult, error) {
-	out := make([]usecases.RankedResult, len(items))
-	for i, c := range items {
+func fromCached(payload cachedRankingsPayload) (usecases.RankingsResult, error) {
+	out := make([]usecases.RankedResult, len(payload.Results))
+	for i, c := range payload.Results {
 		sym, err := domain.NewSymbol(c.Symbol)
 		if err != nil {
-			return nil, fmt.Errorf("invalid cached symbol %q: %w", c.Symbol, err)
+			return usecases.RankingsResult{}, fmt.Errorf("invalid cached symbol %q: %w", c.Symbol, err)
 		}
 		out[i] = usecases.RankedResult{
 			Symbol:             sym,
@@ -152,7 +181,23 @@ func fromCached(items []cachedRankedResult) ([]usecases.RankedResult, error) {
 			BadgeComponent:     c.BadgeComponent,
 			SignalPrice:        c.SignalPrice,
 			SignalATR:          c.SignalATR,
+			RelativeStrength:   c.RelativeStrength,
+			Beta:               c.Beta,
+			RSRank:             c.RSRank,
 		}
 	}
-	return out, nil
+	sortMode := usecases.ParseSortMode(payload.Sort)
+	if payload.Sort == "" {
+		sortMode = usecases.SortByTotal
+	}
+	reqSort := usecases.ParseSortMode(payload.RequestedSort)
+	if payload.RequestedSort == "" {
+		reqSort = sortMode
+	}
+	return usecases.RankingsResult{
+		Results:       out,
+		RSAvailable:   payload.RSAvailable,
+		Sort:          sortMode,
+		RequestedSort: reqSort,
+	}, nil
 }

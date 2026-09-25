@@ -25,7 +25,7 @@ type fakeRankings struct {
 	entered   sync.Once
 }
 
-func (f *fakeRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error) {
+func (f *fakeRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error) {
 	if f.enteredCh != nil {
 		f.entered.Do(func() { close(f.enteredCh) })
 	}
@@ -33,14 +33,14 @@ func (f *fakeRankings) Execute(ctx context.Context, req usecases.GetRankingsRequ
 		select {
 		case <-f.blockCh:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return usecases.RankingsResult{}, ctx.Err()
 		}
 	}
 	if f.delay > 0 {
 		select {
 		case <-time.After(f.delay):
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return usecases.RankingsResult{}, ctx.Err()
 		}
 	}
 	tf := req.Timeframe.String()
@@ -48,9 +48,10 @@ func (f *fakeRankings) Execute(ctx context.Context, req usecases.GetRankingsRequ
 	f.calls = append(f.calls, tf)
 	f.mu.Unlock()
 	if f.err != nil {
-		return nil, f.err
+		return usecases.RankingsResult{}, f.err
 	}
-	return f.byTF[tf], nil
+	rows := f.byTF[tf]
+	return usecases.RankingsResult{Results: rows, Sort: req.Sort}, nil
 }
 
 func (f *fakeRankings) callCount() int {

@@ -26,7 +26,7 @@ type stubRankings struct {
 	finishOnce sync.Once
 }
 
-func (s *stubRankings) Execute(ctx context.Context, _ usecases.GetRankingsRequest) ([]usecases.RankedResult, error) {
+func (s *stubRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error) {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
@@ -42,13 +42,13 @@ func (s *stubRankings) Execute(ctx context.Context, _ usecases.GetRankingsReques
 		select {
 		case <-s.blockCh:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return usecases.RankingsResult{}, ctx.Err()
 		}
 	}
 	if s.err != nil {
-		return nil, s.err
+		return usecases.RankingsResult{}, s.err
 	}
-	return s.rows, nil
+	return usecases.RankingsResult{Results: s.rows, Sort: req.Sort}, nil
 }
 
 func (s *stubRankings) callCount() int {
