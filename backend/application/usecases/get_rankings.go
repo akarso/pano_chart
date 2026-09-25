@@ -27,6 +27,7 @@ type RankingsUseCase interface {
 type RankingsResult struct {
 	Results       []RankedResult
 	RSAvailable   bool     // true only when ≥1 row was scored against a usable tape
+	RSDisabled    bool     // true when no tape provider is configured (RS intentionally off)
 	Sort          SortMode // effective sort (may fall back from leaders/laggards)
 	RequestedSort SortMode // sort from the request (before fallback)
 }
@@ -221,6 +222,7 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 	if len(symbols) == 0 {
 		return RankingsResult{
 			Results:       []RankedResult{},
+			RSDisabled:    g.tape == nil,
 			Sort:          effectiveSort(req.Sort, false),
 			RequestedSort: req.Sort,
 		}, nil
@@ -334,8 +336,8 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 	}
 
 	// 5. Relative strength vs composite tape (timestamp overlap).
-	rsOK := g.annotateRelativeStrength(ctx, req.Timeframe, results)
-	sortMode := effectiveSort(req.Sort, rsOK)
+	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results)
+	sortMode := effectiveSort(req.Sort, rs.available)
 
 	// 6. Sort by effective mode (metric desc, then symbol asc).
 	sortResults(results, sortMode)
@@ -360,7 +362,8 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 
 	return RankingsResult{
 		Results:       results,
-		RSAvailable:   rsOK,
+		RSAvailable:   rs.available,
+		RSDisabled:    rs.disabled,
 		Sort:          sortMode,
 		RequestedSort: req.Sort,
 	}, nil
@@ -631,29 +634,38 @@ func sortValue(r RankedResult, mode SortMode) float64 {
 	}
 }
 
+// rsAnnotateOutcome is the result of attempting relative-strength annotation.
+type rsAnnotateOutcome struct {
+	available bool // ≥1 row scored
+	disabled  bool // no tape provider configured
+}
+
 // annotateRelativeStrength fills RS fields from timestamp overlap with the tape.
-// Returns true only when a usable tape yielded at least one scored row.
-// Nil provider is silent (RS disabled by design); tape errors/short/zero-scored log.
-func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult) bool {
-	if g.tape == nil || len(results) == 0 {
-		return false
+// Nil provider → disabled (intentional). Tape errors/short/zero-scored log and
+// leave available=false.
+func (g *GetRankings) annotateRelativeStrength(ctx context.Context, tf domain.Timeframe, results []RankedResult) rsAnnotateOutcome {
+	if g.tape == nil {
+		return rsAnnotateOutcome{disabled: true}
+	}
+	if len(results) == 0 {
+		return rsAnnotateOutcome{}
 	}
 	tape, err := g.tape.CalculateTape(ctx, tf.String(), metrics.CompositeTapeWindow)
 	if err != nil {
 		log.Printf("[rankings] relative strength: tape unavailable: %v", err)
-		return false
+		return rsAnnotateOutcome{}
 	}
 	byTS := tapeCloseByTS(tape)
 	if len(byTS) < 2 {
 		log.Printf("[rankings] relative strength: tape too short (%d stamps)", len(byTS))
-		return false
+		return rsAnnotateOutcome{}
 	}
 	scored := applyRelativeStrength(results, byTS, g.rsFilter)
 	if scored == 0 {
 		log.Printf("[rankings] relative strength: usable tape but zero scored rows (overlap/exclude)")
-		return false
+		return rsAnnotateOutcome{}
 	}
-	return true
+	return rsAnnotateOutcome{available: true}
 }
 
 // signAdjustTrend negates the "Trend Predictability" score for symbols whose

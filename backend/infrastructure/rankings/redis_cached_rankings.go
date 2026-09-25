@@ -69,9 +69,10 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 		return usecases.RankingsResult{}, err
 	}
 
-	// 3. Store in Redis (best-effort). Never poison leaders/laggards keys with a
-	// fallback payload — that would stick for the full TTL after a tape miss.
-	if shouldCacheRankings(req.Sort, results) {
+	// 3. Store in Redis (best-effort). Never cache RS-unavailable payloads —
+	// a tape miss on sort=total would otherwise stick for the full TTL.
+	// RSDisabled (no tape provider) still caches score rankings as before.
+	if shouldCacheRankings(results) {
 		cacheItems := toCached(results)
 		data, marshalErr := json.Marshal(cacheItems)
 		if marshalErr == nil {
@@ -82,14 +83,11 @@ func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRanki
 	return results, nil
 }
 
-func shouldCacheRankings(requested usecases.SortMode, out usecases.RankingsResult) bool {
-	if out.RSAvailable {
+func shouldCacheRankings(out usecases.RankingsResult) bool {
+	if out.RSDisabled || len(out.Results) == 0 {
 		return true
 	}
-	if requested == usecases.SortByLeaders || requested == usecases.SortByLaggards {
-		return false
-	}
-	return true
+	return out.RSAvailable
 }
 
 func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
@@ -102,6 +100,7 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 
 type cachedRankingsPayload struct {
 	RSAvailable   bool                 `json:"rsAvailable"`
+	RSDisabled    bool                 `json:"rsDisabled,omitempty"`
 	Sort          string               `json:"sort"`
 	RequestedSort string               `json:"requestedSort,omitempty"`
 	Results       []cachedRankedResult `json:"results"`
@@ -153,6 +152,7 @@ func toCached(out usecases.RankingsResult) cachedRankingsPayload {
 	}
 	return cachedRankingsPayload{
 		RSAvailable:   out.RSAvailable,
+		RSDisabled:    out.RSDisabled,
 		Sort:          string(out.Sort),
 		RequestedSort: string(out.RequestedSort),
 		Results:       rows,
@@ -197,6 +197,7 @@ func fromCached(payload cachedRankingsPayload) (usecases.RankingsResult, error) 
 	return usecases.RankingsResult{
 		Results:       out,
 		RSAvailable:   payload.RSAvailable,
+		RSDisabled:    payload.RSDisabled,
 		Sort:          sortMode,
 		RequestedSort: reqSort,
 	}, nil

@@ -349,8 +349,9 @@ func TestCacheHitEmitsBadgeSignals(t *testing.T) {
 		},
 	}
 	uc := &fakeRankingsUC{result: usecases.RankingsResult{
-		Results: badged,
-		Sort:    usecases.SortByTotal,
+		Results:     badged,
+		RSAvailable: true,
+		Sort:        usecases.SortByTotal,
 	}}
 	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
 	cap := &capturingBadgeEmitter{}
@@ -476,5 +477,92 @@ func TestLeadersTapeMissDoesNotPoisonCache(t *testing.T) {
 				t.Fatalf("recovered out=%+v", out2)
 			}
 		})
+	}
+}
+
+func TestTotalTapeMissDoesNotPoisonCache(t *testing.T) {
+	for _, mode := range []usecases.SortMode{
+		usecases.SortByTotal, usecases.SortByGain, usecases.SortByTrend,
+	} {
+		mode := mode
+		t.Run(string(mode), func(t *testing.T) {
+			fr := &fakeRedis{store: map[string]string{}}
+			failing := &fakeRankingsUC{result: usecases.RankingsResult{
+				RSAvailable:   false,
+				Sort:          mode,
+				RequestedSort: mode,
+				Results: []usecases.RankedResult{{
+					Symbol:     domain.NewSymbolUnsafe("BTCUSDT"),
+					TotalScore: 0.9,
+				}},
+			}}
+			cache := NewRedisCachedRankings(failing, fr, time.Minute, "rankings_v2")
+			req := usecases.GetRankingsRequest{
+				Timeframe: domain.NewTimeframeUnsafe("1h"),
+				Sort:      mode,
+			}
+			out, err := cache.Execute(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.RSAvailable {
+				t.Fatalf("expected rsAvailable=false, got %+v", out)
+			}
+			key := "rankings_v2:1h:" + string(mode) + ":default"
+			if _, ok := fr.store[key]; ok {
+				t.Fatalf("must not SET %s when tape miss leaves RS unavailable", key)
+			}
+
+			rs, beta, rank := 0.04, 1.0, 1.0
+			live := &fakeRankingsUC{result: usecases.RankingsResult{
+				RSAvailable:   true,
+				Sort:          mode,
+				RequestedSort: mode,
+				Results: []usecases.RankedResult{{
+					Symbol:           domain.NewSymbolUnsafe("BTCUSDT"),
+					TotalScore:       0.9,
+					RelativeStrength: &rs,
+					Beta:             &beta,
+					RSRank:           &rank,
+				}},
+			}}
+			cache2 := NewRedisCachedRankings(live, fr, time.Minute, "rankings_v2")
+			out2, err := cache2.Execute(context.Background(), req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if live.called != 1 {
+				t.Fatalf("live next called=%d want 1", live.called)
+			}
+			if !out2.RSAvailable || out2.Results[0].RelativeStrength == nil {
+				t.Fatalf("recovered out=%+v", out2)
+			}
+		})
+	}
+}
+
+func TestRSDisabledStillCaches(t *testing.T) {
+	fr := &fakeRedis{store: map[string]string{}}
+	uc := &fakeRankingsUC{result: usecases.RankingsResult{
+		RSAvailable: false,
+		RSDisabled:  true,
+		Sort:        usecases.SortByTotal,
+		Results: []usecases.RankedResult{{
+			Symbol:     domain.NewSymbolUnsafe("BTCUSDT"),
+			TotalScore: 0.5,
+		}},
+	}}
+	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
+	req := usecases.GetRankingsRequest{
+		Timeframe: domain.NewTimeframeUnsafe("1h"),
+		Sort:      usecases.SortByTotal,
+	}
+	_, err := cache.Execute(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "rankings_v2:1h:total:default"
+	if _, ok := fr.store[key]; !ok {
+		t.Fatalf("RSDisabled must still SET %s", key)
 	}
 }
