@@ -303,9 +303,9 @@ func TestRSZeroScoredTransient(t *testing.T) {
 			t.Fatal("partial coverage must be transient")
 		}
 	})
-	t.Run("incompleteButPrecisionBelowFloor", func(t *testing.T) {
-		if rsZeroScoredTransient([]RankedResult{short}, tape, nil, 10, 10) {
-			t.Fatal("precision < need stays stable even with partial coverage")
+	t.Run("incompleteEvenIfPrecisionBelowFloor", func(t *testing.T) {
+		if !rsZeroScoredTransient([]RankedResult{short}, tape, nil, 10, 10) {
+			t.Fatal("incomplete board must stay transient; low precision ≠ complete rows")
 		}
 	})
 	t.Run("precisionBelowFloor", func(t *testing.T) {

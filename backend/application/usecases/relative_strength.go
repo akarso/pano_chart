@@ -102,18 +102,18 @@ func applyRelativeStrength(results []RankedResult, tape map[int64]float64, skip 
 }
 
 // rsZeroScoredTransient reports whether a usable tape with zero scored rows
-// should skip Redis caching. Incomplete candle coverage and capable-but-
-// unaligned rows may recover; precision below the floor, all-excluded, and
-// all-short history are treated as stable.
+// should skip Redis caching. Incomplete candle coverage always skips cache
+// (missing ranking rows are unrelated to the RS floor). Capable-but-unaligned
+// rows may recover; precision below the floor, all-excluded, and all-short
+// history on a complete board are treated as stable.
 func rsZeroScoredTransient(results []RankedResult, tape map[int64]float64, skip symbolSkipper, precision, universeN int) bool {
-	need := minOverlapRequired(len(tape))
-	// Config cannot score anyone — check before incomplete coverage so a
-	// single skipped candle fetch does not disable non-RS caching forever.
-	if precision > 0 && precision < need {
-		return false
-	}
+	// Incomplete board — do not cache even when precision cannot score RS.
 	if universeN > 0 && len(results) < universeN {
 		return true
+	}
+	need := minOverlapRequired(len(tape))
+	if precision > 0 && precision < need {
+		return false
 	}
 	eligible, capable := 0, 0
 	for i := range results {
