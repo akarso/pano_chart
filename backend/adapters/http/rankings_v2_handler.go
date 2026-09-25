@@ -21,32 +21,6 @@ func NewRankingsV2Handler(uc usecases.RankingsUseCase) *RankingsV2Handler {
 	return &RankingsV2Handler{useCase: uc}
 }
 
-type rankingsV2Response struct {
-	Timeframe  string                   `json:"timeframe"`
-	Sort       string                   `json:"sort"`
-	Page       int                      `json:"page"`
-	PageSize   int                      `json:"pageSize"`
-	TotalItems int                      `json:"totalItems"`
-	TotalPages int                      `json:"totalPages"`
-	Precision  int                      `json:"precision"`
-	Results    []rankedResultV2Response `json:"results"`
-}
-
-type rankedResultV2Response struct {
-	Symbol             string             `json:"symbol"`
-	TotalScore         float64            `json:"totalScore"`
-	Percentile         float64            `json:"percentile"`
-	Scores             map[string]float64 `json:"scores"`
-	Volume             float64            `json:"volume"`
-	Sparkline          []float64          `json:"sparkline"`
-	TrendPercentile    float64            `json:"trendPercentile"`
-	SidewaysPercentile float64            `json:"sidewaysPercentile"`
-	GainPercentile     float64            `json:"gainPercentile"`
-	MaxPercentile      float64            `json:"maxPercentile"`
-	DominantComponent  string             `json:"dominantComponent"`
-	BadgeComponent     string             `json:"badgeComponent"`
-}
-
 func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// --- Validate timeframe (required) ---
 	tfStr := r.URL.Query().Get("timeframe")
@@ -94,11 +68,12 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Sort:         sortMode,
 		SidewaysAlgo: sidewaysAlgo,
 	}
-	results, err := h.useCase.Execute(r.Context(), req)
+	out, err := h.useCase.Execute(r.Context(), req)
 	if err != nil {
 		writeRankingsError(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	results := out.Results
 
 	// --- Filter by symbols when requested ---
 	if symbolFilter != nil {
@@ -129,22 +104,9 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pageSlice := results[start:end]
 
 	// --- Build response ---
-	respResults := make([]rankedResultV2Response, 0, len(pageSlice))
-	for _, r := range pageSlice {
-		respResults = append(respResults, rankedResultV2Response{
-			Symbol:             r.Symbol.String(),
-			TotalScore:         r.TotalScore,
-			Percentile:         r.Percentile,
-			Scores:             r.Scores,
-			Volume:             r.Volume,
-			Sparkline:          r.Sparkline,
-			TrendPercentile:    r.TrendPercentile,
-			SidewaysPercentile: r.SidewaysPercentile,
-			GainPercentile:     r.GainPercentile,
-			MaxPercentile:      r.MaxPercentile,
-			DominantComponent:  r.DominantComponent,
-			BadgeComponent:     r.BadgeComponent,
-		})
+	respResults := make([]RankedResultV2Response, 0, len(pageSlice))
+	for _, row := range pageSlice {
+		respResults = append(respResults, RankedResultToV2(row))
 	}
 
 	precision := 0
@@ -152,15 +114,17 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		precision = len(results[0].Sparkline)
 	}
 
-	resp := rankingsV2Response{
-		Timeframe:  tfStr,
-		Sort:       string(sortMode),
-		Page:       page,
-		PageSize:   pageSize,
-		TotalItems: totalItems,
-		TotalPages: totalPages,
-		Precision:  precision,
-		Results:    respResults,
+	resp := RankingsV2Response{
+		Timeframe:     tfStr,
+		Sort:          string(out.Sort),
+		RequestedSort: string(out.RequestedSort),
+		RSAvailable:   out.RSAvailable,
+		Page:          page,
+		PageSize:      pageSize,
+		TotalItems:    totalItems,
+		TotalPages:    totalPages,
+		Precision:     precision,
+		Results:       respResults,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -169,7 +133,7 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parsePositiveIntOrDefault parses a string to a positive int, returning def on failure or <=0.
+// ParsePositiveIntOrDefault parses a string to a positive int, returning def on failure or <=0.
 func ParsePositiveIntOrDefault(s string, def int) int {
 	if s == "" {
 		return def

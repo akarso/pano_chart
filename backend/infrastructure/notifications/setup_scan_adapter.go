@@ -16,7 +16,7 @@ var _ appnotify.SetupProvider = (*SetupScanAdapter)(nil)
 
 // RankingsProvider returns pre-scored symbols (typically cached).
 type RankingsProvider interface {
-	Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error)
+	Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error)
 }
 
 // SetupScanAdapter wraps the setup service and uses pre-cached rankings to
@@ -42,13 +42,14 @@ func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (set
 		return setup.SetupScores{}, err
 	}
 
-	results, err := a.rankings.Execute(ctx, usecases.GetRankingsRequest{
+	out, err := a.rankings.Execute(ctx, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		return setup.SetupScores{}, err
 	}
+	results := out.Results
 
 	n := scanLimit
 	if len(results) < n {

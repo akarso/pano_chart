@@ -1,4 +1,5 @@
 .idea
 .vscode
 panocharts-firebase-adminsdk-fbsvc-a70b564724.json
+backend/api
 backend/cmd/api/pano_chart_server
