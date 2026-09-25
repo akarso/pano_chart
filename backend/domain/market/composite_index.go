@@ -6,11 +6,12 @@ type IndexPoint struct {
 	Value     float64
 }
 
-// CompositeIndex is a normalized market index derived from all scanned symbols.
-// Values are rebased to 100 at the first candle, so 101 ≈ market +1%.
+// CompositeIndex is a normalized market index derived from scanned symbols.
+// Values start at 100; subsequent points compound aggregated log-returns
+// (PR-095), so 101 ≈ +1% from the prior bar on the chosen path.
 //
-// Points is the equal-weight median path (outlier-resistant).
-// VolumeWeightedPoints is the quote-volume-weighted mean path (money-flow weighted).
+// Points is the equal-weight median of log-returns (outlier-resistant).
+// VolumeWeightedPoints is the quote-volume-weighted mean of log-returns.
 // Either slice may be empty when insufficient data exists for that variant.
 type CompositeIndex struct {
 	Timeframe            string

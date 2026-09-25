@@ -373,9 +373,20 @@ func main() {
 	candleProvider := market.NewCompositeCandleProvider(
 		cachedUniverse, candleRepo, exchangeInfoURL, tickerURL,
 	)
-	compositeService := metrics.NewCompositeIndexService(candleProvider, rankingWorkers)
+	compositeFilter := metrics.DefaultSymbolFilter()
+	if cfg := scoring.GetConfig(); cfg != nil {
+		comp := scoring.EffectiveComposite(cfg.Composite)
+		f, err := metrics.SymbolFilterFromConfig(comp.Exclude, comp.ExcludePattern)
+		if err != nil {
+			log.Fatalf("[main] composite exclude_pattern: %v", err)
+		}
+		compositeFilter = f
+	}
+	compositeService := metrics.NewCompositeIndexServiceFiltered(
+		candleProvider, rankingWorkers, compositeFilter,
+	)
 	compositeCacheTTL := 3 * time.Minute
-	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite_v2")
+	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite_v3")
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 

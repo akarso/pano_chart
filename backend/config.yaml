@@ -88,3 +88,16 @@ api_keys:
   financeflow:
     - name: "Finance flow API"
       key: ""   # set FINANCEFLOW_API_KEY in the environment instead — never commit a real key here
+
+# PR-095: symbols skipped before composite candle fan-out (stables / wrappers).
+composite:
+  exclude:
+    - USDCUSDT
+    - FDUSDUSDT
+    - TUSDUSDT
+    - WBTCUSDT
+    - WBETHUSDT
+    - DAIUSDT
+    - EURUSDT
+  # Base starts with USD or EUR (does not match BTCUSDT).
+  exclude_pattern: "^(USD|EUR)"
