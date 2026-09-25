@@ -470,5 +470,183 @@ void main() {
         expect(vm.state.items[0].symbol, 'BTCUSDT');
       });
     });
+
+    group('leaders and laggards sort', () {
+      test('rsSortFellBack is false before any response', () {
+        fakeGetOverview = _FakeGetOverview(results: []);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        expect(vm.state.sort, 'leaders');
+        expect(vm.state.effectiveSort, isEmpty);
+        expect(vm.state.rsSortFellBack, false);
+      });
+
+      test('leaders sorts by rs descending with nulls last', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
+              OverviewItem(symbol: 'SKIPUSDT'),
+              OverviewItem(symbol: 'HIUSDT', rs: 0.05),
+              OverviewItem(symbol: 'LOWUSDT', rs: -0.02),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+
+        expect(vm.state.rsAvailable, true);
+        expect(vm.state.effectiveSort, 'leaders');
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['HIUSDT', 'MIDUSDT', 'LOWUSDT', 'SKIPUSDT'],
+        );
+      });
+
+      test('laggards sorts by rs ascending with nulls last', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'laggards',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
+              OverviewItem(symbol: 'SKIPUSDT'),
+              OverviewItem(symbol: 'HIUSDT', rs: 0.05),
+              OverviewItem(symbol: 'LOWUSDT', rs: -0.02),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('laggards');
+        await vm.loadInitial('1h');
+
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['LOWUSDT', 'MIDUSDT', 'HIUSDT', 'SKIPUSDT'],
+        );
+      });
+
+      test('leaders fallback keeps backend total order not A-Z', () async {
+        // Backend fell back to total — items already ordered by totalScore.
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+              OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
+              OverviewItem(symbol: 'MMUSDT', totalScore: 0.1),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+
+        expect(vm.state.rsAvailable, false);
+        expect(vm.state.rsSortFellBack, true);
+        expect(vm.state.effectiveSort, 'total');
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['ZZUSDT', 'AAUSDT', 'MMUSDT'],
+        );
+      });
+
+      test('equal rs ties break by symbol', () {
+        final a = const OverviewItem(symbol: 'BBBUSDT', rs: 0.01);
+        final b = const OverviewItem(symbol: 'AAAUSDT', rs: 0.01);
+        // Ascending symbol: AAA before BBB.
+        expect(
+          OverviewViewModel.compareRsNullsLast(a, b, descending: true),
+          greaterThan(0),
+        );
+        expect(
+          OverviewViewModel.compareRsNullsLast(b, a, descending: true),
+          lessThan(0),
+        );
+      });
+
+      test('favourites merge does not promote fallback board', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+              OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
+            ],
+          ),
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'FAVUSDT', totalScore: 0.2, rs: 0.99),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+        expect(vm.state.rsAvailable, false);
+        expect(vm.state.rsSortFellBack, true);
+
+        await vm.loadMissingFavourites('1h', {'FAVUSDT'});
+
+        expect(vm.state.rsAvailable, false);
+        expect(vm.state.effectiveSort, 'total');
+        expect(vm.state.rsSortFellBack, true);
+        // Backend total order preserved; favourite appended without RS re-sort.
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['ZZUSDT', 'AAUSDT', 'FAVUSDT'],
+        );
+      });
+
+      test('loadNext does not promote rsAvailable from a later page', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: true,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+              OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
+            ],
+          ),
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'HIUSDT', totalScore: 0.2, rs: 0.5),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+        expect(vm.state.rsAvailable, false);
+
+        await vm.loadNext('1h');
+
+        expect(vm.state.rsAvailable, false);
+        expect(vm.state.effectiveSort, 'total');
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['ZZUSDT', 'AAUSDT', 'HIUSDT'],
+        );
+      });
+    });
   });
 }

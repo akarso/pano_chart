@@ -6,6 +6,8 @@ void main() {
     final json = {
       'timeframe': '1h',
       'sort': 'total',
+      'requestedSort': 'leaders',
+      'rsAvailable': true,
       'page': 1,
       'pageSize': 30,
       'totalItems': 2,
@@ -19,6 +21,10 @@ void main() {
           'volume': 5000000.0,
           'sparkline': [42000.0, 42100.0, 41900.0],
           'badgeComponent': 'trend',
+          'sidewaysPercentile': 0.9,
+          'rs': 0.032,
+          'beta': 1.2,
+          'rsRank': 1.0,
         },
         {
           'symbol': 'ETHUSDT',
@@ -34,6 +40,8 @@ void main() {
 
     expect(dto.timeframe, '1h');
     expect(dto.sort, 'total');
+    expect(dto.rsAvailable, true);
+    expect(dto.requestedSort, 'leaders');
     expect(dto.page, 1);
     expect(dto.pageSize, 30);
     expect(dto.totalItems, 2);
@@ -49,12 +57,57 @@ void main() {
     expect(dto.results[0].volume, 5000000.0);
     expect(dto.results[0].sparkline, [42000.0, 42100.0, 41900.0]);
     expect(dto.results[0].badgeComponent, 'trend');
+    expect(dto.results[0].rs, 0.032);
+    expect(dto.results[0].beta, 1.2);
+    expect(dto.results[0].rsRank, 1.0);
 
     expect(dto.results[1].symbol, 'ETHUSDT');
     expect(dto.results[1].totalScore, -1.5);
     expect(dto.results[1].scores.trend, -0.5);
     expect(dto.results[1].sparkline, [3200.0, 3180.0]);
     expect(dto.results[1].badgeComponent, '');
+    expect(dto.results[1].rs, isNull);
+  });
+
+  test('RankingsResponseDto_rsAvailableDefaultsFalse', () {
+    final json = {
+      'timeframe': '1h',
+      'sort': 'total',
+      'page': 1,
+      'pageSize': 30,
+      'totalItems': 0,
+      'totalPages': 0,
+      'results': [],
+    };
+    final dto = RankingsResponseDto.fromJson(json);
+    expect(dto.rsAvailable, false);
+  });
+
+  test('RankingsResponseDto_parsesCoercedRsAvailable', () {
+    final dto = RankingsResponseDto.fromJson({
+      'timeframe': '1h',
+      'sort': 'total',
+      'page': 1,
+      'pageSize': 1,
+      'totalItems': 0,
+      'totalPages': 0,
+      'rsAvailable': 'true',
+      'results': [],
+    });
+    expect(dto.rsAvailable, true);
+    expect(parseJsonBool(1), true);
+    expect(parseJsonBool('0'), false);
+  });
+
+  test('RankingItemDto_parsesRealZeroRs', () {
+    final dto = RankingItemDto.fromJson({
+      'symbol': 'FLATUSDT',
+      'totalScore': 0,
+      'rs': 0,
+      'beta': 1.0,
+    });
+    expect(dto.rs, 0.0);
+    expect(dto.beta, 1.0);
   });
 
   test('RankingItemDto_handlesMissingScoresAndSparkline', () {

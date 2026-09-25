@@ -30,31 +30,32 @@ class GetRankingsImpl implements GetOverview {
     );
 
     final items = dto.results
-      .map((e) => OverviewItem(
-          symbol: e.symbol,
-          totalScore: e.totalScore,
-          trendScore: e.scores.trend,
-          sidewaysScore: e.scores.sideways,
-          gainScore: e.scores.gain,
-          compressionScore: e.scores.compression,
-          breakoutUpScore: e.scores.breakoutUp,
-          breakoutDownScore: e.scores.breakoutDown,
-          volume: e.volume,
-          sparkline: e.sparkline,
-          badgeComponent: e.badgeComponent,
-          sidewaysPercentile: e.sidewaysPercentile,
-        ))
-      .toList();
-
-    // Log each OverviewItem for debugging
-    for (final item in items) {
-      print('[OverviewItem] symbol: ${item.symbol}, totalScore: ${item.totalScore}, trend: ${item.trendScore}, sideways: ${item.sidewaysScore}, gain: ${item.gainScore}, volume: ${item.volume}, sidewaysPercentile: ${item.sidewaysPercentile}, badgeComponent: ${item.badgeComponent}');
-    }
+        .map((e) => OverviewItem(
+              symbol: e.symbol,
+              totalScore: e.totalScore,
+              trendScore: e.scores.trend,
+              sidewaysScore: e.scores.sideways,
+              gainScore: e.scores.gain,
+              compressionScore: e.scores.compression,
+              breakoutUpScore: e.scores.breakoutUp,
+              breakoutDownScore: e.scores.breakoutDown,
+              volume: e.volume,
+              sparkline: e.sparkline,
+              badgeComponent: e.badgeComponent,
+              sidewaysPercentile: e.sidewaysPercentile,
+              rs: e.rs,
+              beta: e.beta,
+              rsRank: e.rsRank,
+            ))
+        .toList();
 
     return OverviewResult(
       items: items,
       hasMore: dto.page < dto.totalPages,
       snapshot: null,
+      rsAvailable: dto.rsAvailable,
+      effectiveSort: dto.sort,
+      requestedSort: dto.requestedSort,
     );
   }
 }

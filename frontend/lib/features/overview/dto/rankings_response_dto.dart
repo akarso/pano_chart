@@ -1,3 +1,14 @@
+bool parseJsonBool(dynamic v, {bool fallback = false}) {
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.toLowerCase();
+    if (s == 'true' || s == '1') return true;
+    if (s == 'false' || s == '0') return false;
+  }
+  return fallback;
+}
+
 /// DTO for the scores breakdown in a ranking item.
 class RankingScoresDto {
   final double trend;
@@ -37,6 +48,9 @@ class RankingItemDto {
   final List<double> sparkline;
   final String badgeComponent;
   final double sidewaysPercentile;
+  final double? rs;
+  final double? beta;
+  final double? rsRank;
 
   const RankingItemDto({
     required this.symbol,
@@ -46,6 +60,9 @@ class RankingItemDto {
     required this.sparkline,
     required this.badgeComponent,
     required this.sidewaysPercentile,
+    this.rs,
+    this.beta,
+    this.rsRank,
   });
 
   factory RankingItemDto.fromJson(Map<String, dynamic> json) {
@@ -61,6 +78,9 @@ class RankingItemDto {
           const [],
       badgeComponent: json['badgeComponent'] as String? ?? '',
       sidewaysPercentile: (json['sidewaysPercentile'] as num?)?.toDouble() ?? 0.0,
+      rs: (json['rs'] as num?)?.toDouble(),
+      beta: (json['beta'] as num?)?.toDouble(),
+      rsRank: (json['rsRank'] as num?)?.toDouble(),
     );
   }
 }
@@ -75,6 +95,8 @@ class RankingsResponseDto {
   final int totalPages;
   final int precision;
   final List<RankingItemDto> results;
+  final bool rsAvailable;
+  final String? requestedSort;
 
   const RankingsResponseDto({
     required this.timeframe,
@@ -85,6 +107,8 @@ class RankingsResponseDto {
     required this.totalPages,
     required this.precision,
     required this.results,
+    this.rsAvailable = false,
+    this.requestedSort,
   });
 
   factory RankingsResponseDto.fromJson(Map<String, dynamic> json) {
@@ -99,6 +123,8 @@ class RankingsResponseDto {
       results: (json['results'] as List)
           .map((e) => RankingItemDto.fromJson(e as Map<String, dynamic>))
           .toList(),
+      rsAvailable: parseJsonBool(json['rsAvailable']),
+      requestedSort: json['requestedSort'] as String?,
     );
   }
 }

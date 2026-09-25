@@ -8,11 +8,13 @@ void main() {
     final api = _FakeRankingsApi(const RankingsResponseDto(
       timeframe: '1h',
       sort: 'total',
+      requestedSort: 'leaders',
       page: 1,
       pageSize: 30,
       totalItems: 2,
       totalPages: 1,
       precision: 30,
+      rsAvailable: true,
       results: [
         RankingItemDto(
           symbol: 'BTCUSDT',
@@ -22,6 +24,9 @@ void main() {
           sparkline: [42000.0, 42100.0],
           badgeComponent: 'trend',
           sidewaysPercentile: 0.85,
+          rs: 0.032,
+          beta: 1.2,
+          rsRank: 1.0,
         ),
         RankingItemDto(
           symbol: 'ETHUSDT',
@@ -39,6 +44,7 @@ void main() {
     final result = await impl.call(timeframe: '1h', page: 1, sort: 'total');
 
     expect(result.items.length, 2);
+    expect(result.rsAvailable, true);
     expect(result.items[0].symbol, 'BTCUSDT');
     expect(result.items[0].totalScore, 2.75);
     expect(result.items[0].trendScore, 1.0);
@@ -50,10 +56,16 @@ void main() {
     expect(result.items[0].compressionScore, 0.3);
     expect(result.items[0].breakoutUpScore, 0.1);
     expect(result.items[0].breakoutDownScore, 0.05);
+    expect(result.items[0].rs, 0.032);
+    expect(result.items[0].beta, 1.2);
+    expect(result.items[0].rsRank, 1.0);
+    expect(result.effectiveSort, 'total');
+    expect(result.requestedSort, 'leaders');
 
     expect(result.items[1].symbol, 'ETHUSDT');
     expect(result.items[1].trendScore, -0.5);
     expect(result.items[1].badgeComponent, '');
+    expect(result.items[1].rs, isNull);
   });
 
   test('GetRankingsImpl_hasMoreWhenPageLessThanTotalPages', () async {

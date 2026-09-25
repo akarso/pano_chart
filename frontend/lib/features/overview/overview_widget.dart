@@ -54,6 +54,7 @@ import '../scorecards/reliability_chip.dart';
 import '../volatility/http_volatility_api.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
+import 'relative_strength_chip.dart';
 
 /// Overview widget that displays a scrollable grid of market sparklines.
 ///
@@ -819,27 +820,8 @@ class OverviewWidgetState extends State<OverviewWidget>
     );
   }
 
-  /// Display label for a sort value.
-  static String _sortLabel(String sort) {
-    switch (sort) {
-      case 'sideways':
-        return 'Sideways';
-      case 'compression':
-        return 'Compression';
-      case 'breakout':
-        return 'Breakout';
-      case 'trend':
-        return 'Trend';
-      case 'gain':
-        return 'Gainers';
-      case 'losers':
-        return 'Losers';
-      case 'volume':
-        return 'Volume';
-      default:
-        return sort;
-    }
-  }
+  /// Display label for the active sort. Delegates to [overviewSortMenuLabel].
+  static String _sortLabel(OverviewState state) => overviewSortMenuLabel(state);
 
   Widget _buildSettingsOverlay(OverviewState state) {
     final screenWidth = MediaQuery.of(context).size.width;
@@ -935,6 +917,14 @@ class OverviewWidgetState extends State<OverviewWidget>
                           child: Text('Breakout'),
                         ),
                         PopupMenuItem(value: 'trend', child: Text('Trend')),
+                        PopupMenuItem(
+                          value: 'leaders',
+                          child: Text('Leaders (vs market)'),
+                        ),
+                        PopupMenuItem(
+                          value: 'laggards',
+                          child: Text('Laggards (vs market)'),
+                        ),
                         const PopupMenuDivider(),
                       ],
                       PopupMenuItem(value: 'gain', child: Text('Gainers')),
@@ -945,7 +935,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          _sortLabel(state.sort),
+                          _sortLabel(state),
                           style: TextStyle(
                             fontSize: ctrlFontSize,
                             color: Colors.white,
@@ -1602,7 +1592,13 @@ class OverviewWidgetState extends State<OverviewWidget>
   static const _weakSignalThreshold = 0.30;
 
   /// Sorts where the weak-signal disclaimer is irrelevant (not regime-based).
-  static const _nonRegimeSorts = {'volume', 'gain', 'losers'};
+  static const _nonRegimeSorts = {
+    'volume',
+    'gain',
+    'losers',
+    'leaders',
+    'laggards',
+  };
 
   Widget _buildWeakSignalBanner(List<OverviewItem> items, String sort) {
     if (items.isEmpty) return const SizedBox.shrink();
@@ -1772,6 +1768,8 @@ class OverviewWidgetState extends State<OverviewWidget>
                     flashDotProgress: _flashProgress[item.symbol],
                     flashDotColor: _flashColors[item.symbol],
                     reliability: _badgeReliability(item),
+                    rsAvailable: state.rsAvailable,
+                    showRsChip: _isProUser,
                   ),
                 );
                 return child;
@@ -1953,6 +1951,8 @@ class _OverviewGridItem extends StatelessWidget {
   final double? flashDotProgress;
   final Color? flashDotColor;
   final ScorecardSummaryItem? reliability;
+  final bool rsAvailable;
+  final bool showRsChip;
 
   const _OverviewGridItem({
     required this.item,
@@ -1965,6 +1965,8 @@ class _OverviewGridItem extends StatelessWidget {
     this.flashDotProgress,
     this.flashDotColor,
     this.reliability,
+    this.rsAvailable = false,
+    this.showRsChip = false,
   });
 
   @override
@@ -2065,6 +2067,17 @@ class _OverviewGridItem extends StatelessWidget {
                     },
                   ),
                 ),
+                if (showRsChip)
+                  Positioned(
+                    right: pad + 4,
+                    bottom: pad,
+                    child: RelativeStrengthChip(
+                      rsAvailable: rsAvailable,
+                      rs: item.rs,
+                      beta: item.beta,
+                      dense: true,
+                    ),
+                  ),
               ],
             );
           },
