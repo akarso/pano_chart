@@ -148,7 +148,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 	// ---- 1. Participation breadth (per-token score mix) — metrics only ----
 	var participation mkt.Breadth
 	for _, e := range evaluations {
-		w := scoreWeights(e)
+		w := ScoreWeights(e)
 		participation.Sideways += w.Sideways
 		participation.Compression += w.Compression
 		participation.Expansion += w.Expansion
@@ -190,7 +190,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		// Legacy fallback: participation + health dampening.
 		var healthyTrendCount, effectiveSum, breakdowns float64
 		for _, e := range evaluations {
-			w := scoreWeights(e)
+			w := ScoreWeights(e)
 			if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
 				continue
 			}

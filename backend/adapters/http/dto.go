@@ -35,6 +35,11 @@ type RankedResultV2Response struct {
 	RelativeStrength   *float64           `json:"rs,omitempty"`
 	Beta               *float64           `json:"beta,omitempty"`
 	RSRank             *float64           `json:"rsRank,omitempty"`
+
+	// Multi-timeframe alignment overlay (PR-099); set only when the request
+	// asked for it (`?mtf=1`) and the store had a usable stack for this row.
+	Alignment    *float64 `json:"alignment,omitempty"`
+	AlignedState *string  `json:"alignedState,omitempty"`
 }
 
 // RankedResultToV2 maps a use-case row to the HTTP DTO.

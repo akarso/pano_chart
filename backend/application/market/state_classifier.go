@@ -7,13 +7,16 @@ import (
 	mkt "pano_chart/backend/domain/market"
 )
 
-// scoreWeights returns a proportional distribution across regimes for a single
+// ScoreWeights returns a proportional distribution across regimes for a single
 // symbol. The raw scores are normalised so they sum to 1, giving each token a
 // continuous "vote" rather than a binary bucket.
 //
 // TrendScore may be sign-adjusted (negative = downtrend) by the rankings
 // pipeline, so we use the absolute value for proportional weighting.
-func scoreWeights(e domain.EvaluationSnapshot) mkt.Breadth {
+//
+// Exported (PR-099) so application/mtf can build the same four-way structure
+// from a stored EvaluationSnapshot without recomputing it.
+func ScoreWeights(e domain.EvaluationSnapshot) mkt.Breadth {
 	breakout := math.Max(e.BreakoutUpScore, e.BreakoutDownScore)
 	compression := e.CompressionScore
 	trend := math.Abs(e.TrendScore)

@@ -176,22 +176,10 @@ func dominantNonTrend(b mkt.Breadth) (mkt.State, float64) {
 	return dominant, maxWeight
 }
 
+// dominantFromBreadth is a thin alias for mkt.DominantOf, kept so existing
+// call sites in this file don't need the mkt. qualifier everywhere.
 func dominantFromBreadth(b mkt.Breadth) (mkt.State, float64) {
-	dominant := mkt.StateSideways
-	maxWeight := b.Sideways
-	if b.Trend >= maxWeight {
-		dominant = mkt.StateTrend
-		maxWeight = b.Trend
-	}
-	if b.Compression >= maxWeight {
-		dominant = mkt.StateCompression
-		maxWeight = b.Compression
-	}
-	if b.Expansion >= maxWeight {
-		dominant = mkt.StateExpansion
-		maxWeight = b.Expansion
-	}
-	return dominant, maxWeight
+	return mkt.DominantOf(b)
 }
 
 func closesFromSeries(series domain.CandleSeries) []float64 {

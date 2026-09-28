@@ -25,6 +25,7 @@ import (
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
+	"pano_chart/backend/application/mtf"
 	apprisk "pano_chart/backend/application/risk"
 	appscoring "pano_chart/backend/application/scoring"
 	"pano_chart/backend/application/setups"
@@ -361,6 +362,10 @@ func main() {
 	// Always constructed so Market Pulse and setups can read; the refresher
 	// below populates it when PC_EVAL_REFRESH is enabled (default on).
 	evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+
+	// --- Multi-timeframe regime stack (PR-099) — reads the same store, no
+	// candle fetch or rescoring ---
+	mtfService := mtf.NewService(evalStore)
 
 	// --- Market state service (canonical regime/breadth classification —
 	// see PR-073: this replaced a second, independently-evolved softmax
@@ -736,9 +741,15 @@ func main() {
 		}
 	})
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
-	mux.Handle("/api/rankings", adhttp.NewRankingsV2Handler(rankingsUC))
+	rankingsHandler := adhttp.NewRankingsV2Handler(rankingsUC)
+	rankingsHandler.SetMTFCalculator(mtfService)
+	mux.Handle("/api/rankings", rankingsHandler)
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
-	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
+	symbolRouter := adhttp.NewSymbolRouter(
+		adhttp.NewSymbolDetailHandler(getSymbolDetailUC),
+		adhttp.NewMTFHandler(mtfService),
+	)
+	mux.Handle("/api/symbol/", symbolRouter)
 	mux.Handle("/api/v1/fear-greed", adhttp.NewFearGreedHandler(fearGreedUC))
 	mux.Handle("/api/news", adhttp.NewNewsHandler(newsUC))
 	mux.Handle("/api/news/", adhttp.NewNewsHandler(newsUC))
