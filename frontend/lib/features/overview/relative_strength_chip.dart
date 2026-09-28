@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Bottom-right tile chip: `+3.2% vs mkt` (or compact `%` on narrow tiles).
+/// Bottom-right tile chip: `+3.2% vs mkt` (or compact `+3.2% RS` on narrow tiles).
 ///
 /// Hidden unless [rsAvailable] and [rs] are both set (real `0` still shows).
 /// Paint stays compact; a small translucent pad expands the tap target without
@@ -22,13 +22,14 @@ class RelativeStrengthChip extends StatelessWidget {
   });
 
   /// Formats log excess return as a percent label (`rs × 100`, one decimal).
-  /// [compact] drops the ` vs mkt` suffix for narrow tiles.
+  /// [compact] uses a short ` RS` suffix so the chip stays distinct from the
+  /// adjacent price-change percentage on narrow tiles.
   static String labelFor(double rs, {bool compact = false}) {
     final pct = rs * 100;
     final rounded = pct.toStringAsFixed(1);
     final isZero = rounded == '0.0' || rounded == '-0.0';
     final body = isZero ? '0.0%' : '${pct > 0 ? '+' : ''}$rounded%';
-    return compact ? body : '$body vs mkt';
+    return compact ? '$body RS' : '$body vs mkt';
   }
 
   /// Chip color aligned with [labelFor] (grey when the label is neutral zero).
