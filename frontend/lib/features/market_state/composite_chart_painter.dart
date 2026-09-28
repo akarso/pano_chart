@@ -10,6 +10,37 @@ int scoredWindowStart(int pointsLength, int windowBars) {
   return pointsLength - windowBars;
 }
 
+/// Fractional index of [timestamp] within the (ascending) [axis] timestamps,
+/// via linear interpolation between the bracketing pair — e.g. `1.5` sits
+/// halfway between `axis[1]` and `axis[2]`. A timestamp outside `axis`'s
+/// range extrapolates using the nearest segment's slope. Requires
+/// `axis.length >= 2`.
+double fractionalIndexFor(List<int> axis, int timestamp) {
+  final n = axis.length;
+  if (timestamp <= axis[0]) {
+    final span = axis[1] - axis[0];
+    return span == 0 ? 0.0 : (timestamp - axis[0]) / span;
+  }
+  if (timestamp >= axis[n - 1]) {
+    final span = axis[n - 1] - axis[n - 2];
+    return span == 0
+        ? (n - 1).toDouble()
+        : (n - 1) + (timestamp - axis[n - 1]) / span;
+  }
+  var lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    final mid = (lo + hi) ~/ 2;
+    if (axis[mid] <= timestamp) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  final span = axis[hi] - axis[lo];
+  final frac = span == 0 ? 0.0 : (timestamp - axis[lo]) / span;
+  return lo + frac;
+}
+
 /// Draws the Market Composite Index with optional scored-window dimming and
 /// an OLS regression overlay on the last [windowBars] points (PR-116).
 class CompositeChartPainter extends CustomPainter {
@@ -164,16 +195,15 @@ class CompositeChartPainter extends CustomPainter {
     canvas.restore();
   }
 
-  /// Plots [overlayPoints] against [points]' real timestamp span (not raw
-  /// index position) — the overlay series is a separate fetch and is not
-  /// guaranteed to share [points]' length, so index-based placement would
-  /// stretch/compress it and misrepresent when its moves actually happened.
-  /// A degenerate main span (single timestamp) skips the overlay: there is
-  /// no time axis to align it against.
+  /// Plots [overlayPoints] on the same horizontal axis [pointAt] uses for
+  /// the main line: evenly spaced *by index*, not by elapsed time. Mapping
+  /// the overlay by raw time span instead would put it at a different x
+  /// than the main line for the same instant whenever [points] has irregular
+  /// bar gaps (e.g. a missing candle) — [xFor] instead finds each overlay
+  /// timestamp's fractional position within [points]' own timestamp axis,
+  /// so both lines agree on where a given instant sits.
   void _paintOverlay(Canvas canvas, Size size) {
-    final mainStart = points.first.timestamp;
-    final mainSpan = points.last.timestamp - mainStart;
-    if (mainSpan <= 0) return;
+    final mainTimestamps = points.map((p) => p.timestamp).toList();
 
     final values = overlayPoints.map((p) => p.value).toList();
     var minV = values.reduce(math.min);
@@ -183,8 +213,11 @@ class CompositeChartPainter extends CustomPainter {
       range = 1.0;
       minV -= 0.5;
     }
-    double xFor(int timestamp) =>
-        ((timestamp - mainStart) / mainSpan) * size.width;
+    double xFor(int timestamp) {
+      final frac = fractionalIndexFor(mainTimestamps, timestamp);
+      return (frac / (mainTimestamps.length - 1)) * size.width;
+    }
+
     double yFor(double v) => size.height - ((v - minV) / range) * size.height;
 
     final paint = Paint()

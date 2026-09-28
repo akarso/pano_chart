@@ -184,9 +184,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
+    _applySectorRotation(_fetchSectorRotation());
     try {
       final tapeFuture = _fetchTapeComposite();
-      final sectorFuture = _fetchSectorRotation();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
@@ -202,7 +202,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       ];
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
-      final sectors = await sectorFuture;
       if (!mounted) return;
       int idx = 2;
       RegimeData? regime;
@@ -227,13 +226,26 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
-        _sectorData = sectors;
-        _pruneSectorSelectionIfMissing();
         _syncSeriesToRegimeSourceIfChanged();
       });
     } catch (_) {
       // Silently ignore — next tick will retry.
     }
+  }
+
+  /// Applies a resolved (possibly null, on failure or 404) sector rotation
+  /// response whenever it lands — decoupled from the primary load/refresh so
+  /// a slow optional fetch can never delay clearing the loading state or
+  /// applying the rest of the batch (production always wires this API, so
+  /// its up-to-15s timeout would otherwise show on every load).
+  void _applySectorRotation(Future<SectorRotationData?> sectorFuture) {
+    sectorFuture.then((sectors) {
+      if (!mounted) return;
+      setState(() {
+        _sectorData = sectors;
+        _pruneSectorSelectionIfMissing();
+      });
+    });
   }
 
   Future<void> _loadAll() async {
@@ -242,9 +254,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       _error = null;
     });
     _loadScorecards();
+    _applySectorRotation(_fetchSectorRotation());
     try {
       final tapeFuture = _fetchTapeComposite();
-      final sectorFuture = _fetchSectorRotation();
       final futures = <Future>[
         widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
@@ -260,7 +272,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       ];
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
-      final sectors = await sectorFuture;
       if (!mounted) return;
       int idx = 2;
       RegimeData? regime;
@@ -285,8 +296,6 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         _regimeData = regime;
         _transitionData = trans;
         _regimeHistoryData = history;
-        _sectorData = sectors;
-        _pruneSectorSelectionIfMissing();
         _loading = false;
         _syncSeriesToRegimeSourceIfChanged();
       });
@@ -1142,6 +1151,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                     ),
                   ),
           ),
+          if (_selectedSectorId != null && data.hasVolumeWeighted) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Sector overlay uses the backend\'s own volume-weighted/'
+              'median path for that sector — it may not match the series '
+              'shown above',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ],
         ],
       ),
     );

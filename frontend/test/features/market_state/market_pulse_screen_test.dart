@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/features/market_state/composite_chart_painter.dart';
@@ -465,6 +467,72 @@ void main() {
     });
 
     testWidgets(
+        'a slow sector fetch does not delay clearing the loading spinner',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+          sectorRotationApi: _NeverCompleteSectorRotationApi(),
+        ),
+      ));
+      // The market/composite/regime fetches all resolve on the fake APIs'
+      // synchronous async paths, well before the sector fetch ever would.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('Market Composite Index'), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+    });
+
+    testWidgets(
+        'overlay series-mismatch caption shown only while a sector is selected '
+        'and the composite has a volume-weighted path',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(
+          _baseComposite(n: 20, withVolumeWeighted: true),
+        ),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      const caption = 'may not match the series shown above';
+      expect(find.textContaining(caption), findsNothing);
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(caption), findsOneWidget);
+
+      // Deselecting hides it again.
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(caption), findsNothing);
+    });
+
+    testWidgets(
+        'overlay series-mismatch caption stays hidden when the composite has '
+        'no volume-weighted path (both series are guaranteed median)',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(
+          _baseComposite(n: 20, withVolumeWeighted: false),
+        ),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('may not match the series shown above'),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
         'selection clears when the tapped sector disappears from a later response',
         (tester) async {
       final api = _StatefulSectorRotationApi([
@@ -790,6 +858,16 @@ class _FakeSectorRotationApi implements SectorRotationApi {
     int limit = sectorRotationLimit,
   }) async =>
       data;
+}
+
+class _NeverCompleteSectorRotationApi implements SectorRotationApi {
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) {
+    return Completer<SectorRotationData?>().future;
+  }
 }
 
 class _ThrowingSectorRotationApi implements SectorRotationApi {
