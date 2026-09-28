@@ -96,7 +96,7 @@ these terms.
 | **Composite (median)** | Equal-weight median of aligned log-returns, index from 100 | `CompositeIndex.Points` |
 | **Composite (volume-weighted)** | Quote-volume-weighted mean of aligned log-returns, index from 100 | `CompositeIndex.VolumeWeightedPoints` |
 | **Relative strength (RS)** | Symbol log-return minus tape log-return on shared timestamps (`rs`); also `beta`, `rsRank`, `rsAvailable` | Track C / PR-096 |
-| **Sector RS** | Sector composite log-return minus market return over the sector’s `[first, last]` timestamps (`rs` + `rsAvailable`); market tape from the same bar fetch | Track C / PR-098 |
+| **Sector RS** | Sector composite log-return minus market return over the clamped intersection of sector and market timestamps (`rs` + `rsAvailable`); market tape from the same bar fetch | Track C / PR-098 |
 | **Signal** | Any user-facing call the app makes at a point in time (badge, setup, regime, transition) | Track B |
 | **Outcome** | What happened after a signal over a fixed horizon | Track B |
 | **Hit rate** | Fraction of signals whose outcome met the success rule | Track B |

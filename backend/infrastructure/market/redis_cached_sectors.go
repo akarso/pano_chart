@@ -86,6 +86,12 @@ func (c *RedisCachedSectors) Calculate(
 		if err != nil {
 			return mkt.SectorIndexResult{}, err
 		}
+		// The candle fetch swallows per-symbol errors, including cancellation, so
+		// a fired deadline can still return a "successful" but incomplete result.
+		// Treat that as a failure rather than caching a partial universe.
+		if workCtx.Err() != nil {
+			return mkt.SectorIndexResult{}, workCtx.Err()
+		}
 		// Cache any non-empty payload, including rsAvailable:false rows —
 		// those are deterministic for the current bars.
 		if len(result.Sectors) > 0 {
