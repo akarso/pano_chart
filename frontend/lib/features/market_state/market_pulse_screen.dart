@@ -266,9 +266,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       _loading = true;
       _error = null;
       // Stale sector data (e.g. from a different timeframe) must not linger
-      // once a fresh load starts — the new fetch below will replace it.
+      // once a fresh load starts — the new fetch below will replace it. The
+      // selection itself is left alone: a plain refresh (same timeframe)
+      // should reinstate the same sector's overlay once the fresh response
+      // lands, not force a re-tap. `_pruneSectorSelectionIfMissing()` (run
+      // once that response arrives) still clears it if the sector is gone
+      // or no longer RS-available.
       _sectorData = null;
-      _selectedSectorId = null;
     });
     _loadScorecards();
     _applySectorRotation(_fetchSectorRotation(), generation);

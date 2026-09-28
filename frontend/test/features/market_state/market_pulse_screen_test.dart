@@ -520,6 +520,38 @@ void main() {
     });
 
     testWidgets(
+        'pull-to-refresh keeps the sector overlay when the sector is still '
+        'valid in the fresh response — no re-tap needed',
+        (tester) async {
+      final api = _StatefulSectorRotationApi([_baseSectors()]);
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: api,
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      CompositeChartPainter painterOf(WidgetTester t) => t
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+
+      // Pull-to-refresh gesture — same timeframe, no dropdown involved.
+      await tester.fling(
+        find.byType(RefreshIndicator),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+    });
+
+    testWidgets(
         'a slow sector fetch does not delay clearing the loading spinner',
         (tester) async {
       await tester.pumpWidget(MaterialApp(
