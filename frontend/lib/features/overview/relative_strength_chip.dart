@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Bottom-right tile chip: `+3.2% vs mkt`.
+/// Bottom-right tile chip: `+3.2% vs mkt` (or compact `%` on narrow tiles).
 ///
 /// Hidden unless [rsAvailable] and [rs] are both set (real `0` still shows).
 /// Paint stays compact; a small translucent pad expands the tap target without
@@ -10,6 +10,7 @@ class RelativeStrengthChip extends StatelessWidget {
   final double? rs;
   final double? beta;
   final bool dense;
+  final bool compactLabel;
 
   const RelativeStrengthChip({
     super.key,
@@ -17,17 +18,17 @@ class RelativeStrengthChip extends StatelessWidget {
     required this.rs,
     this.beta,
     this.dense = true,
+    this.compactLabel = false,
   });
 
   /// Formats log excess return as a percent label (`rs × 100`, one decimal).
-  static String labelFor(double rs) {
+  /// [compact] drops the ` vs mkt` suffix for narrow tiles.
+  static String labelFor(double rs, {bool compact = false}) {
     final pct = rs * 100;
     final rounded = pct.toStringAsFixed(1);
-    if (rounded == '0.0' || rounded == '-0.0') {
-      return '0.0% vs mkt';
-    }
-    final sign = pct > 0 ? '+' : '';
-    return '$sign$rounded% vs mkt';
+    final isZero = rounded == '0.0' || rounded == '-0.0';
+    final body = isZero ? '0.0%' : '${pct > 0 ? '+' : ''}$rounded%';
+    return compact ? body : '$body vs mkt';
   }
 
   /// Chip color aligned with [labelFor] (grey when the label is neutral zero).
@@ -43,7 +44,7 @@ class RelativeStrengthChip extends StatelessWidget {
     final value = rs;
     if (!rsAvailable || value == null) return const SizedBox.shrink();
     final fontSize = dense ? 8.0 : 11.0;
-    final label = labelFor(value);
+    final label = labelFor(value, compact: compactLabel);
     return Semantics(
       button: true,
       label: 'Relative strength $label',
@@ -53,7 +54,8 @@ class RelativeStrengthChip extends StatelessWidget {
         onTap: () => _showExplanation(context, value, beta),
         child: Padding(
           // Hit slop only — does not force a large painted box.
-          padding: const EdgeInsets.all(6),
+          // Narrower pad when compact so 3-col tiles keep room for price %.
+          padding: EdgeInsets.all(compactLabel ? 2 : 6),
           child: Container(
             padding: EdgeInsets.symmetric(
               horizontal: dense ? 4 : 6,

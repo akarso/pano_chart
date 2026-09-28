@@ -7,6 +7,9 @@ void main() {
     expect(RelativeStrengthChip.labelFor(0.032), '+3.2% vs mkt');
     expect(RelativeStrengthChip.labelFor(-0.011), '-1.1% vs mkt');
     expect(RelativeStrengthChip.labelFor(0.0), '0.0% vs mkt');
+    expect(RelativeStrengthChip.labelFor(0.032, compact: true), '+3.2%');
+    expect(RelativeStrengthChip.labelFor(-0.011, compact: true), '-1.1%');
+    expect(RelativeStrengthChip.labelFor(0.0, compact: true), '0.0%');
   });
 
   test('RelativeStrengthChip_colorFor matches rounded label', () {

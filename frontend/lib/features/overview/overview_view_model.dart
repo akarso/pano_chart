@@ -50,7 +50,13 @@ class OverviewViewModel {
     bool rsAvailable = false,
   }) {
     if ((sort == 'leaders' || sort == 'laggards') && !rsAvailable) {
-      return List<OverviewItem>.from(items);
+      // Menu shows Total — keep / restore totalScore order (e.g. favourite merge).
+      final byTotal = List<OverviewItem>.from(items);
+      byTotal.sort((a, b) {
+        final c = b.totalScore.compareTo(a.totalScore);
+        return c != 0 ? c : a.symbol.compareTo(b.symbol);
+      });
+      return byTotal;
     }
 
     final sorted = List<OverviewItem>.from(items);
@@ -208,8 +214,15 @@ class OverviewViewModel {
 
   Future<void> loadInitial(String timeframe) async {
     final currentGen = ++_generation;
-    _setState(
-        _state.copyWith(isLoading: true, items: [], page: 0, error: null));
+    // Clear effectiveSort so a prior timeframe's Total fallback does not
+    // linger on the menu while the new request is in flight (or after fail).
+    _setState(_state.copyWith(
+      isLoading: true,
+      items: [],
+      page: 0,
+      error: null,
+      effectiveSort: '',
+    ));
 
     try {
       final result = await _getOverview(
@@ -271,8 +284,11 @@ class OverviewViewModel {
               direction: _state.sortDirection,
               rsAvailable: rsAvailable,
             );
-            final effective = cache['effectiveSort'] as String? ??
-                (rsAvailable ? _state.sort : 'total');
+            final cachedEffective = cache['effectiveSort'] as String?;
+            final effective =
+                (cachedEffective != null && cachedEffective.isNotEmpty)
+                    ? cachedEffective
+                    : (rsAvailable ? _state.sort : 'total');
             _setState(_state.copyWith(
               isLoading: false,
               items: sorted,
@@ -476,7 +492,9 @@ class OverviewViewModel {
       final newOnly =
           result.items.where((i) => !currentSymbols.contains(i.symbol));
       final merged = [..._state.items, ...newOnly];
-      // Symbols-filter must not promote a fallback board to RS / re-sort A–Z.
+      // Symbols-filter must not promote a fallback board to RS.
+      // When fallen back, _sortItems re-applies total order so a mid-score
+      // favourite lands in the right place.
       final rsAvailable = _state.rsAvailable;
       final sorted = _sortItems(
         merged,

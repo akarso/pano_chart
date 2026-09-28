@@ -51,8 +51,15 @@ void main() {
     vm.changeSortSilent('leaders');
     await vm.loadInitial('1h');
 
-    expect(vm.state.items[0].rs, 0.0);
     expect(vm.state.rsAvailable, true);
+    // Leaders + rsAvailable re-applies sort: ETH (0.02) before BTC (0).
+    expect(
+      vm.state.items.map((e) => e.symbol).toList(),
+      ['ETHUSDT', 'BTCUSDT'],
+    );
+    expect(vm.state.items[0].rs, 0.02);
+    expect(vm.state.items[1].rs, 0.0);
+    expect(vm.state.items[1].beta, 1.0);
 
     // Force offline: next load fails and restores cache.
     final offline = OverviewViewModel(_FakeGetOverview([]));
@@ -62,13 +69,61 @@ void main() {
 
     expect(offline.state.error, contains('Offline'));
     expect(offline.state.rsAvailable, true);
-    expect(offline.state.items[0].rs, 0.0);
-    expect(offline.state.items[0].beta, 1.0);
-    expect(offline.state.items[1].rs, 0.02);
-    // Leaders + rsAvailable re-applies sort: ETH (0.02) before BTC (0).
+    expect(offline.state.items[0].rs, 0.02);
+    expect(offline.state.items[0].beta, 1.1);
+    expect(offline.state.items[1].rs, 0.0);
+    expect(offline.state.items[1].beta, 1.0);
     expect(
       offline.state.items.map((e) => e.symbol).toList(),
       ['ETHUSDT', 'BTCUSDT'],
+    );
+  });
+
+  test('offline restore falls back when effectiveSort missing', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = PreferencesService(await SharedPreferences.getInstance());
+    await prefs.setRankingsCache(
+      '1h',
+      jsonEncode({
+        'sort': 'leaders',
+        'rsAvailable': false,
+        // No effectiveSort key — treat as missing.
+        'hasMore': false,
+        'items': [
+          {
+            'symbol': 'ZZUSDT',
+            'totalScore': 0.9,
+            'trendScore': 0,
+            'sidewaysScore': 0,
+            'gainScore': 0,
+            'volume': 1,
+            'sparkline': <double>[],
+          },
+          {
+            'symbol': 'AAUSDT',
+            'totalScore': 0.5,
+            'trendScore': 0,
+            'sidewaysScore': 0,
+            'gainScore': 0,
+            'volume': 1,
+            'sparkline': <double>[],
+          },
+        ],
+      }),
+    );
+
+    final vm = OverviewViewModel(_FakeGetOverview([]));
+    vm.attachPrefs(prefs);
+    vm.changeSortSilent('leaders');
+    await vm.loadInitial('1h');
+
+    expect(vm.state.error, contains('Offline'));
+    expect(vm.state.rsAvailable, false);
+    expect(vm.state.effectiveSort, 'total');
+    expect(vm.state.rsSortFellBack, true);
+    expect(
+      vm.state.items.map((e) => e.symbol).toList(),
+      ['ZZUSDT', 'AAUSDT'],
     );
   });
 
@@ -230,11 +285,20 @@ void main() {
     vm.changeSort('leaders', '1h');
     gate.complete();
     await pending;
-    for (var i = 0; i < 50 && vm.state.items.every((e) => e.symbol != 'LEADUSDT'); i++) {
+    for (var i = 0;
+        i < 50 && vm.state.items.every((e) => e.symbol != 'LEADUSDT');
+        i++) {
       await Future<void>.delayed(Duration.zero);
     }
+    expect(vm.state.items.single.symbol, 'LEADUSDT');
 
-    final raw = prefs.getRankingsCache('1h');
+    // Second load's cache write is scheduled after setState — wait for it.
+    String? raw;
+    for (var i = 0; i < 50; i++) {
+      raw = prefs.getRankingsCache('1h');
+      if (raw != null) break;
+      await Future<void>.delayed(Duration.zero);
+    }
     expect(raw, isNotNull);
     final cache = jsonDecode(raw!) as Map<String, dynamic>;
     expect(cache['sort'], 'leaders');

@@ -2026,19 +2026,12 @@ class _OverviewGridItem extends StatelessWidget {
                       ],
                     ),
                   ),
-                if (isFavourite)
-                  Positioned(
-                    left: pad + 4,
-                    bottom: pad,
-                    child: Icon(
-                      Icons.star,
-                      color: Colors.amber.withAlpha((0.8 * 255).round()),
-                      size: (fontSize * 0.8).clamp(10.0, 16.0),
-                    ),
-                  ),
-                // Price change label (bottom-left)
+                // Bottom row: price (and favourite star) left, RS chip right.
+                // Shared row reserves space so long % labels don't overlap the
+                // chip on narrow 3-column tiles.
                 Positioned(
                   left: pad + 4,
+                  right: pad + 4,
                   bottom: pad,
                   child: Builder(
                     builder: (_) {
@@ -2052,32 +2045,52 @@ class _OverviewGridItem extends StatelessWidget {
                       final color = isZero
                           ? Colors.grey
                           : (pct >= 0 ? Colors.green : Colors.red);
-                      return Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: (fontSize * 0.55).clamp(7.0, 11.0),
-                          color: color,
-                          fontWeight: FontWeight.w600,
-                          shadows: const [
-                            Shadow(color: Colors.black, blurRadius: 3),
-                            Shadow(color: Colors.black, blurRadius: 3),
-                          ],
-                        ),
+                      final narrow = columns == 3;
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          if (isFavourite)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 2),
+                              child: Icon(
+                                Icons.star,
+                                color: Colors.amber
+                                    .withAlpha((0.8 * 255).round()),
+                                size: (fontSize * 0.8).clamp(10.0, 16.0),
+                              ),
+                            ),
+                          Expanded(
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize:
+                                    (fontSize * 0.55).clamp(7.0, 11.0),
+                                color: color,
+                                fontWeight: FontWeight.w600,
+                                shadows: const [
+                                  Shadow(
+                                      color: Colors.black, blurRadius: 3),
+                                  Shadow(
+                                      color: Colors.black, blurRadius: 3),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (showRsChip)
+                            RelativeStrengthChip(
+                              rsAvailable: rsAvailable,
+                              rs: item.rs,
+                              beta: item.beta,
+                              dense: true,
+                              compactLabel: narrow,
+                            ),
+                        ],
                       );
                     },
                   ),
                 ),
-                if (showRsChip)
-                  Positioned(
-                    right: pad + 4,
-                    bottom: pad,
-                    child: RelativeStrengthChip(
-                      rsAvailable: rsAvailable,
-                      rs: item.rs,
-                      beta: item.beta,
-                      dense: true,
-                    ),
-                  ),
               ],
             );
           },

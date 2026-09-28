@@ -605,11 +605,113 @@ void main() {
         expect(vm.state.rsAvailable, false);
         expect(vm.state.effectiveSort, 'total');
         expect(vm.state.rsSortFellBack, true);
-        // Backend total order preserved; favourite appended without RS re-sort.
+        // Re-sorted by totalScore (not RS); low-score fav at end.
         expect(
           vm.state.items.map((e) => e.symbol).toList(),
           ['ZZUSDT', 'AAUSDT', 'FAVUSDT'],
         );
+      });
+
+      test('favourites merge inserts mid-score into total order on fallback',
+          () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+              OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
+            ],
+          ),
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'FAVUSDT', totalScore: 0.7, rs: 0.99),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+
+        await vm.loadMissingFavourites('1h', {'FAVUSDT'});
+
+        expect(vm.state.rsAvailable, false);
+        expect(vm.state.effectiveSort, 'total');
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['ZZUSDT', 'FAVUSDT', 'AAUSDT'],
+        );
+      });
+
+      test('timeframe change clears effectiveSort until new response', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+            ],
+          ),
+          OverviewResult(
+            rsAvailable: true,
+            effectiveSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ETHUSDT', rs: 0.02),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+        expect(vm.state.effectiveSort, 'total');
+        expect(vm.state.rsSortFellBack, true);
+        expect(overviewSortMenuLabel(vm.state), 'Total');
+
+        // loadInitial clears state synchronously before the network await.
+        final pending = vm.loadInitial('4h');
+        expect(vm.state.items, isEmpty);
+        expect(vm.state.effectiveSort, isEmpty);
+        expect(vm.state.rsSortFellBack, false);
+        expect(overviewSortMenuLabel(vm.state), 'Leaders (vs market)');
+
+        await pending;
+        expect(vm.state.effectiveSort, 'leaders');
+        expect(overviewSortMenuLabel(vm.state), 'Leaders (vs market)');
+      });
+
+      test('failed timeframe load keeps cleared effectiveSort', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            rsAvailable: false,
+            effectiveSort: 'total',
+            requestedSort: 'leaders',
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('leaders');
+        await vm.loadInitial('1h');
+        expect(vm.state.effectiveSort, 'total');
+
+        fakeGetOverview.error = Exception('network down');
+        await vm.loadInitial('4h');
+
+        expect(vm.state.items, isEmpty);
+        expect(vm.state.effectiveSort, isEmpty);
+        expect(vm.state.rsSortFellBack, false);
+        expect(overviewSortMenuLabel(vm.state), 'Leaders (vs market)');
+        expect(vm.state.error, isNotNull);
       });
 
       test('loadNext does not promote rsAvailable from a later page', () async {
