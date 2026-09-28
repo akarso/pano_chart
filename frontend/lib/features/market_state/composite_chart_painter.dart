@@ -18,6 +18,11 @@ class CompositeChartPainter extends CustomPainter {
   final Color regressionColor;
   final int windowBars;
   final bool solidRegression;
+  /// Optional second series (e.g. a tapped sector's sparkline, PR-098b),
+  /// plotted on its own min/max range so its shape is comparable even when
+  /// its length or scale differs from [points].
+  final List<IndexPoint> overlayPoints;
+  final Color overlayColor;
 
   CompositeChartPainter({
     required this.points,
@@ -25,6 +30,8 @@ class CompositeChartPainter extends CustomPainter {
     required this.regressionColor,
     this.windowBars = 0,
     this.solidRegression = true,
+    this.overlayPoints = const [],
+    this.overlayColor = Colors.transparent,
   });
 
   @override
@@ -150,7 +157,47 @@ class CompositeChartPainter extends CustomPainter {
       }
     }
 
+    if (overlayPoints.length >= 2) {
+      _paintOverlay(canvas, size);
+    }
+
     canvas.restore();
+  }
+
+  /// Plots [overlayPoints] against [points]' real timestamp span (not raw
+  /// index position) — the overlay series is a separate fetch and is not
+  /// guaranteed to share [points]' length, so index-based placement would
+  /// stretch/compress it and misrepresent when its moves actually happened.
+  /// A degenerate main span (single timestamp) skips the overlay: there is
+  /// no time axis to align it against.
+  void _paintOverlay(Canvas canvas, Size size) {
+    final mainStart = points.first.timestamp;
+    final mainSpan = points.last.timestamp - mainStart;
+    if (mainSpan <= 0) return;
+
+    final values = overlayPoints.map((p) => p.value).toList();
+    var minV = values.reduce(math.min);
+    var maxV = values.reduce(math.max);
+    var range = maxV - minV;
+    if (range == 0) {
+      range = 1.0;
+      minV -= 0.5;
+    }
+    double xFor(int timestamp) =>
+        ((timestamp - mainStart) / mainSpan) * size.width;
+    double yFor(double v) => size.height - ((v - minV) / range) * size.height;
+
+    final paint = Paint()
+      ..color = overlayColor
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(xFor(overlayPoints[0].timestamp), yFor(values[0]));
+    for (var i = 1; i < overlayPoints.length; i++) {
+      path.lineTo(xFor(overlayPoints[i].timestamp), yFor(values[i]));
+    }
+    canvas.drawPath(path, paint);
   }
 
   void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
@@ -175,7 +222,9 @@ class CompositeChartPainter extends CustomPainter {
         other.lineColor != lineColor ||
         other.regressionColor != regressionColor ||
         other.windowBars != windowBars ||
-        other.solidRegression != solidRegression;
+        other.solidRegression != solidRegression ||
+        other.overlayPoints != overlayPoints ||
+        other.overlayColor != overlayColor;
   }
 }
 
