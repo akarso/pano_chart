@@ -1,0 +1,83 @@
+sectors:
+  - id: l1
+    name: Layer 1
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+      - SOLUSDT
+      - ADAUSDT
+      - AVAXUSDT
+      - NEARUSDT
+      - DOTUSDT
+      - ATOMUSDT
+      - SUIUSDT
+      - APTUSDT
+      - TONUSDT
+      - TRXUSDT
+      - XRPUSDT
+      - BNBUSDT
+  - id: defi
+    name: DeFi
+    symbols:
+      - UNIUSDT
+      - AAVEUSDT
+      - MKRUSDT
+      - CRVUSDT
+      - COMPUSDT
+      - SNXUSDT
+      - LDOUSDT
+      - DYDXUSDT
+      - CAKEUSDT
+      - 1INCHUSDT
+      - SUSHIUSDT
+      - YFIUSDT
+      - RUNEUSDT
+      - PENDLEUSDT
+  - id: meme
+    name: Meme
+    symbols:
+      - DOGEUSDT
+      - SHIBUSDT
+      - PEPEUSDT
+      - FLOKIUSDT
+      - BONKUSDT
+      - WIFUSDT
+      - MEMEUSDT
+      - 1000SATSUSDT
+      - BOMEUSDT
+      - PEOPLEUSDT
+  - id: ai
+    name: AI
+    symbols:
+      - FETUSDT
+      - RENDERUSDT
+      - TAOUSDT
+      - WLDUSDT
+      - AKTUSDT
+      - ARKMUSDT
+      - AIXBTUSDT
+      - AIUSDT
+      - GRIFFAINUSDT
+  - id: layer2
+    name: Layer 2
+    symbols:
+      - ARBUSDT
+      - OPUSDT
+      - POLUSDT
+      - STRKUSDT
+      - IMXUSDT
+      - MANTAUSDT
+      - METISUSDT
+      - ZKUSDT
+  - id: infra
+    name: Infra
+    symbols:
+      - LINKUSDT
+      - FILUSDT
+      - GRTUSDT
+      - THETAUSDT
+      - ARUSDT
+      - STORJUSDT
+      - PYTHUSDT
+      - JUPUSDT
+      - ORCAUSDT

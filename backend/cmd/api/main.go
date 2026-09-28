@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -390,6 +392,22 @@ func main() {
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
 
+	// --- Sector composites (PR-098) — missing auto path skips; explicit/bad fatal ---
+	var sectorsHandler http.Handler
+	if sectorCatalog, sectorErr := metrics.LoadSectorCatalog(metrics.SectorsPath()); sectorErr != nil {
+		explicit := os.Getenv("SECTORS_CONFIG_PATH") != ""
+		if !explicit && errors.Is(sectorErr, fs.ErrNotExist) {
+			log.Printf("[main] sectors disabled (no catalog): %v", sectorErr)
+		} else {
+			log.Fatalf("[main] sectors config: %v", sectorErr)
+		}
+	} else {
+		sectorService := metrics.NewSectorIndexService(compositeService, sectorCatalog)
+		sectorsUC := market.NewRedisCachedSectors(sectorService, redisClient, compositeCacheTTL, "market_sectors_v1")
+		sectorsHandler = adhttp.NewMarketSectorsHandler(sectorsUC)
+		log.Println("[main] Market sectors service initialized")
+	}
+
 	// Enables VolatilityExpansion/Dispersion on the market summary (used by
 	// the legacy /api/market/regime response and the transition engine).
 	marketService.SetCandleProvider(candleProvider)
@@ -771,6 +789,10 @@ func main() {
 	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
 	mux.Handle("/api/market/composite", compositeHandler)
+	if sectorsHandler != nil {
+		mux.Handle("/api/market/sectors", sectorsHandler)
+		log.Println("[main] /api/market/sectors endpoint registered")
+	}
 	mux.Handle("/api/market/regime", regimeHandler)
 	mux.Handle("/api/market/regime/history", regimeHistoryHandler)
 	mux.Handle("/api/market/transition", transitionHandler)

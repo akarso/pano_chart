@@ -96,6 +96,7 @@ these terms.
 | **Composite (median)** | Equal-weight median of aligned log-returns, index from 100 | `CompositeIndex.Points` |
 | **Composite (volume-weighted)** | Quote-volume-weighted mean of aligned log-returns, index from 100 | `CompositeIndex.VolumeWeightedPoints` |
 | **Relative strength (RS)** | Symbol log-return minus tape log-return on shared timestamps (`rs`); also `beta`, `rsRank`, `rsAvailable` | Track C / PR-096 |
+| **Sector RS** | Sector composite log-return minus market return over the clamped intersection of sector and market timestamps (`rs` + `rsAvailable`); market tape from the same bar fetch | Track C / PR-098 |
 | **Signal** | Any user-facing call the app makes at a point in time (badge, setup, regime, transition) | Track B |
 | **Outcome** | What happened after a signal over a fixed horizon | Track B |
 | **Hit rate** | Fraction of signals whose outcome met the success rule | Track B |
@@ -260,6 +261,49 @@ counts. UI copy must not present either as the headline regime.
 * `points` — equal-weight median of log-returns, coverage-aligned (PR-095)
 * `volumeWeightedPoints` — quote-volume-weighted mean of the same log-returns
 * Stables / wrappers listed under `composite.exclude` in `config.yaml` are skipped
+
+### Sector composites (PR-098)
+
+`GET /api/market/sectors?timeframe=&limit=`:
+
+| Field | JSON | Meaning |
+|-------|------|---------|
+| Timeframe | `timeframe` | Normalized query timeframe (default `4h`) |
+| Market symbol count | `marketSymbolCount` | Contributors to the market baseline after `activePaths` (thin baselines → treat RS cautiously) |
+| Sectors | `sectors[]` | Configured sectors with ≥2 contributing symbols; RS-available first (by `rs` desc), then unavailable |
+| Sector id | `id` | Configured id (`l1`, `defi`, …) |
+| Name | `name` | Display name |
+| Symbol count | `symbolCount` | Symbols that contributed to the sector composite |
+| Points | `points[{t,v}]` | Clamped sector series on the market-overlap window, **rebased to 100 at the first shared stamp** (same stamps as `return`/`rs` when available). When `rsAvailable` is false, the unclamped own series (already indexed from 100). |
+| Return | `return` | When `rsAvailable`: `ln(last/first)` on the clamped overlap; when unavailable: `ln(last/first)` on the sector’s own points |
+| RS | `rs` | Sector return − market return over that overlap; **ignore when `rsAvailable` is false** |
+| RS available | `rsAvailable` | `true` when ≥2 shared timestamps exist with the market series |
+
+Universe membership comes from the live symbol list; sectors are defined in
+`backend/config/sectors.yaml` (each symbol belongs to at most one sector). Unlisted
+symbols are not published as a rotation sector. Stables/wrappers matching
+`composite.exclude` never enter sector composites. Missing auto-resolved
+`sectors.yaml` disables only this route (process still boots); an explicit
+`SECTORS_CONFIG_PATH` that is missing, or a malformed catalog, fails boot. The
+route is absent (HTTP 404) when the sector catalog is not configured; clients
+must treat 404 as feature-disabled.
+
+**Market baseline.** Assembled from the **same** per-symbol bar fetch as sector
+partitions (one fan-out).
+
+**Path policy.** VW only when **both** sector and market have a usable
+volume-weighted series; otherwise **both** use median.
+
+**Alignment.** `points`, `return`, and `rs` share the intersection of sector and
+market timestamps (clamped window), so a sector whose members refreshed one bar
+ahead of the majority still gets a reading on the shared prefix — and a sparkline
+drawn from `points` matches the published `return`. After clamping, `points` are
+rebased to 100 at the first shared stamp so overlays line up with the market
+composite. `rsAvailable` is false only when fewer than 2 shared stamps exist.
+
+Redis TTL is `min(3m, timeframe/2)` (`market_sectors_v1`). Empty results are not
+cached; non-empty payloads (including `rsAvailable: false` rows) are. Invalid
+`timeframe` / `limit` → HTTP 400.
 
 ### Rankings relative strength (PR-096)
 
