@@ -157,6 +157,10 @@ sectors:
 	if !result.Sectors[0].RSAvailable {
 		t.Fatal("expected rsAvailable")
 	}
+	// Sector == whole market (2/2 symbols) → RS vs itself must be ≈0.
+	if math.Abs(result.Sectors[0].RS) > 1e-9 {
+		t.Fatalf("sector spanning entire market should have RS≈0, got %g", result.Sectors[0].RS)
+	}
 }
 
 func TestSectorIndex_AlignedWindowYoungSectorRSNearZero(t *testing.T) {
@@ -607,7 +611,7 @@ func TestSectorsHandler_DefaultParams(t *testing.T) {
 		t.Fatalf("sec=%v", sec)
 	}
 	v0 := sec["points"].([]interface{})[0].(map[string]interface{})["v"].(float64)
-	if v0 != 100.12 {
+	if v0 != 100.123 {
 		t.Fatalf("rounded v=%v", v0)
 	}
 }

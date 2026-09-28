@@ -80,7 +80,7 @@ func (h *MarketSectorsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		for j, p := range sec.Points {
 			pts[j] = indexPointDTO{
 				T: p.Timestamp,
-				V: roundTo(p.Value, 2),
+				V: roundTo(p.Value, 6),
 			}
 		}
 		sectors[i] = sectorIndexDTO{

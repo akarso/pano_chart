@@ -35,6 +35,10 @@ type sectorPointDTO struct {
 	V float64 `json:"v"`
 }
 
+// sectorsComputeTimeout bounds the shared full-universe calculation so a
+// disconnected caller can't leave it running indefinitely.
+const sectorsComputeTimeout = 30 * time.Second
+
 // RedisCachedSectors caches sector index results (PR-098).
 // Key: {prefix}:{normalizedTimeframe}:{limit}. TTL min(base, tf/2).
 type RedisCachedSectors struct {
@@ -73,7 +77,8 @@ func (c *RedisCachedSectors) Calculate(
 	}
 
 	ch := c.sf.DoChan(key, func() (interface{}, error) {
-		workCtx := context.WithoutCancel(ctx)
+		workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sectorsComputeTimeout)
+		defer cancel()
 		if result, ok := c.fromCache(workCtx, key); ok {
 			return result, nil
 		}
