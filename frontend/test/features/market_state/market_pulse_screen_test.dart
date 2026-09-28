@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/features/market_state/composite_chart_painter.dart';
@@ -9,6 +11,8 @@ import 'package:pano_chart_frontend/features/market_state/market_pulse_screen.da
 import 'package:pano_chart_frontend/features/market_state/market_state_data.dart';
 import 'package:pano_chart_frontend/features/market_state/participation_counts.dart';
 import 'package:pano_chart_frontend/features/market_state/regime_data.dart';
+import 'package:pano_chart_frontend/features/market_state/http_sector_rotation_api.dart';
+import 'package:pano_chart_frontend/features/market_state/sector_rotation_data.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -367,6 +371,348 @@ void main() {
       expect(find.text('Expansion'), findsOneWidget);
     });
   });
+
+  group('MarketPulseScreen PR-098b sector rotation', () {
+    testWidgets('card absent when sectorRotationApi is not provided',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+      ));
+
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+    });
+
+    testWidgets('card absent when the route is disabled (404 → null)',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: _FakeSectorRotationApi(null),
+      ));
+
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+      expect(find.text('Failed to load market data'), findsNothing);
+    });
+
+    testWidgets('renders sector bars sorted RS-available first',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      expect(find.text('Sector rotation'), findsOneWidget);
+      expect(find.textContaining('Layer 1'), findsOneWidget);
+      expect(find.textContaining('DeFi'), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-bar-defi')), findsOneWidget);
+    });
+
+    testWidgets('tapping a sector overlays its sparkline on the chart',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      CompositeChartPainter painterOf(WidgetTester t) => t
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+
+      expect(painterOf(tester).overlayPoints, isEmpty);
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+
+      expect(painterOf(tester).overlayPoints.length, 2);
+      expect(painterOf(tester).overlayPoints.first.value, 100.0);
+
+      // Tapping the same sector again clears the overlay.
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      expect(painterOf(tester).overlayPoints, isEmpty);
+    });
+
+    testWidgets('an RS-unavailable sector is not tappable', (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-defi')));
+      await tester.pumpAndSettle();
+
+      final painter = tester
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+      expect(painter.overlayPoints, isEmpty);
+    });
+
+    testWidgets(
+        'a failing sector API does not block the rest of Market Pulse',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: _ThrowingSectorRotationApi(),
+      ));
+
+      expect(find.text('Failed to load market data'), findsNothing);
+      expect(find.text('Market Composite Index'), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+    });
+
+    testWidgets(
+        'a stale sector response from a superseded load does not overwrite '
+        'the newer load\'s sector data',
+        (tester) async {
+      final api = _OutOfOrderSectorRotationApi();
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+          sectorRotationApi: api,
+        ),
+      ));
+      // Primary data (fast fakes) resolves; the first sector fetch is left
+      // pending on its own uncompleted Completer.
+      await tester.pumpAndSettle();
+      expect(api.completers.length, 1);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      // Timeframe change starts a second load before the first sector
+      // fetch has resolved — this must bump the load generation.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1h').last);
+      await tester.pumpAndSettle();
+      expect(api.completers.length, 2);
+
+      // Newer load's response lands first.
+      api.completers[1].complete(_baseSectors());
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+
+      // Older load's response arrives late — it must be dropped, not applied.
+      api.completers[0].complete(const SectorRotationData(
+        timeframe: '4h',
+        marketSymbolCount: 999,
+        sectors: [
+          SectorIndexData(
+            id: 'stale',
+            name: 'Stale',
+            symbolCount: 1,
+            points: [],
+            returnValue: 0.0,
+            rsAvailable: false,
+          ),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-bar-stale')), findsNothing);
+      expect(find.textContaining('999 market symbols'), findsNothing);
+    });
+
+    testWidgets(
+        'pull-to-refresh keeps the sector overlay when the sector is still '
+        'valid in the fresh response — no re-tap needed',
+        (tester) async {
+      final api = _StatefulSectorRotationApi([_baseSectors()]);
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: api,
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      CompositeChartPainter painterOf(WidgetTester t) => t
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+
+      // Pull-to-refresh gesture — same timeframe, no dropdown involved.
+      await tester.fling(
+        find.byType(RefreshIndicator),
+        const Offset(0, 300),
+        1000,
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+    });
+
+    testWidgets(
+        'a slow sector fetch does not delay clearing the loading spinner',
+        (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+          sectorRotationApi: _NeverCompleteSectorRotationApi(),
+        ),
+      ));
+      // The market/composite/regime fetches all resolve on the fake APIs'
+      // synchronous async paths, well before the sector fetch ever would.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(find.text('Market Composite Index'), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+    });
+
+    testWidgets(
+        'overlay series-mismatch caption shown only while a sector is selected '
+        'and the composite has a volume-weighted path',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(
+          _baseComposite(n: 20, withVolumeWeighted: true),
+        ),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      const caption = 'may not match the series shown above';
+      expect(find.textContaining(caption), findsNothing);
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(caption), findsOneWidget);
+
+      // Deselecting hides it again.
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(caption), findsNothing);
+    });
+
+    testWidgets(
+        'overlay series-mismatch caption stays hidden when the composite has '
+        'no volume-weighted path (both series are guaranteed median)',
+        (tester) async {
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(
+          _baseComposite(n: 20, withVolumeWeighted: false),
+        ),
+        sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('may not match the series shown above'),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
+        'selection clears when the tapped sector disappears from a later response',
+        (tester) async {
+      final api = _StatefulSectorRotationApi([
+        _baseSectors(),
+        const SectorRotationData(
+          timeframe: '1h',
+          marketSymbolCount: 100,
+          sectors: [
+            SectorIndexData(
+              id: 'defi',
+              name: 'DeFi',
+              symbolCount: 1,
+              points: [],
+              returnValue: 0.0,
+              rsAvailable: false,
+            ),
+          ],
+        ),
+      ]);
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: api,
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      CompositeChartPainter painterOf(WidgetTester t) => t
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+
+      // Timeframe change triggers _loadAll, which fetches the second
+      // (l1-missing) response from the stateful fake.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1h').last);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsNothing);
+      expect(painterOf(tester).overlayPoints, isEmpty);
+    });
+
+    testWidgets(
+        'selection clears when the tapped sector becomes RS-unavailable',
+        (tester) async {
+      final api = _StatefulSectorRotationApi([
+        _baseSectors(),
+        const SectorRotationData(
+          timeframe: '1h',
+          marketSymbolCount: 100,
+          sectors: [
+            SectorIndexData(
+              id: 'l1',
+              name: 'Layer 1',
+              symbolCount: 8,
+              points: [],
+              returnValue: 0.0,
+              rsAvailable: false,
+            ),
+            SectorIndexData(
+              id: 'defi',
+              name: 'DeFi',
+              symbolCount: 1,
+              points: [],
+              returnValue: 0.0,
+              rsAvailable: false,
+            ),
+          ],
+        ),
+      ]);
+      await _pumpTall(tester, home: MarketPulseScreen(
+        marketStateApi: _FakeStateApi(_baseState()),
+        compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+        sectorRotationApi: api,
+      ));
+
+      await tester.tap(find.byKey(const Key('mp-sector-bar-l1')));
+      await tester.pumpAndSettle();
+      CompositeChartPainter painterOf(WidgetTester t) => t
+          .widget<CustomPaint>(find.byKey(const Key('mp-composite-paint')))
+          .painter! as CompositeChartPainter;
+      expect(painterOf(tester).overlayPoints, isNotEmpty);
+
+      // Timeframe change triggers _loadAll, which fetches the second
+      // response — l1 still present but now RS-unavailable.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1h').last);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(painterOf(tester).overlayPoints, isEmpty);
+    });
+  });
 }
 
 Future<void> _pumpTall(WidgetTester tester, {required Widget home}) async {
@@ -558,4 +904,97 @@ class _FakeRegimeApi implements RegimeApi {
 
   @override
   Future<RegimeData> fetch({String timeframe = '4h'}) async => data;
+}
+
+SectorRotationData _baseSectors() => const SectorRotationData(
+      timeframe: '4h',
+      marketSymbolCount: 100,
+      sectors: [
+        SectorIndexData(
+          id: 'l1',
+          name: 'Layer 1',
+          symbolCount: 8,
+          points: [
+            IndexPoint(timestamp: 1000, value: 100.0),
+            IndexPoint(timestamp: 2000, value: 104.0),
+          ],
+          returnValue: 0.04,
+          rs: 0.02,
+          rsAvailable: true,
+        ),
+        SectorIndexData(
+          id: 'defi',
+          name: 'DeFi',
+          symbolCount: 1,
+          points: [],
+          returnValue: 0.0,
+          rsAvailable: false,
+        ),
+      ],
+    );
+
+class _FakeSectorRotationApi implements SectorRotationApi {
+  _FakeSectorRotationApi(this.data);
+  final SectorRotationData? data;
+
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) async =>
+      data;
+}
+
+/// Hands back a fresh, uncompleted Completer on every call so a test can
+/// resolve calls in any order it chooses (to simulate a stale/late response).
+class _OutOfOrderSectorRotationApi implements SectorRotationApi {
+  final completers = <Completer<SectorRotationData?>>[];
+
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) {
+    final c = Completer<SectorRotationData?>();
+    completers.add(c);
+    return c.future;
+  }
+}
+
+class _NeverCompleteSectorRotationApi implements SectorRotationApi {
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) {
+    return Completer<SectorRotationData?>().future;
+  }
+}
+
+class _ThrowingSectorRotationApi implements SectorRotationApi {
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) async {
+    throw Exception('sector rotation network error');
+  }
+}
+
+/// Returns each response in order (by call count), then repeats the last
+/// one — lets a test drive a reload into a different sector payload.
+class _StatefulSectorRotationApi implements SectorRotationApi {
+  _StatefulSectorRotationApi(this.responses);
+  final List<SectorRotationData?> responses;
+  int _calls = 0;
+
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) async {
+    final i = _calls < responses.length ? _calls : responses.length - 1;
+    _calls++;
+    return responses[i];
+  }
 }

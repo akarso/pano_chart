@@ -20,6 +20,7 @@ import '../../features/market_state/http_composite_index_api.dart';
 import '../../features/market_state/http_market_state_api.dart';
 import '../../features/market_state/http_regime_api.dart';
 import '../../features/market_state/http_regime_history_api.dart';
+import '../../features/market_state/http_sector_rotation_api.dart';
 import '../../features/market_state/http_transition_api.dart';
 import '../../features/detail/http_fragility_api.dart';
 import '../../features/detail/http_behavior_api.dart';
@@ -128,6 +129,11 @@ class CompositionRoot {
   /// Creates a wired RegimeHistoryApi.
   RegimeHistoryApi createRegimeHistoryApi() {
     return HttpRegimeHistoryApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired SectorRotationApi.
+  SectorRotationApi createSectorRotationApi() {
+    return HttpSectorRotationApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired NewsViewModel backed by the news API.

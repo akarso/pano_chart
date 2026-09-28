@@ -51,6 +51,7 @@ Widget bootstrapApp({
   final regimeApi = root.createRegimeApi();
   final transitionApi = root.createTransitionApi();
   final regimeHistoryApi = root.createRegimeHistoryApi();
+  final sectorRotationApi = root.createSectorRotationApi();
   final newsViewModel = root.createNewsViewModel();
   final setupApi = root.createSetupApi();
   final fragilityApi = root.createFragilityApi();
@@ -73,6 +74,7 @@ Widget bootstrapApp({
       regimeApi: regimeApi,
       transitionApi: transitionApi,
       regimeHistoryApi: regimeHistoryApi,
+      sectorRotationApi: sectorRotationApi,
       stablecoins: stablecoins,
       newsViewModel: newsViewModel,
       billingManager: billingManager,
@@ -112,6 +114,7 @@ Widget bootstrapApp({
             regimeApi: regimeApi,
             transitionApi: transitionApi,
             regimeHistoryApi: regimeHistoryApi,
+            sectorRotationApi: sectorRotationApi,
             scorecardApi: scorecardApi,
             initialTimeframe: timeframe,
             isProUser: billingManager?.hasFullAccess ?? false,

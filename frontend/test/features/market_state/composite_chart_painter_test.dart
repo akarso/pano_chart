@@ -41,6 +41,32 @@ void main() {
     });
   });
 
+  group('fractionalIndexFor', () {
+    test('interpolates between two axis points', () {
+      expect(fractionalIndexFor([0, 100], 50), 0.5);
+      expect(fractionalIndexFor([0, 100, 300], 200), 1.5);
+    });
+
+    test('respects irregular gaps rather than treating indices as even', () {
+      // Second gap is 3x the first — the same elapsed time must land at a
+      // smaller fractional-index step than in the first (shorter) segment.
+      const axis = [0, 100, 400];
+      expect(fractionalIndexFor(axis, 100), 1.0);
+      expect(fractionalIndexFor(axis, 250), closeTo(1.5, 1e-9));
+    });
+
+    test('extrapolates before/after the axis using the edge segment slope', () {
+      const axis = [100, 200, 300];
+      expect(fractionalIndexFor(axis, 50), -0.5);
+      expect(fractionalIndexFor(axis, 350), 2.5);
+    });
+
+    test('degenerate equal timestamps do not divide by zero', () {
+      expect(fractionalIndexFor([100, 100], 100), 0.0);
+      expect(fractionalIndexFor([100, 100], 50), 0.0);
+    });
+  });
+
   group('CompositeChartPainter recorded draws', () {
     test('shouldRepaint when windowBars or regression style change', () {
       final points = [

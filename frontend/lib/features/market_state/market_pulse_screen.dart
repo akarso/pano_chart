@@ -13,12 +13,15 @@ import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
 import 'http_regime_history_api.dart';
+import 'http_sector_rotation_api.dart';
 import 'http_transition_api.dart';
 import 'market_pulse_selection.dart';
 import 'market_state_data.dart';
 import 'participation_counts.dart';
 import 'regime_data.dart';
 import 'regime_history_data.dart';
+import 'sector_rotation_data.dart';
+import 'sector_rotation_presentation.dart';
 import 'transition_data.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/reliability_chip.dart';
@@ -34,6 +37,7 @@ class MarketPulseScreen extends StatefulWidget {
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
+  final SectorRotationApi? sectorRotationApi;
   final ScorecardApi? scorecardApi;
   final String? initialTimeframe;
   final bool isProUser;
@@ -45,6 +49,7 @@ class MarketPulseScreen extends StatefulWidget {
     this.regimeApi,
     this.transitionApi,
     this.regimeHistoryApi,
+    this.sectorRotationApi,
     this.scorecardApi,
     this.initialTimeframe,
     this.isProUser = false,
@@ -64,6 +69,14 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   RegimeData? _regimeData;
   TransitionData? _transitionData;
   RegimeHistoryData? _regimeHistoryData;
+  SectorRotationData? _sectorData;
+  /// Sector tapped to overlay its sparkline on the composite chart (PR-098b).
+  String? _selectedSectorId;
+  /// Bumped by every `_loadAll()` call. A sector fetch started by an older
+  /// load (or an auto-refresh tick that straddled a timeframe change/reload)
+  /// carries its generation and is dropped on arrival if superseded, so a
+  /// slow, stale response can never clobber a newer one.
+  int _sectorLoadGeneration = 0;
   final ScorecardCatalog _scorecards = ScorecardCatalog();
   String? _error;
   bool _loading = true;
@@ -163,8 +176,20 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
+  Future<SectorRotationData?> _fetchSectorRotation() async {
+    final api = widget.sectorRotationApi;
+    if (api == null) return null;
+    try {
+      return await api.fetch(timeframe: _timeframe);
+    } catch (_) {
+      // Optional card — must not block market data (same as the tape fetch).
+      return null;
+    }
+  }
+
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
+    _applySectorRotation(_fetchSectorRotation(), _sectorLoadGeneration);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
@@ -197,6 +222,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       }
       if (widget.regimeHistoryApi != null) {
         history = results[idx] as RegimeHistoryData;
+        idx++;
       }
       setState(() {
         _stateData = results[0] as MarketStateData;
@@ -212,12 +238,44 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
+  /// Applies a resolved (possibly null, on failure or 404) sector rotation
+  /// response whenever it lands — decoupled from the primary load/refresh so
+  /// a slow optional fetch can never delay clearing the loading state or
+  /// applying the rest of the batch (production always wires this API, so
+  /// its up-to-15s timeout would otherwise show on every load). [generation]
+  /// pins the response to the load that started it: if a newer `_loadAll()`
+  /// has since run, this result is stale and is dropped instead of
+  /// overwriting the newer load's (possibly already-applied) sector data.
+  void _applySectorRotation(
+    Future<SectorRotationData?> sectorFuture,
+    int generation,
+  ) {
+    sectorFuture.then((sectors) {
+      if (!mounted) return;
+      if (generation != _sectorLoadGeneration) return;
+      setState(() {
+        _sectorData = sectors;
+        _pruneSectorSelectionIfMissing();
+      });
+    });
+  }
+
   Future<void> _loadAll() async {
+    final generation = ++_sectorLoadGeneration;
     setState(() {
       _loading = true;
       _error = null;
+      // Stale sector data (e.g. from a different timeframe) must not linger
+      // once a fresh load starts — the new fetch below will replace it. The
+      // selection itself is left alone: a plain refresh (same timeframe)
+      // should reinstate the same sector's overlay once the fresh response
+      // lands, not force a re-tap. `_pruneSectorSelectionIfMissing()` (run
+      // once that response arrives) still clears it if the sector is gone
+      // or no longer RS-available.
+      _sectorData = null;
     });
     _loadScorecards();
+    _applySectorRotation(_fetchSectorRotation(), generation);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
@@ -250,6 +308,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       }
       if (widget.regimeHistoryApi != null) {
         history = results[idx] as RegimeHistoryData;
+        idx++;
       }
       setState(() {
         _stateData = results[0] as MarketStateData;
@@ -284,6 +343,28 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   String _regimeSource() => selectRegimeSource(_regimeData, _stateData);
+
+  /// Clears the tapped overlay sector once it no longer exists in the
+  /// latest sector rotation response (e.g. it dropped below the
+  /// min-symbols threshold after a refresh or timeframe change), or once it
+  /// flips to `rsAvailable: false` while still present — a selected-but-now
+  /// untappable row would otherwise keep its highlight with no way to clear
+  /// it (the bar's `onTap` is null whenever `rsAvailable` is false).
+  void _pruneSectorSelectionIfMissing() {
+    final id = _selectedSectorId;
+    if (id == null) return;
+    final sectors = _sectorData?.sectors ?? const <SectorIndexData>[];
+    SectorIndexData? match;
+    for (final s in sectors) {
+      if (s.id == id) {
+        match = s;
+        break;
+      }
+    }
+    if (match == null || !match.rsAvailable) {
+      _selectedSectorId = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -382,6 +463,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               child: _buildCompositeCard(_compositeData!),
             ),
           if (_compositeData != null) const SizedBox(height: 16),
+          if (_sectorData != null && _sectorData!.sectors.isNotEmpty)
+            KeyedSubtree(
+              key: const Key('mp-sector-rotation'),
+              child: _buildSectorRotationCard(_sectorData!),
+            ),
+          if (_sectorData != null && _sectorData!.sectors.isNotEmpty)
+            const SizedBox(height: 16),
           Builder(
             builder: (context) {
               final participation = ParticipationCardModel.resolve(
@@ -1084,6 +1172,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                     ),
                   ),
           ),
+          if (_selectedSectorId != null && data.hasVolumeWeighted) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Sector overlay uses the backend\'s own volume-weighted/'
+              'median path for that sector — it may not match the series '
+              'shown above',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ],
         ],
       ),
     );
@@ -1168,6 +1265,141 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
             view.showRegression ? _headlineChartColor() : Colors.transparent,
         windowBars: view.showRegression ? view.scoredWin : 0,
         solidRegression: view.showRegression && _isTrendHeadline(),
+        overlayPoints: _selectedSectorOverlayPoints() ?? const [],
+        // Distinct from every _headlineChartColor()/lineColor value (teal,
+        // red, green, amber, blueGrey, white, light-steel-blue) so the
+        // overlay never blends into the main line or regression.
+        overlayColor: Colors.purpleAccent,
+      ),
+    );
+  }
+
+  /// Tapped sector's own series, or null when nothing is selected / it has
+  /// too few points to draw a line (PR-098b overlay).
+  List<IndexPoint>? _selectedSectorOverlayPoints() {
+    final id = _selectedSectorId;
+    if (id == null) return null;
+    for (final s in _sectorData?.sectors ?? const <SectorIndexData>[]) {
+      if (s.id == id) return s.points.length >= 2 ? s.points : null;
+    }
+    return null;
+  }
+
+  // ---------- Sector Rotation Card ----------
+
+  Widget _buildSectorRotationCard(SectorRotationData data) {
+    final rows = buildSectorRotationRows(data);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Sector rotation',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                key: const Key('mp-sector-rotation-help'),
+                onTap: () => _showInfoDialog(
+                  title: 'Sector rotation',
+                  body:
+                      'Relative strength (RS) — each sector\'s composite '
+                      'return minus the market composite\'s return over '
+                      'their shared bars.\n\n'
+                      'Bars are sized against the strongest mover; sectors '
+                      'without enough shared history show no bar.\n\n'
+                      'Tap a sector to overlay its sparkline on the '
+                      'composite chart above.',
+                ),
+                child: const Icon(
+                  Icons.help_outline,
+                  size: 13,
+                  color: Colors.white30,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${data.marketSymbolCount} market symbols  •  ${data.timeframe}',
+            style: const TextStyle(color: Colors.grey, fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          for (final row in rows)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _sectorRotationBar(row),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectorRotationBar(SectorRotationRow row) {
+    final selected = row.id == _selectedSectorId;
+    final barColor = !row.rsAvailable
+        ? Colors.white24
+        : ((row.rs ?? 0) < 0 ? Colors.redAccent : Colors.tealAccent);
+    return GestureDetector(
+      key: Key('mp-sector-bar-${row.id}'),
+      onTap: row.rsAvailable
+          ? () => setState(() {
+                _selectedSectorId = selected ? null : row.id;
+              })
+          : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white10 : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 84,
+              child: Text(
+                '${row.name} (${row.symbolCount})',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+            ),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: row.barFraction,
+                  backgroundColor: Colors.white10,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(barColor.withAlpha(180)),
+                  minHeight: 6,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 48,
+              child: Text(
+                sectorRsLabel(row),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: row.rsAvailable ? Colors.white70 : Colors.white38,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
