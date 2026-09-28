@@ -5,11 +5,22 @@ class OverviewResult {
   final List<OverviewItem> items;
   final bool hasMore;
   final String? snapshot;
+  final bool rsAvailable;
+
+  /// Effective sort from the backend (`sort` JSON). May differ from the
+  /// request when leaders/laggards fall back to `total` (PR-096).
+  final String effectiveSort;
+
+  /// Requested sort from the backend (`requestedSort`), when present.
+  final String? requestedSort;
 
   const OverviewResult({
     required this.items,
     required this.hasMore,
     this.snapshot,
+    this.rsAvailable = false,
+    this.effectiveSort = '',
+    this.requestedSort,
   });
 }
 

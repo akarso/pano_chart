@@ -755,7 +755,8 @@ Sort `leaders` puts highest RS first.
 1. `overview_view_model.dart`: add sort cases `'leaders'`, `'laggards'` (sort by `rs`).
 2. Sort menu entries "Leaders (vs market)" and "Laggards (vs market)".
 3. Tile: small RS chip bottom-right, `+3.2% vs mkt` / `−1.1% vs mkt` (RS × 100, one decimal),
-   green/red. Hide when `rs == 0 && beta == 0` (backend RS disabled).
+   green/red. Show only when `rsAvailable && rs != null` (real `0` still shows; omitted `rs`
+   or `rsAvailable=false` hides).
 4. Tap chip → info dialog: "Relative strength: this symbol's return minus the market
    composite's return over the same window. Beta: how much it moves per 1% market move."
 

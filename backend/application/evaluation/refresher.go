@@ -52,7 +52,7 @@ func RefreshEnabledFromEnv(v string) bool {
 
 // RankingsRunner is the rankings pipeline the refresher writes from.
 type RankingsRunner interface {
-	Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error)
+	Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error)
 }
 
 // RefreshLock is an optional distributed lease so only one API process scores
@@ -310,13 +310,14 @@ func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
 
 // scoreAndPersist runs rankings and writes non-empty results to the store.
 func (r *Refresher) scoreAndPersist(ctx context.Context, tf domain.Timeframe) error {
-	results, err := r.rankings.Execute(ctx, usecases.GetRankingsRequest{
+	out, err := r.rankings.Execute(ctx, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		return err
 	}
+	results := out.Results
 	if len(results) == 0 {
 		// Do not Put [] — that would wipe the last good evaluations.
 		return fmt.Errorf("rankings returned empty result for %s", tf)

@@ -67,13 +67,14 @@ func TestGetRankings_ComponentPercentiles(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(results))
 	}
@@ -167,13 +168,14 @@ func TestGetRankings_MaxPercentileAndDominantComponent(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 
 	// BTC: trend=1.0, sideways=0.0, gain=0.5 -> max=1.0 dominant=trend
 	// ETH: trend=0.5, sideways=1.0, gain=0.0 -> max=1.0 dominant=sideways
@@ -272,13 +274,14 @@ func TestGetRankings_BadgeAssignment_TopNOnly(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 
 	badged := map[string]string{}
 	for _, r := range results {
@@ -346,13 +349,14 @@ func TestGetRankings_NoBadgesForSingleSymbol(t *testing.T) {
 		2, usecases.SidewaysAlgoV1, weights, 4, nil,
 	)
 
-	results, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+	out, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	results := out.Results
 
 	// N=1 → no meaningful competition → no badge.
 	if results[0].BadgeComponent != "" {

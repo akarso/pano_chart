@@ -276,7 +276,7 @@ func main() {
 	}
 
 	// Wrap with Redis cache decorator
-	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings")
+	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings_v2")
 	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
@@ -396,6 +396,9 @@ func main() {
 	// Cached tape for headline regime scoring (PR-086) — avoids rebuilding the
 	// composite on every MarketStateService.Calculate / notification tick.
 	marketService.SetTapeProvider(compositeUC)
+	// Same tape for rankings relative strength (PR-096).
+	getRankingsUC.SetTapeProvider(compositeUC)
+	getRankingsUC.SetRSFilter(compositeFilter)
 
 	// --- Regime history tracker (SQLite-backed) ---
 	regimeHistoryDBPath := os.Getenv("PC_REGIME_HISTORY_DB")

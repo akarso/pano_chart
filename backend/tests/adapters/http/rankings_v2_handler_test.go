@@ -20,13 +20,15 @@ import (
 // --- Response type (mirrors handler response) ---
 
 type rankingsV2Response struct {
-	Timeframe  string                 `json:"timeframe"`
-	Sort       string                 `json:"sort"`
-	Page       int                    `json:"page"`
-	PageSize   int                    `json:"pageSize"`
-	TotalItems int                    `json:"totalItems"`
-	TotalPages int                    `json:"totalPages"`
-	Results    []rankingsV2ResultItem `json:"results"`
+	Timeframe     string                 `json:"timeframe"`
+	Sort          string                 `json:"sort"`
+	RequestedSort string                 `json:"requestedSort"`
+	RSAvailable   bool                   `json:"rsAvailable"`
+	Page          int                    `json:"page"`
+	PageSize      int                    `json:"pageSize"`
+	TotalItems    int                    `json:"totalItems"`
+	TotalPages    int                    `json:"totalPages"`
+	Results       []rankingsV2ResultItem `json:"results"`
 }
 
 type rankingsV2ResultItem struct {
@@ -43,12 +45,20 @@ type rankingsUseCaseMock struct {
 	mock.Mock
 }
 
-func (m *rankingsUseCaseMock) Execute(ctx context.Context, req usecases.GetRankingsRequest) ([]usecases.RankedResult, error) {
+func (m *rankingsUseCaseMock) Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error) {
 	args := m.Called(ctx, req)
-	if res, ok := args.Get(0).([]usecases.RankedResult); ok {
+	if res, ok := args.Get(0).(usecases.RankingsResult); ok {
 		return res, args.Error(1)
 	}
-	return nil, args.Error(1)
+	return usecases.RankingsResult{}, args.Error(1)
+}
+
+func rankingsOut(rows []usecases.RankedResult, sort usecases.SortMode, rsOK bool) usecases.RankingsResult {
+	return usecases.RankingsResult{Results: rows, Sort: sort, RequestedSort: sort, RSAvailable: rsOK}
+}
+
+func rankingsOutFallback(rows []usecases.RankedResult, requested, effective usecases.SortMode) usecases.RankingsResult {
+	return usecases.RankingsResult{Results: rows, Sort: effective, RequestedSort: requested, RSAvailable: false}
 }
 
 // --- Helper to build domain data ---
@@ -104,7 +114,7 @@ func TestRankingsV2Handler_InternalError(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(nil, errors.New("boom"))
+	}).Return(usecases.RankingsResult{}, errors.New("boom"))
 
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h", nil)
 	w := httptest.NewRecorder()
@@ -147,7 +157,7 @@ func TestRankingsV2Handler_HappyPath_DefaultsAndPagination(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(results, nil)
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
 
 	// page=1, pageSize=2 → expect first 2 items
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&page=1&pageSize=2", nil)
@@ -164,6 +174,8 @@ func TestRankingsV2Handler_HappyPath_DefaultsAndPagination(t *testing.T) {
 
 	assert.Equal(t, "1h", body.Timeframe)
 	assert.Equal(t, "total", body.Sort)
+	assert.Equal(t, "total", body.RequestedSort)
+	assert.False(t, body.RSAvailable)
 	assert.Equal(t, 1, body.Page)
 	assert.Equal(t, 2, body.PageSize)
 	assert.Equal(t, 3, body.TotalItems)
@@ -177,6 +189,84 @@ func TestRankingsV2Handler_HappyPath_DefaultsAndPagination(t *testing.T) {
 		assert.Equal(t, "BBBUSD", body.Results[1].Symbol)
 	}
 
+	uc.AssertExpectations(t)
+}
+
+func TestRankingsV2Handler_RelativeStrengthFieldsAndLeadersSort(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	rsHot, betaHot, rankHot := 0.05, 1.8, 1.0
+	rsCol, betaCol, rankCol := -0.02, 0.4, 0.0
+	results := []usecases.RankedResult{
+		{
+			Symbol:           mustSymbol(t, "HOTUSDT"),
+			TotalScore:       1,
+			RelativeStrength: &rsHot,
+			Beta:             &betaHot,
+			RSRank:           &rankHot,
+		},
+		{
+			Symbol:           mustSymbol(t, "COLUSDT"),
+			TotalScore:       1,
+			RelativeStrength: &rsCol,
+			Beta:             &betaCol,
+			RSRank:           &rankCol,
+		},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.SortByLeaders,
+	}).Return(rankingsOut(results, usecases.SortByLeaders, true), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&sort=leaders", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "leaders", body["sort"])
+	assert.Equal(t, true, body["rsAvailable"])
+	rows := body["results"].([]any)
+	first := rows[0].(map[string]any)
+	assert.Equal(t, "HOTUSDT", first["symbol"])
+	assert.InDelta(t, 0.05, first["rs"], 1e-9)
+	assert.InDelta(t, 1.8, first["beta"], 1e-9)
+	assert.InDelta(t, 1.0, first["rsRank"], 1e-9)
+	uc.AssertExpectations(t)
+}
+
+func TestRankingsV2Handler_LaggardsAndRSUnavailableFallback(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 0.9},
+		{Symbol: mustSymbol(t, "ETHUSDT"), TotalScore: 0.1},
+	}
+	// Use case fell back to total when tape failed.
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.SortByLaggards,
+	}).Return(rankingsOutFallback(results, usecases.SortByLaggards, usecases.SortByTotal), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&sort=laggards", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, "total", body["sort"])
+	assert.Equal(t, "laggards", body["requestedSort"])
+	assert.Equal(t, false, body["rsAvailable"])
+	row := body["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "BTCUSDT", row["symbol"])
+	_, hasRS := row["rs"]
+	assert.False(t, hasRS, "unset rs must be omitted from JSON")
 	uc.AssertExpectations(t)
 }
 
@@ -199,7 +289,7 @@ func TestRankingsV2Handler_Pagination_SecondPageAndOverflow(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(results, nil)
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
 
 	// page=2, pageSize=2 → items index 2,3 (0-based)
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&page=2&pageSize=2", nil)
@@ -259,7 +349,7 @@ func TestRankingsV2Handler_PageSizeClampedTo200(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(results, nil)
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&pageSize=1000", nil)
 	w := httptest.NewRecorder()
@@ -295,7 +385,7 @@ func TestRankingsV2Handler_SymbolsFilter(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(results, nil)
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
 
 	// Request only BBBUSD and DDDUSD
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&symbols=BBBUSD,DDDUSD", nil)
@@ -331,7 +421,7 @@ func TestRankingsV2Handler_SymbolsFilter_NoMatch(t *testing.T) {
 	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
 		Timeframe: tf,
 		Sort:      usecases.ParseSortMode("total"),
-	}).Return(results, nil)
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
 
 	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&symbols=ZZZZUSD", nil)
 	w := httptest.NewRecorder()

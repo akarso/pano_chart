@@ -36,10 +36,6 @@ type RegimeObserver interface {
 	Update(timeframe string, regime mkt.Regime, bias string, timestamp int64) error
 }
 
-// candleMetricsWindow is the candle window used for VolatilityExpansion /
-// Dispersion and for fetching the composite tape.
-const candleMetricsWindow = 110
-
 // candleMetricsFanoutLimit bounds concurrent candle fetches in
 // candleMetrics — one goroutine per symbol would be excessive for a large
 // universe.
@@ -308,10 +304,10 @@ func (s *MarketStateService) scoreCompositeTape(ctx context.Context, timeframe s
 	var err error
 	switch {
 	case s.tape != nil:
-		tape, err = s.tape.CalculateTape(ctx, timeframe, candleMetricsWindow)
+		tape, err = s.tape.CalculateTape(ctx, timeframe, metrics.CompositeTapeWindow)
 	case s.candles != nil:
 		svc := metrics.NewCompositeIndexService(s.candles, candleMetricsFanoutLimit)
-		tape, err = svc.CalculateTape(ctx, timeframe, candleMetricsWindow)
+		tape, err = svc.CalculateTape(ctx, timeframe, metrics.CompositeTapeWindow)
 	default:
 		return TapeRegime{}, false
 	}
@@ -399,7 +395,7 @@ type candleResult struct {
 	ret float64 // this symbol's period return
 }
 
-// fetchCandleResults fetches candleMetricsWindow candles per symbol, bounded
+// fetchCandleResults fetches CompositeTapeWindow candles per symbol, bounded
 // to candleMetricsFanoutLimit concurrent requests, and computes each
 // symbol's volatility/return contribution. A symbol whose fetch errors or
 // returns too little data is silently skipped — a single bad symbol
@@ -433,7 +429,7 @@ func fetchCandleResults(ctx context.Context, candles CandleProvider, tf domain.T
 			}
 			defer func() { <-sem }()
 
-			cs, fetchErr := candles.GetLastNCandles(ctx, sym, tf, candleMetricsWindow)
+			cs, fetchErr := candles.GetLastNCandles(ctx, sym, tf, metrics.CompositeTapeWindow)
 			if fetchErr != nil || cs.Len() < 2 {
 				return
 			}

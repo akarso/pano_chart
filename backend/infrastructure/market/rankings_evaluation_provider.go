@@ -130,14 +130,14 @@ func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf
 	// flight continues (same pattern as RedisCachedComposite.CalculateTape).
 	ch := p.sf.DoChan(timeframe, func() (interface{}, error) {
 		workCtx := context.WithoutCancel(ctx)
-		results, err := p.rankings.Execute(workCtx, usecases.GetRankingsRequest{
+		out, err := p.rankings.Execute(workCtx, usecases.GetRankingsRequest{
 			Timeframe: tf,
 			Sort:      usecases.SortByTotal,
 		})
 		if err != nil {
 			return nil, err
 		}
-		return appmarket.SnapshotsFromRankings(results, timeframe, time.Time{}), nil
+		return appmarket.SnapshotsFromRankings(out.Results, timeframe, time.Time{}), nil
 	})
 	// Signal after DoChan so tests can wait until every sibling has joined
 	// the flight before releasing Execute.
