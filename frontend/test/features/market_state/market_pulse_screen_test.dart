@@ -467,6 +467,59 @@ void main() {
     });
 
     testWidgets(
+        'a stale sector response from a superseded load does not overwrite '
+        'the newer load\'s sector data',
+        (tester) async {
+      final api = _OutOfOrderSectorRotationApi();
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 20)),
+          sectorRotationApi: api,
+        ),
+      ));
+      // Primary data (fast fakes) resolves; the first sector fetch is left
+      // pending on its own uncompleted Completer.
+      await tester.pumpAndSettle();
+      expect(api.completers.length, 1);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      // Timeframe change starts a second load before the first sector
+      // fetch has resolved — this must bump the load generation.
+      await tester.tap(find.byType(DropdownButton<String>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1h').last);
+      await tester.pumpAndSettle();
+      expect(api.completers.length, 2);
+
+      // Newer load's response lands first.
+      api.completers[1].complete(_baseSectors());
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+
+      // Older load's response arrives late — it must be dropped, not applied.
+      api.completers[0].complete(const SectorRotationData(
+        timeframe: '4h',
+        marketSymbolCount: 999,
+        sectors: [
+          SectorIndexData(
+            id: 'stale',
+            name: 'Stale',
+            symbolCount: 1,
+            points: [],
+            returnValue: 0.0,
+            rsAvailable: false,
+          ),
+        ],
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mp-sector-bar-l1')), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-bar-stale')), findsNothing);
+      expect(find.textContaining('999 market symbols'), findsNothing);
+    });
+
+    testWidgets(
         'a slow sector fetch does not delay clearing the loading spinner',
         (tester) async {
       await tester.pumpWidget(MaterialApp(
@@ -858,6 +911,22 @@ class _FakeSectorRotationApi implements SectorRotationApi {
     int limit = sectorRotationLimit,
   }) async =>
       data;
+}
+
+/// Hands back a fresh, uncompleted Completer on every call so a test can
+/// resolve calls in any order it chooses (to simulate a stale/late response).
+class _OutOfOrderSectorRotationApi implements SectorRotationApi {
+  final completers = <Completer<SectorRotationData?>>[];
+
+  @override
+  Future<SectorRotationData?> fetch({
+    String timeframe = '4h',
+    int limit = sectorRotationLimit,
+  }) {
+    final c = Completer<SectorRotationData?>();
+    completers.add(c);
+    return c.future;
+  }
 }
 
 class _NeverCompleteSectorRotationApi implements SectorRotationApi {

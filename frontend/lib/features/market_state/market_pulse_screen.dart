@@ -72,6 +72,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   SectorRotationData? _sectorData;
   /// Sector tapped to overlay its sparkline on the composite chart (PR-098b).
   String? _selectedSectorId;
+  /// Bumped by every `_loadAll()` call. A sector fetch started by an older
+  /// load (or an auto-refresh tick that straddled a timeframe change/reload)
+  /// carries its generation and is dropped on arrival if superseded, so a
+  /// slow, stale response can never clobber a newer one.
+  int _sectorLoadGeneration = 0;
   final ScorecardCatalog _scorecards = ScorecardCatalog();
   String? _error;
   bool _loading = true;
@@ -184,7 +189,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
-    _applySectorRotation(_fetchSectorRotation());
+    _applySectorRotation(_fetchSectorRotation(), _sectorLoadGeneration);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
@@ -237,10 +242,17 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   /// response whenever it lands — decoupled from the primary load/refresh so
   /// a slow optional fetch can never delay clearing the loading state or
   /// applying the rest of the batch (production always wires this API, so
-  /// its up-to-15s timeout would otherwise show on every load).
-  void _applySectorRotation(Future<SectorRotationData?> sectorFuture) {
+  /// its up-to-15s timeout would otherwise show on every load). [generation]
+  /// pins the response to the load that started it: if a newer `_loadAll()`
+  /// has since run, this result is stale and is dropped instead of
+  /// overwriting the newer load's (possibly already-applied) sector data.
+  void _applySectorRotation(
+    Future<SectorRotationData?> sectorFuture,
+    int generation,
+  ) {
     sectorFuture.then((sectors) {
       if (!mounted) return;
+      if (generation != _sectorLoadGeneration) return;
       setState(() {
         _sectorData = sectors;
         _pruneSectorSelectionIfMissing();
@@ -249,12 +261,17 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   Future<void> _loadAll() async {
+    final generation = ++_sectorLoadGeneration;
     setState(() {
       _loading = true;
       _error = null;
+      // Stale sector data (e.g. from a different timeframe) must not linger
+      // once a fresh load starts — the new fetch below will replace it.
+      _sectorData = null;
+      _selectedSectorId = null;
     });
     _loadScorecards();
-    _applySectorRotation(_fetchSectorRotation());
+    _applySectorRotation(_fetchSectorRotation(), generation);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
