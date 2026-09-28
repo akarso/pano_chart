@@ -461,12 +461,24 @@ func (f *fakeMTFCalc) Calculate(_ context.Context, symbol string) (mtf.Stack, er
 	return mtf.Stack{}, errors.New("no stack for symbol")
 }
 
+// stackWithFrame builds a Stack that has real data (a non-empty Frames),
+// distinct from a genuinely empty mtf.Stack{} (no fresh frames — cold
+// start / store outage), which the handler must treat as "no data" and
+// omit rather than reporting alignment/alignedState from.
+func stackWithFrame(alignment float64, state mkt.State) mtf.Stack {
+	return mtf.Stack{
+		Frames:       []mtf.TFRegime{{Timeframe: "1h", Dominant: state}},
+		Alignment:    alignment,
+		AlignedState: state,
+	}
+}
+
 func TestRankingsV2Handler_MTFOverlay_AddsFieldsWhenRequested(t *testing.T) {
 	uc := &rankingsUseCaseMock{}
 	handler := h.NewRankingsV2Handler(uc)
 	handler.SetMTFCalculator(&fakeMTFCalc{
 		bySymbol: map[string]mtf.Stack{
-			"BTCUSDT": {Alignment: 1.0, AlignedState: mkt.StateTrend},
+			"BTCUSDT": stackWithFrame(1.0, mkt.StateTrend),
 		},
 	})
 
@@ -491,12 +503,46 @@ func TestRankingsV2Handler_MTFOverlay_AddsFieldsWhenRequested(t *testing.T) {
 	assert.Equal(t, "trend", row["alignedState"])
 }
 
+func TestRankingsV2Handler_MTFOverlay_EmptyStackOmitsFields(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(&fakeMTFCalc{
+		bySymbol: map[string]mtf.Stack{
+			// Calculate succeeds (no error) but has zero fresh frames — a
+			// cold start or store outage, not a real reading.
+			"BTCUSDT": {},
+		},
+	})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	_, hasAlignment := row["alignment"]
+	_, hasAlignedState := row["alignedState"]
+	assert.False(t, hasAlignment, "alignment must be omitted when the stack has no frames, not stamped 0")
+	assert.False(t, hasAlignedState, "alignedState must be omitted when the stack has no frames, not stamped indecisive")
+}
+
 func TestRankingsV2Handler_MTFOverlay_OmittedWithoutQueryParam(t *testing.T) {
 	uc := &rankingsUseCaseMock{}
 	handler := h.NewRankingsV2Handler(uc)
 	handler.SetMTFCalculator(&fakeMTFCalc{
 		bySymbol: map[string]mtf.Stack{
-			"BTCUSDT": {Alignment: 1.0, AlignedState: mkt.StateTrend},
+			"BTCUSDT": stackWithFrame(1.0, mkt.StateTrend),
 		},
 	})
 
@@ -586,7 +632,7 @@ func TestRankingsV2Handler_MTFOverlay_PageSizeCap_AllRowsIndexAligned(t *testing
 		results[i] = usecases.RankedResult{Symbol: mustSymbol(t, symbol), TotalScore: float64(n - i)}
 		// A distinct value per row so a concurrency bug that mixes up which
 		// goroutine writes which resp[i] would show up as a mismatch below.
-		stacks[symbol] = mtf.Stack{Alignment: float64(i) / float64(n), AlignedState: mkt.StateTrend}
+		stacks[symbol] = stackWithFrame(float64(i)/float64(n), mkt.StateTrend)
 	}
 	handler.SetMTFCalculator(&fakeMTFCalc{bySymbol: stacks})
 

@@ -20,8 +20,18 @@ func NewSymbolRouter(detail, regimes http.Handler) *SymbolRouter {
 }
 
 // ServeHTTP dispatches to the correct sub-handler.
+//
+// A plain strings.HasSuffix(path, mtfSuffix) would misroute a bare symbol
+// literally named "regimes" (path "/api/symbol/regimes"): the whole
+// remainder happens to spell the action's name, even though there is no
+// "/{action}" segment after it. Require the action to be its own path
+// segment — i.e. immediately preceded by "/" within the part of the path
+// after the fixed prefix — so only a genuine "{symbol}/regimes" suffix
+// dispatches to the regimes handler; a bare symbol always falls through to
+// the detail handler regardless of what it's named.
 func (r *SymbolRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	if strings.HasSuffix(req.URL.Path, mtfSuffix) {
+	rest := strings.TrimPrefix(req.URL.Path, symbolDetailPrefix)
+	if idx := strings.LastIndex(rest, "/"); idx >= 0 && rest[idx:] == mtfSuffix {
 		r.regimes.ServeHTTP(w, req)
 		return
 	}

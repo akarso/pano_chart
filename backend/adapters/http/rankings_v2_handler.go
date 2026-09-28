@@ -208,10 +208,15 @@ func applyMTFOverlays(
 // It is best-effort: any error (miss, store transport failure, or the
 // shared overlay deadline expiring) leaves resp unchanged and reports false
 // rather than failing the row — the overlay must never break the primary
-// response (PR-099).
+// response (PR-099). An empty Stack (no fresh frames for this symbol —
+// cold start, store outage) is not an error from Calculate's point of view,
+// but it must still leave the fields unset: Alignment/AlignedState would
+// otherwise read 0/"indecisive", which is indistinguishable from a real
+// reading (COMMON.md says both are omitted when the store has nothing
+// usable, not stamped with a fake zero value).
 func applyMTFOverlay(ctx context.Context, resp *RankedResultV2Response, calc MTFCalculator, symbol string) bool {
 	stack, err := calc.Calculate(ctx, symbol)
-	if err != nil {
+	if err != nil || len(stack.Frames) == 0 {
 		return false
 	}
 	alignment := stack.Alignment

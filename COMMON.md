@@ -340,10 +340,13 @@ candle fetch or rescoring) across the fixed timeframe set `15m`, `1h`, `4h`,
 each row of the **current page only** — a per-row store read, not a
 per-request recomputation over the full universe. Rows are read concurrently
 under one shared deadline for the page, so a slow store bounds the overlay's
-added latency instead of scaling with page size. Omitted (not
-`0`/`"indecisive"`) when the overlay wasn't requested, the store had nothing
-usable for that row, or the shared deadline elapsed first; a real
-`alignment: 0` still shows.
+added latency instead of scaling with page size. Both fields are omitted
+when the overlay wasn't requested, or when the row has no fresh frames at
+all (cold start / store outage — `alignment` would otherwise read a
+misleading `0`/`"indecisive"` instead of "no data"), or when the shared
+deadline elapsed first. With at least one fresh frame, `alignment` is always
+`> 0` (minimum `1/frames.length`), so a present `alignment` field is never a
+placeholder zero.
 
 ### Rankings relative strength (PR-096)
 
