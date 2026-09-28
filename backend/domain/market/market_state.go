@@ -23,6 +23,30 @@ type Breadth struct {
 	Trend       float64
 }
 
+// DominantOf picks the highest-weighted regime in b. This is the single
+// canonical tie-break for "which regime does this Breadth mean" — callers
+// across packages (market-wide participation, per-symbol MTF stacks, …)
+// must share it rather than reimplementing the cascade, so they can never
+// silently disagree about the same Breadth. Ties favor sideways < trend <=
+// compression <= expansion.
+func DominantOf(b Breadth) (State, float64) {
+	dominant := StateSideways
+	max := b.Sideways
+	if b.Trend >= max {
+		dominant = StateTrend
+		max = b.Trend
+	}
+	if b.Compression >= max {
+		dominant = StateCompression
+		max = b.Compression
+	}
+	if b.Expansion >= max {
+		dominant = StateExpansion
+		max = b.Expansion
+	}
+	return dominant, max
+}
+
 // Summary is the aggregate market state for a given timeframe.
 type Summary struct {
 	Timeframe   string

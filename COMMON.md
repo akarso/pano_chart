@@ -305,6 +305,46 @@ Redis TTL is `min(3m, timeframe/2)` (`market_sectors_v1`). Empty results are not
 cached; non-empty payloads (including `rsAvailable: false` rows) are. Invalid
 `timeframe` / `limit` → HTTP 400.
 
+### Multi-timeframe regime stack (PR-099)
+
+`GET /api/symbol/{symbol}/regimes` reads the shared evaluation store (no
+candle fetch or rescoring) across the fixed timeframe set `15m`, `1h`, `4h`,
+`1d`:
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "frames": [
+    {
+      "timeframe": "15m",
+      "structure": { "trend": 0.72, "sideways": 0.15, "compression": 0.08, "expansion": 0.05 },
+      "dominant": "trend",
+      "bias": "up",
+      "score": 0.72
+    }
+  ],
+  "alignment": 1.0,
+  "alignedState": "trend"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `frames[]` | One entry per timeframe that had a fresh, current-algo-version store snapshot for this symbol — a missing, stale, or algo-version-mismatched frame is omitted, not an error |
+| `structure` | Same four-way proportional mix as the Market Pulse regime score (`trend`/`sideways`/`compression`/`expansion`, sums to 1) |
+| `dominant` | The `structure` component with the highest weight for that frame |
+| `alignment` | Share of present `frames` whose `dominant` matches the most common one (0–1); `0` with an empty `frames[]` |
+| `alignedState` | That most-common `dominant` when `alignment ≥ 0.75`, else `indecisive` |
+
+`GET /api/rankings?mtf=1` adds `alignment` / `alignedState` (omitempty) to
+each row of the **current page only** — a per-row store read, not a
+per-request recomputation over the full universe. Rows are read concurrently
+under one shared deadline for the page, so a slow store bounds the overlay's
+added latency instead of scaling with page size. Omitted (not
+`0`/`"indecisive"`) when the overlay wasn't requested, the store had nothing
+usable for that row, or the shared deadline elapsed first; a real
+`alignment: 0` still shows.
+
 ### Rankings relative strength (PR-096)
 
 `GET /api/rankings` includes response-level and per-row fields:
