@@ -18,6 +18,7 @@ import 'http_transition_api.dart';
 import 'market_pulse_selection.dart';
 import 'market_state_data.dart';
 import 'participation_counts.dart';
+import 'regime_colors.dart';
 import 'regime_data.dart';
 import 'regime_history_data.dart';
 import 'sector_rotation_data.dart';
@@ -1794,24 +1795,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  Color _regimeColor(String regime) {
-    switch (regime) {
-      case 'compression':
-        return Colors.amber;
-      case 'sideways':
-        return Colors.blueGrey;
-      case 'trend':
-        return Colors.tealAccent;
-      case 'expansion':
-        return Colors.redAccent;
-      case 'silent':
-        return Colors.white;
-      case 'indecisive':
-        return const Color(0xFFB0C4DE);
-      default:
-        return Colors.grey;
-    }
-  }
+  // Delegates to the shared helper (PR-100) so Market Pulse, the overview
+  // grid's aligned badge, and the symbol detail MTF strip can never disagree
+  // about what a regime looks like.
+  Color _regimeColor(String regime) => regimeColor(regime);
 
   IconData _regimeIcon(String regime) {
     switch (regime) {
@@ -1832,27 +1819,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  Color _trendBiasColor(String bias) {
-    switch (bias) {
-      case 'up':
-        return Colors.tealAccent;
-      case 'down':
-        return Colors.redAccent;
-      default:
-        return Colors.amber;
-    }
-  }
+  Color _trendBiasColor(String bias) => trendBiasColor(bias);
 
-  IconData _trendBiasIcon(String bias) {
-    switch (bias) {
-      case 'up':
-        return Icons.trending_up;
-      case 'down':
-        return Icons.trending_down;
-      default:
-        return Icons.show_chart;
-    }
-  }
+  IconData _trendBiasIcon(String bias) => trendBiasIcon(bias);
 
   String _regimeLabel(String regime, String bias) {
     if (regime == 'trend') {

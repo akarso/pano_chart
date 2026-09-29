@@ -46,6 +46,7 @@ class _FakeGetOverview extends GetOverview {
   final Duration delay;
   final OverviewResult result;
   final List<int> pageCalls = [];
+  final List<bool> mtfCalls = [];
 
   _FakeGetOverview({this.delay = Duration.zero, required this.result});
 
@@ -57,8 +58,10 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
+    bool mtf = false,
   }) async {
     pageCalls.add(page);
+    mtfCalls.add(mtf);
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;
   }
@@ -479,6 +482,146 @@ void main() {
       expect(find.byType(UpgradeScreen), findsNothing);
       // Still on the overview screen, not pushed anywhere else.
       expect(find.byKey(const ValueKey('overview-menu-nav-icon')), findsOneWidget);
+    });
+  });
+
+  group('aligned badge (PR-100)', () {
+    testWidgets('shows a top border + tooltip for a pro user at alignment >= 0.75',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(
+          items: [
+            OverviewItem(
+              symbol: 'ALIGNEDUSDT',
+              totalScore: 1.0,
+              sparkline: [100.0, 101.0],
+              alignment: 0.75,
+              alignedState: 'trend',
+            ),
+          ],
+          hasMore: false,
+        ),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+          find.byKey(const Key('aligned-badge-ALIGNEDUSDT')), findsOneWidget);
+      final tooltip = tester.widget<Tooltip>(find.byType(Tooltip));
+      expect(tooltip.message, 'Aligned: trend (75%)');
+    });
+
+    testWidgets('hides the border below the 0.75 alignment floor',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(
+          items: [
+            OverviewItem(
+              symbol: 'WEAKUSDT',
+              totalScore: 1.0,
+              sparkline: [100.0, 101.0],
+              alignment: 0.5,
+              alignedState: 'trend',
+            ),
+          ],
+          hasMore: false,
+        ),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('aligned-badge-WEAKUSDT')), findsNothing);
+    });
+
+    testWidgets('hides the border for a free-tier user even at alignment >= 0.75',
+        (WidgetTester tester) async {
+      final vm = OverviewViewModel(_FakeGetOverview(
+        result: const OverviewResult(
+          items: [
+            OverviewItem(
+              symbol: 'ALIGNEDUSDT',
+              totalScore: 1.0,
+              sparkline: [100.0, 101.0],
+              alignment: 1.0,
+              alignedState: 'trend',
+            ),
+          ],
+          hasMore: false,
+        ),
+      ));
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+          find.byKey(const Key('aligned-badge-ALIGNEDUSDT')), findsNothing);
+    });
+  });
+
+  group('mtf overlay request gating (PR-100 CR)', () {
+    testWidgets('a free user does not request the ?mtf=1 overlay',
+        (WidgetTester tester) async {
+      final fakeGetOverview = _FakeGetOverview(
+        result: const OverviewResult(items: [], hasMore: false),
+      );
+      final vm = OverviewViewModel(fakeGetOverview);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(fakeGetOverview.mtfCalls, isNotEmpty);
+      expect(fakeGetOverview.mtfCalls.every((v) => v == false), isTrue);
+    });
+
+    testWidgets('a pro user requests the ?mtf=1 overlay',
+        (WidgetTester tester) async {
+      final fakeGetOverview = _FakeGetOverview(
+        result: const OverviewResult(items: [], hasMore: false),
+      );
+      final vm = OverviewViewModel(fakeGetOverview);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+
+      await tester.pumpWidget(_wrap(
+        OverviewWidget(
+          viewModel: vm,
+          getCandleSeries: _FakeGetCandleSeries(),
+          billingManager: billing,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(fakeGetOverview.mtfCalls, isNotEmpty);
+      expect(fakeGetOverview.mtfCalls.every((v) => v == true), isTrue);
     });
   });
 }

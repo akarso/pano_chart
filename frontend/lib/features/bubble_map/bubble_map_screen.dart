@@ -16,6 +16,7 @@ import '../detail/detail_context.dart';
 import '../detail/detail_screen.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
+import '../detail/http_mtf_regimes_api.dart';
 import '../detail/http_setup_api.dart';
 import '../volatility/http_volatility_api.dart';
 import '../scorecards/http_scorecard_api.dart';
@@ -41,6 +42,7 @@ class BubbleMapScreen extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
+  final MtfRegimesApi? mtfRegimesApi;
   final ScorecardApi? scorecardApi;
 
   /// Whether the user has pro access (enables auto-refresh).
@@ -55,6 +57,7 @@ class BubbleMapScreen extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.volatilityApi,
+    this.mtfRegimesApi,
     this.scorecardApi,
     this.isProUser = false,
   }) : super(key: key);
@@ -310,6 +313,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
             volatilityApi: widget.volatilityApi,
+            mtfRegimesApi: widget.mtfRegimesApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
             detailContext: DetailContext(

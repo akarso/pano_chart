@@ -26,6 +26,13 @@ class OverviewViewModel {
 
   VoidCallback? onChanged;
 
+  /// Gates the `?mtf=1` alignment overlay (PR-100) — widget-owned
+  /// entitlement, kept in sync via direct assignment (same pattern as
+  /// [attachPrefs]) since it can change mid-lifetime (purchase/restore).
+  /// Defaults false so a caller that never sets it doesn't pay for an
+  /// overlay it can't show.
+  bool isProUser = false;
+
   int _generation = 0;
 
   OverviewViewModel(this._getOverview);
@@ -107,6 +114,14 @@ class OverviewViewModel {
               (a, b) => b.breakoutDownScore.compareTo(a.breakoutDownScore));
         }
         break;
+      case 'aligned':
+        // Alignment desc, then total score desc (PR-100) — fixed order, no
+        // up/down toggle (not in kDirectionalSorts).
+        sorted.sort((a, b) {
+          final c = (b.alignment ?? 0.0).compareTo(a.alignment ?? 0.0);
+          return c != 0 ? c : b.totalScore.compareTo(a.totalScore);
+        });
+        break;
       default:
         sorted.sort((a, b) => b.totalScore.compareTo(a.totalScore));
     }
@@ -161,6 +176,8 @@ class OverviewViewModel {
                 'rs': e.rs,
                 'beta': e.beta,
                 'rsRank': e.rsRank,
+                'alignment': e.alignment,
+                'alignedState': e.alignedState,
               })
           .toList(),
       'hasMore': result.hasMore,
@@ -209,6 +226,8 @@ class OverviewViewModel {
       rs: (e['rs'] as num?)?.toDouble(),
       beta: (e['beta'] as num?)?.toDouble(),
       rsRank: (e['rsRank'] as num?)?.toDouble(),
+      alignment: (e['alignment'] as num?)?.toDouble(),
+      alignedState: e['alignedState'] as String?,
     );
   }
 
@@ -230,6 +249,7 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser,
       );
       if (currentGen != _generation) return;
 
@@ -320,6 +340,7 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser,
       );
 
       if (currentGen != _generation) return;
@@ -372,6 +393,7 @@ class OverviewViewModel {
         sort: _state.sort,
         snapshot: _state.snapshot,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser,
       );
 
       if (currentGen != _generation) return;
@@ -482,6 +504,7 @@ class OverviewViewModel {
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
         symbols: missing.toList(),
+        mtf: isProUser,
       );
 
       if (currentGen != _generation) return;

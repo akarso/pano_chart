@@ -26,9 +26,13 @@ import 'detail_context.dart';
 import 'http_setup_api.dart';
 import 'http_fragility_api.dart';
 import 'http_behavior_api.dart';
+import 'http_mtf_regimes_api.dart';
 import 'fragility_data.dart';
 import 'behavior_data.dart';
+import 'mtf_regimes_data.dart';
+import 'mtf_strip_presentation.dart';
 import 'setup_data.dart';
+import '../market_state/regime_colors.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/reliability_chip.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -58,6 +62,9 @@ class DetailScreen extends StatefulWidget {
 
   /// API for fetching retail behavior scores.
   final BehaviorApi? behaviorApi;
+
+  /// API for fetching the multi-timeframe regime stack (PR-100).
+  final MtfRegimesApi? mtfRegimesApi;
 
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
@@ -89,6 +96,7 @@ class DetailScreen extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.mtfRegimesApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -150,6 +158,13 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _volatilityFetched = false;
   int _volatilityGeneration = 0;
 
+  // ---- MTF regime stack state (PR-100) — symbol-scoped, not reloaded on
+  // chart timeframe switch (the backend stack always covers the same fixed
+  // 15m/1h/4h/1d set regardless of the chart's selected timeframe).
+  MtfRegimesData? _mtfData;
+  bool _mtfFetched = false;
+  int _mtfGeneration = 0;
+
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
@@ -177,6 +192,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadFragilityData();
     _loadBehaviorData();
     _loadVolatilityData();
+    _loadMtfRegimes();
     _startAutoRefresh();
     _startEventsRefreshTimer();
   }
@@ -551,6 +567,25 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
+  /// Fetches the MTF regime stack once per symbol (PR-100) — not reloaded
+  /// on chart timeframe switch, since the stack itself is fixed-timeframe.
+  Future<void> _loadMtfRegimes() async {
+    final api = widget.mtfRegimesApi;
+    if (api == null || _mtfFetched) return;
+    final generation = ++_mtfGeneration;
+    try {
+      final data = await api.fetch(symbol: widget.symbol.value);
+      if (!mounted || generation != _mtfGeneration) return;
+      setState(() {
+        _mtfData = data;
+        _mtfFetched = true;
+      });
+    } catch (_) {
+      if (!mounted || generation != _mtfGeneration) return;
+      setState(() => _mtfFetched = true);
+    }
+  }
+
   Future<void> _loadVolatilityData() async {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
@@ -887,6 +922,10 @@ class _DetailScreenState extends State<DetailScreen> {
             children: [
               if (ctx != null) _buildHeaderBlock(ctx, pct24h, pctRef),
               if (ctx != null) const SizedBox(height: 12),
+              if (_mtfData != null) ...[
+                _buildMtfStrip(_mtfData!),
+                const SizedBox(height: 12),
+              ],
               Text(
                 _timeRangeLabel(),
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
@@ -1540,6 +1579,47 @@ class _DetailScreenState extends State<DetailScreen> {
           'Gainer — positive price change.\n'
           'Loser — negative price change.\n\n'
           'Bar width shows magnitude relative to 100%.',
+    );
+  }
+
+  // ---- MTF regime strip (PR-100) ----
+
+  Widget _buildMtfStrip(MtfRegimesData data) {
+    final pills = buildMtfPills(data);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: pills.map(_buildMtfPill).toList(),
+    );
+  }
+
+  Widget _buildMtfPill(MtfPill pill) {
+    final dominant = pill.dominant;
+    final color = dominant == null ? Colors.white24 : regimeColor(dominant);
+    return Container(
+      key: Key('mtf-pill-${pill.timeframe}'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withAlpha((0.15 * 255).round()),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            pill.timeframe,
+            style: const TextStyle(fontSize: 11, color: Colors.white70),
+          ),
+          if (dominant == 'trend') ...[
+            const SizedBox(width: 4),
+            Icon(
+              trendBiasIcon(pill.bias),
+              size: 12,
+              color: trendBiasColor(pill.bias),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

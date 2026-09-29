@@ -31,6 +31,7 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
+    bool mtf = false,
   }) async {
     // Capture the call index at invocation time (before any awaits).
     final callIdx = calls.length;
@@ -40,6 +41,7 @@ class _FakeGetOverview extends GetOverview {
       'sort': sort,
       'snapshot': snapshot,
       'sidewaysAlgo': sidewaysAlgo,
+      'mtf': mtf,
     });
 
     // If a gate was registered for this call index, wait on it.
@@ -748,6 +750,91 @@ void main() {
           vm.state.items.map((e) => e.symbol).toList(),
           ['ZZUSDT', 'AAUSDT', 'HIUSDT'],
         );
+      });
+    });
+
+    group('aligned sort (PR-100)', () {
+      test('sorts by alignment descending, nulls treated as 0', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            hasMore: false,
+            items: const [
+              OverviewItem(symbol: 'MIDUSDT', alignment: 0.75),
+              OverviewItem(symbol: 'SKIPUSDT'), // no alignment (null)
+              OverviewItem(symbol: 'HIUSDT', alignment: 1.0),
+              OverviewItem(symbol: 'LOWUSDT', alignment: 0.5),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['HIUSDT', 'MIDUSDT', 'LOWUSDT', 'SKIPUSDT'],
+        );
+      });
+
+      test('ties break by total score descending', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          OverviewResult(
+            hasMore: false,
+            items: const [
+              OverviewItem(
+                  symbol: 'LOWSCORE', alignment: 1.0, totalScore: 0.2),
+              OverviewItem(
+                  symbol: 'HISCORE', alignment: 1.0, totalScore: 0.9),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['HISCORE', 'LOWSCORE'],
+        );
+      });
+    });
+
+    group('mtf overlay gating (PR-100 CR)', () {
+      test('defaults to not requesting the overlay', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        await vm.loadInitial('1h');
+
+        expect(fakeGetOverview.calls.single['mtf'], false);
+      });
+
+      test('requests the overlay once isProUser is set', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.isProUser = true;
+        await vm.loadInitial('1h');
+
+        expect(fakeGetOverview.calls.single['mtf'], true);
+      });
+
+      test('refresh and loadNext also respect isProUser', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: true),
+          const OverviewResult(items: [], hasMore: true),
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.isProUser = true;
+        await vm.loadInitial('1h');
+        await vm.refresh('1h');
+        await vm.loadNext('1h');
+
+        expect(fakeGetOverview.calls.map((c) => c['mtf']).toList(),
+            [true, true, true]);
       });
     });
   });

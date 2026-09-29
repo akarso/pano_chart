@@ -36,5 +36,11 @@ abstract class GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    // Requests the backend's `?mtf=1` alignment overlay (PR-099/100). The
+    // caller decides based on entitlement — the overlay has a real,
+    // bounded-but-nonzero backend cost per row (unlike RS, which the
+    // backend always computes), so it should only be requested for users
+    // who can actually see it.
+    bool mtf = false,
   });
 }

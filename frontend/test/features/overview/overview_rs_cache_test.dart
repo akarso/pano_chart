@@ -22,6 +22,7 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
   }) async {
     final i = calls++;
     if (i >= results.length) throw Exception('network error');
