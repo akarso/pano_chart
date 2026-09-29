@@ -341,5 +341,57 @@ void main() {
       expect(find.byKey(const Key('mtf-pill-15m')), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets(
+        "a newer call's success is not overwritten by an older call's "
+        'success arriving later (PR-100 CR)', (tester) async {
+      final api = _RacingMtfRegimesApi();
+
+      await tester.pumpWidget(
+        _app(mtfRegimesApi: api, getCandleSeries: _FakeGetCandleSeries()),
+      );
+      await tester.pump();
+      expect(api.completers.length, 1);
+
+      await tester.tap(find.byTooltip('Reload chart'));
+      await tester.pump();
+      expect(api.completers.length, 2);
+
+      // The newer call (dispatched second) succeeds first, with 2 frames.
+      api.completers[1].complete(const MtfRegimesData(
+        symbol: 'ETHUSDT',
+        frames: [
+          MtfFrame(timeframe: '15m', dominant: 'trend', bias: 'up', score: 0.8),
+          MtfFrame(
+              timeframe: '1h', dominant: 'trend', bias: 'up', score: 0.7),
+        ],
+        alignment: 0.5,
+        alignedState: 'trend',
+      ));
+      await tester.pump();
+      BoxDecoration decorationFor(String tf) => tester
+          .widget<Container>(find.byKey(Key('mtf-pill-$tf')))
+          .decoration as BoxDecoration;
+      expect(decorationFor('1h').border!.top.color, regimeColor('trend'));
+
+      // The older call (dispatched first) succeeds afterwards, with only 1
+      // frame (no 1h frame at all) — this stale reading must not replace
+      // the newer one.
+      api.completers[0].complete(const MtfRegimesData(
+        symbol: 'ETHUSDT',
+        frames: [
+          MtfFrame(timeframe: '15m', dominant: 'trend', bias: 'up', score: 0.8),
+        ],
+        alignment: 0.25,
+        alignedState: 'indecisive',
+      ));
+      await tester.pump();
+
+      expect(decorationFor('1h').border!.top.color, regimeColor('trend'),
+          reason: 'the newer, already-applied reading must survive a '
+              'slower, older response arriving after it, not fall back to '
+              "the older response's missing-frame placeholder");
+      expect(tester.takeException(), isNull);
+    });
   });
 }

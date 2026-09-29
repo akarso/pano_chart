@@ -163,6 +163,8 @@ class _DetailScreenState extends State<DetailScreen> {
   // 15m/1h/4h/1d set regardless of the chart's selected timeframe).
   MtfRegimesData? _mtfData;
   bool _mtfFetched = false;
+  int _mtfRequestSeq = 0;
+  int _mtfAppliedSeq = 0;
 
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
@@ -580,21 +582,23 @@ class _DetailScreenState extends State<DetailScreen> {
   /// this guard is what makes both "Reload chart" and the auto-refresh
   /// tick safe to call unconditionally (PR-100 CR).
   ///
-  /// Deliberately has no generation guard: every call fetches the exact
-  /// same thing (this symbol's stack has no per-call parameters), so two
-  /// overlapping in-flight calls are always fetching identical data — a
-  /// "newest generation wins" rule would only serve to discard a perfectly
-  /// valid success just because a differently-ordered concurrent attempt
-  /// (e.g. an overlapping reload + auto-refresh tick) happened to fail
-  /// first (PR-100 CR). Applying a stale success is harmless here; the
-  /// [_mtfFetched] guard above still prevents further redundant fetches
-  /// once any call succeeds.
+  /// No "newest dispatch wins" guard here: rejecting a response just
+  /// because a differently-ordered concurrent attempt was *dispatched*
+  /// later would discard a perfectly valid success whenever that later
+  /// attempt happens to fail first (PR-100 CR). Instead, [_mtfAppliedSeq]
+  /// tracks the sequence number of the last *applied* response, so a
+  /// success is applied only if it isn't older than whatever is already
+  /// on screen — this still lets an older call's success land when nothing
+  /// newer ever succeeds, while stopping an older, slower response from
+  /// overwriting a newer one that already landed (PR-100 CR).
   Future<void> _loadMtfRegimes() async {
     final api = widget.mtfRegimesApi;
     if (api == null || _mtfFetched) return;
+    final seq = ++_mtfRequestSeq;
     try {
       final data = await api.fetch(symbol: widget.symbol.value);
-      if (!mounted) return;
+      if (!mounted || seq < _mtfAppliedSeq) return;
+      _mtfAppliedSeq = seq;
       setState(() {
         _mtfData = data;
         _mtfFetched = true;
