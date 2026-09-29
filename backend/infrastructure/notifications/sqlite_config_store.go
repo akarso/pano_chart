@@ -37,7 +37,7 @@ func (s *SQLiteConfigStore) migrate() error {
 // configSchemaVersion tracks semantic changes to threshold fields whose
 // stored values can become meaningless when what they threshold changes
 // underneath them. Bump it, and add a fromJSON case, whenever that happens.
-const configSchemaVersion = 2
+const configSchemaVersion = 3
 
 // configJSON is the serialised form stored in the config column.
 type configJSON struct {
@@ -51,6 +51,7 @@ type configJSON struct {
 	Downtrend             bool    `json:"downtrend"`
 	Sideways              bool    `json:"sideways"`
 	SetupOfDay            bool    `json:"setup_of_day"`
+	WatchlistTransitions  bool    `json:"watchlist_transitions"`
 	UptrendMinDominance   float64 `json:"uptrend_min_dominance"`
 	DowntrendMinDominance float64 `json:"downtrend_min_dominance"`
 	SidewaysMinDominance  float64 `json:"sideways_min_dominance"`
@@ -59,6 +60,7 @@ type configJSON struct {
 	DowntrendTimeframe    string  `json:"downtrend_timeframe,omitempty"`
 	SidewaysTimeframe     string  `json:"sideways_timeframe,omitempty"`
 	SetupTimeframe        string  `json:"setup_timeframe,omitempty"`
+	WatchlistTimeframe    string  `json:"watchlist_timeframe,omitempty"`
 }
 
 func toJSON(cfg appnotify.NotificationConfig) configJSON {
@@ -72,6 +74,7 @@ func toJSON(cfg appnotify.NotificationConfig) configJSON {
 		Downtrend:             cfg.Downtrend,
 		Sideways:              cfg.Sideways,
 		SetupOfDay:            cfg.SetupOfDay,
+		WatchlistTransitions:  cfg.WatchlistTransitions,
 		UptrendMinDominance:   cfg.UptrendMinDominance,
 		DowntrendMinDominance: cfg.DowntrendMinDominance,
 		SidewaysMinDominance:  cfg.SidewaysMinDominance,
@@ -80,6 +83,7 @@ func toJSON(cfg appnotify.NotificationConfig) configJSON {
 		DowntrendTimeframe:    cfg.DowntrendTimeframe,
 		SidewaysTimeframe:     cfg.SidewaysTimeframe,
 		SetupTimeframe:        cfg.SetupTimeframe,
+		WatchlistTimeframe:    cfg.WatchlistTimeframe,
 	}
 }
 
@@ -102,6 +106,7 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 		Downtrend:             j.Downtrend,
 		Sideways:              j.Sideways,
 		SetupOfDay:            j.SetupOfDay,
+		WatchlistTransitions:  j.WatchlistTransitions,
 		UptrendMinDominance:   j.UptrendMinDominance,
 		DowntrendMinDominance: j.DowntrendMinDominance,
 		SidewaysMinDominance:  j.SidewaysMinDominance,
@@ -110,6 +115,7 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 		DowntrendTimeframe:    j.DowntrendTimeframe,
 		SidewaysTimeframe:     j.SidewaysTimeframe,
 		SetupTimeframe:        j.SetupTimeframe,
+		WatchlistTimeframe:    j.WatchlistTimeframe,
 	}
 	// PR-072: DowntrendMinDominance used to threshold Scores.Expansion; it
 	// now thresholds Scores.Trend, an unrelated metric with a different
@@ -134,6 +140,25 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 		cfg.SidewaysMinDominance = d.SidewaysMinDominance
 	}
 
+	// PR-101 CR: a config stored before WatchlistTransitions existed
+	// (config_version < 3) has no such JSON key, so it always unmarshals
+	// to false — silently opting every pre-existing user permanently out,
+	// with no way to discover the feature exists unless they happen to
+	// find the settings toggle. Unlike the MinDominance migration above,
+	// this isn't compensating for a metric that changed meaning under an
+	// existing value; it's that the field simply didn't exist yet. A
+	// user's watchlist itself starts empty regardless (PR-101b hasn't
+	// shipped a way to add symbols yet), so this flag is inert until they
+	// actually star something — the same "harmless to default true"
+	// reasoning DefaultNotificationConfig already relies on for brand-new
+	// users applies equally here, so there's no surprise-notification
+	// risk in migrating existing rows the same way. Once a user (re)saves
+	// their config through the PUT endpoint, config_version becomes 3 and
+	// their explicit choice — including an explicit false — sticks.
+	if j.ConfigVersion < 3 {
+		cfg.WatchlistTransitions = true
+	}
+
 	// Backfill empty timeframes from pre-existing configs.
 	if cfg.UptrendTimeframe == "" {
 		cfg.UptrendTimeframe = "1h"
@@ -146,6 +171,9 @@ func fromJSON(userID string, j configJSON) appnotify.NotificationConfig {
 	}
 	if cfg.SetupTimeframe == "" {
 		cfg.SetupTimeframe = "1h"
+	}
+	if cfg.WatchlistTimeframe == "" {
+		cfg.WatchlistTimeframe = "1h"
 	}
 	return cfg
 }

@@ -58,6 +58,18 @@ type SchedulerConfig struct {
 	// once it has elapsed does the next check's candidate (whatever it is
 	// by then) get a real chance to notify.
 	MarketRegimeHoldDuration time.Duration
+
+	// WatchlistCheckInterval is how often watchlisted symbols are scanned
+	// for a dominant-regime transition (ROADMAP PR-101). This is a single
+	// scheduler-wide poll cadence, not "per-user timeframe / 2" as the
+	// spec phrases it, since different users can pick different
+	// WatchlistTimeframe values — polling more often than any one user's
+	// cadence strictly needs just costs a cheap extra store read (the
+	// per-(user,symbol) dedup window, not this interval, is what actually
+	// bounds notification frequency), so one interval fine-grained enough
+	// for the fastest supported timeframe (15m) covers every coarser one
+	// too.
+	WatchlistCheckInterval time.Duration
 }
 
 // DefaultSchedulerConfig returns production defaults.
@@ -77,6 +89,7 @@ func DefaultSchedulerConfig() SchedulerConfig {
 		SetupMinScore:            0.75,
 		Timeframe:                "1h",
 		MarketRegimeHoldDuration: 15 * time.Minute,
+		WatchlistCheckInterval:   5 * time.Minute,
 	}
 }
 
@@ -97,6 +110,12 @@ type Scheduler struct {
 	// marketHold decides suppression for the regime-hold check in
 	// checkMarketForUser — see market_regime_hold.go.
 	marketHold *marketRegimeHold
+
+	// watchlists, regimes, watchlistState — optional, enable
+	// checkWatchlistTransitions (ROADMAP PR-101). See watchlist_alerts.go.
+	watchlists     WatchlistProvider
+	regimes        RegimeStackProvider
+	watchlistState WatchlistStateStore
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -143,6 +162,9 @@ func (s *Scheduler) Run(ctx context.Context) {
 	setupTicker := time.NewTicker(s.cfg.SetupCheckInterval)
 	defer setupTicker.Stop()
 
+	watchlistTicker := time.NewTicker(s.cfg.WatchlistCheckInterval)
+	defer watchlistTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -153,6 +175,8 @@ func (s *Scheduler) Run(ctx context.Context) {
 			s.checkMarketState(ctx)
 		case <-setupTicker.C:
 			s.checkSetupOfDay(ctx)
+		case <-watchlistTicker.C:
+			s.checkWatchlistTransitions(ctx)
 		}
 	}
 }

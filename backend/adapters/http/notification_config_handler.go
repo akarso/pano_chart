@@ -30,6 +30,7 @@ type notificationConfigDTO struct {
 	Downtrend             bool    `json:"downtrend"`
 	Sideways              bool    `json:"sideways"`
 	SetupOfDay            bool    `json:"setup_of_day"`
+	WatchlistTransitions  bool    `json:"watchlist_transitions"`
 	UptrendMinDominance   float64 `json:"uptrend_min_dominance"`
 	DowntrendMinDominance float64 `json:"downtrend_min_dominance"`
 	SidewaysMinDominance  float64 `json:"sideways_min_dominance"`
@@ -38,6 +39,7 @@ type notificationConfigDTO struct {
 	DowntrendTimeframe    string  `json:"downtrend_timeframe,omitempty"`
 	SidewaysTimeframe     string  `json:"sideways_timeframe,omitempty"`
 	SetupTimeframe        string  `json:"setup_timeframe,omitempty"`
+	WatchlistTimeframe    string  `json:"watchlist_timeframe,omitempty"`
 }
 
 func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
@@ -51,6 +53,7 @@ func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
 		Downtrend:             cfg.Downtrend,
 		Sideways:              cfg.Sideways,
 		SetupOfDay:            cfg.SetupOfDay,
+		WatchlistTransitions:  cfg.WatchlistTransitions,
 		UptrendMinDominance:   cfg.UptrendMinDominance,
 		DowntrendMinDominance: cfg.DowntrendMinDominance,
 		SidewaysMinDominance:  cfg.SidewaysMinDominance,
@@ -59,6 +62,7 @@ func toDTO(cfg appnotify.NotificationConfig) notificationConfigDTO {
 		DowntrendTimeframe:    cfg.DowntrendTimeframe,
 		SidewaysTimeframe:     cfg.SidewaysTimeframe,
 		SetupTimeframe:        cfg.SetupTimeframe,
+		WatchlistTimeframe:    cfg.WatchlistTimeframe,
 	}
 }
 
@@ -80,6 +84,7 @@ func fromDTO(dto notificationConfigDTO) appnotify.NotificationConfig {
 		Downtrend:             dto.Downtrend,
 		Sideways:              dto.Sideways,
 		SetupOfDay:            dto.SetupOfDay,
+		WatchlistTransitions:  dto.WatchlistTransitions,
 		UptrendMinDominance:   dto.UptrendMinDominance,
 		DowntrendMinDominance: dto.DowntrendMinDominance,
 		SidewaysMinDominance:  dto.SidewaysMinDominance,
@@ -88,6 +93,7 @@ func fromDTO(dto notificationConfigDTO) appnotify.NotificationConfig {
 		DowntrendTimeframe:    dto.DowntrendTimeframe,
 		SidewaysTimeframe:     dto.SidewaysTimeframe,
 		SetupTimeframe:        dto.SetupTimeframe,
+		WatchlistTimeframe:    dto.WatchlistTimeframe,
 	}
 }
 

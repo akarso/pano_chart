@@ -348,6 +348,51 @@ deadline elapsed first. With at least one fresh frame, `alignment` is always
 `> 0` (minimum `1/frames.length`), so a present `alignment` field is never a
 placeholder zero.
 
+### Watchlist (PR-101)
+
+`GET/PUT/DELETE /api/watchlist` — auth required (`Authorization: Bearer
+<device secret>`; unlike most other endpoints this one hard-enforces auth
+unconditionally, no unauthenticated fallback). Body for PUT/DELETE:
+
+```json
+{ "symbols": ["BTCUSDT", "ETHUSDT"] }
+```
+
+* `GET` returns the caller's current watchlist, oldest-added first:
+  `{ "symbols": [...] }`.
+* `PUT` **replaces** the entire watchlist with `symbols` — the app always
+  resyncs its full local (offline-cached) state, not a per-symbol add. A
+  symbol already on the list keeps its original add order even across a
+  resync. Capped at 50 symbols per user; over the cap → `400`, nothing
+  written.
+* `DELETE` removes only the given `symbols` from the watchlist (a single
+  star-off does not need to resend the full list).
+* Both `PUT` and `DELETE` respond with the resulting watchlist, same shape
+  as `GET`.
+
+Per-user notification config (`/api/notification/config`) gains
+`watchlist_transitions` (bool) and `watchlist_timeframe` (string, e.g.
+`"1h"`) — one flag/timeframe pair covers every symbol on the watchlist,
+unlike the per-regime timeframes above.
+
+When enabled, the backend scans each watchlisted symbol's PR-099 regime
+stack on `watchlist_timeframe` and pushes a notification on three tracked
+dominant-regime transitions: `compression → expansion`, `sideways →
+trend`, `trend → sideways|compression`. At most one push per `(user,
+symbol)` per 4 bars of `watchlist_timeframe`. Payload:
+
+```json
+{
+  "type": "watchlist_transition",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "from": "compression",
+  "to": "expansion",
+  "bias": "up",
+  "score": "0.7200"
+}
+```
+
 ### Rankings relative strength (PR-096)
 
 `GET /api/rankings` includes response-level and per-row fields:

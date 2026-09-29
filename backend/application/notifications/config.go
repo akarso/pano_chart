@@ -14,6 +14,15 @@ type NotificationConfig struct {
 	Sideways      bool
 	SetupOfDay    bool
 
+	// WatchlistTransitions gates the watchlist regime-transition alert
+	// (ROADMAP PR-101). It is harmless to default true, here and for a
+	// config row stored before this field existed (see
+	// infrastructure/notifications/sqlite_config_store.go's
+	// config_version < 3 migration) — with an empty watchlist there is
+	// nothing to check, so the flag is inert until the user actually
+	// stars a symbol.
+	WatchlistTransitions bool
+
 	UptrendMinDominance   float64
 	DowntrendMinDominance float64
 	SidewaysMinDominance  float64
@@ -23,6 +32,11 @@ type NotificationConfig struct {
 	DowntrendTimeframe string
 	SidewaysTimeframe  string
 	SetupTimeframe     string
+	// WatchlistTimeframe is the single timeframe checked for every symbol
+	// on the user's watchlist (ROADMAP PR-101) — unlike the per-regime
+	// timeframes above, there is only one watchlist alert type, so one
+	// timeframe suffices.
+	WatchlistTimeframe string
 }
 
 // DefaultNotificationConfig returns sane defaults for a new user.
@@ -45,6 +59,7 @@ func DefaultNotificationConfig(userID string) NotificationConfig {
 		Downtrend:             true,
 		Sideways:              true,
 		SetupOfDay:            true,
+		WatchlistTransitions:  true,
 		UptrendMinDominance:   0.35,
 		DowntrendMinDominance: 0.35,
 		SidewaysMinDominance:  0.35,
@@ -53,6 +68,7 @@ func DefaultNotificationConfig(userID string) NotificationConfig {
 		DowntrendTimeframe:    "1h",
 		SidewaysTimeframe:     "1h",
 		SetupTimeframe:        "1h",
+		WatchlistTimeframe:    "1h",
 	}
 }
 
