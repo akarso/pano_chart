@@ -110,7 +110,7 @@ void main() {
     });
 
     test('returns NaN for first period indices', () {
-      final n = 20;
+      const n = 20;
       final highs = List.generate(n, (i) => 110.0 + i);
       final lows = List.generate(n, (i) => 90.0 + i);
       final closes = List.generate(n, (i) => 100.0 + i);
@@ -125,7 +125,7 @@ void main() {
 
     test('constant range produces constant ATR', () {
       // H-L always 10, no gaps → TR always 10 → ATR always 10
-      final n = 20;
+      const n = 20;
       final highs = List.filled(n, 110.0);
       final lows = List.filled(n, 100.0);
       final closes = List.filled(n, 105.0);

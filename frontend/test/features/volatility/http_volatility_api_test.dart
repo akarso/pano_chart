@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:pano_chart_frontend/features/volatility/http_volatility_api.dart';
-import 'package:pano_chart_frontend/features/volatility/volatility_model.dart';
 
 void main() {
   group('HttpVolatilityApi', () {

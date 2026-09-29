@@ -41,10 +41,10 @@ void main() {
       // The offline kind takes priority — when switching from stale to offline,
       // only one banner is rendered.
       await tester.pumpWidget(
-        MaterialApp(
+        const MaterialApp(
           home: Scaffold(
             body: Column(
-              children: const [
+              children: [
                 OverviewBanner(kind: OverviewBannerKind.offline),
               ],
             ),

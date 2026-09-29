@@ -234,7 +234,7 @@ void main() {
     });
 
     test('toString includes fields', () {
-      final s = SubscriptionStatus(active: true);
+      const s = SubscriptionStatus(active: true);
       expect(s.toString(), contains('active=true'));
     });
   });

@@ -365,7 +365,7 @@ class _FeedSettingsSheetState extends State<_FeedSettingsSheet> {
               subtitle: Text('Display social posts on the detail chart',
                   style: TextStyle(color: Colors.grey[600], fontSize: 12)),
               value: widget.viewModel.showOnChart,
-              activeColor: const Color(0xFF42A5F5),
+              activeThumbColor: const Color(0xFF42A5F5),
               onChanged: (v) {
                 setState(() => widget.viewModel.showOnChart = v);
               },
@@ -377,7 +377,7 @@ class _FeedSettingsSheetState extends State<_FeedSettingsSheet> {
               subtitle: Text('Alert when new posts arrive',
                   style: TextStyle(color: Colors.grey[600], fontSize: 12)),
               value: widget.viewModel.notificationsEnabled,
-              activeColor: const Color(0xFF42A5F5),
+              activeThumbColor: const Color(0xFF42A5F5),
               onChanged: (v) {
                 setState(() => widget.viewModel.notificationsEnabled = v);
               },
@@ -509,7 +509,7 @@ class _AccountSettingsSheetState extends State<_AccountSettingsSheet> {
             title: const Text('Omit retweets',
                 style: TextStyle(color: Colors.white, fontSize: 14)),
             value: _settings.omitRetweets,
-            activeColor: const Color(0xFF42A5F5),
+            activeThumbColor: const Color(0xFF42A5F5),
             onChanged: (v) =>
                 setState(() => _settings = _settings.copyWith(omitRetweets: v)),
           ),
@@ -520,7 +520,7 @@ class _AccountSettingsSheetState extends State<_AccountSettingsSheet> {
             title: const Text('Omit replies',
                 style: TextStyle(color: Colors.white, fontSize: 14)),
             value: _settings.omitReplies,
-            activeColor: const Color(0xFF42A5F5),
+            activeThumbColor: const Color(0xFF42A5F5),
             onChanged: (v) =>
                 setState(() => _settings = _settings.copyWith(omitReplies: v)),
           ),

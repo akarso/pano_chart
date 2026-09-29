@@ -85,7 +85,7 @@ class SocialFeedViewModel {
   /// IDs already seen — used for notification dedup.
   final Set<String> _knownIds = {};
 
-  SocialFeedViewModel(this._api, {required String userId}) : _userId = userId;
+  SocialFeedViewModel(this._api, {required this._userId});
 
   /// Attach preferences so settings persist across restarts.
   void attachPrefs(PreferencesService? prefs) {

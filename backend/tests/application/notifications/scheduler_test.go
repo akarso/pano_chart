@@ -502,3 +502,54 @@ func TestScheduler_RunReturnsPromptlyWhenCalculateBlocksOnCancelledContext(t *te
 			"regimeHistoryRepo while a resumed Calculate is still about to write to it")
 	}
 }
+
+// TestScheduler_Run_ZeroWatchlistCheckInterval_DoesNotPanic is the
+// regression test for PR-101 CR: only DefaultSchedulerConfig sets
+// WatchlistCheckInterval today, so a caller building SchedulerConfig by
+// hand and omitting it would otherwise pass a zero Duration straight to
+// time.NewTicker, which panics ("non-positive interval for NewTicker").
+// Run must fall back to a sane default instead.
+func TestScheduler_Run_ZeroWatchlistCheckInterval_DoesNotPanic(t *testing.T) {
+	eng := notifications.NewEngine(&spySender{}, notifications.DefaultEngineConfig())
+
+	cfg := notifications.SchedulerConfig{
+		MacroCheckInterval:  time.Hour,
+		MarketCheckInterval: time.Hour,
+		SetupCheckInterval:  time.Hour,
+		// WatchlistCheckInterval deliberately left at its zero value.
+	}
+	sched := notifications.NewScheduler(eng, nil, nil, nil, cfg)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	panicked := make(chan any, 1)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked <- r
+				close(runDone)
+				return
+			}
+			close(runDone)
+		}()
+		sched.Run(ctx)
+	}()
+
+	// Give Run a moment to construct its tickers (where a panic, if any,
+	// would happen) before tearing down.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-runDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Run did not return after cancellation")
+	}
+
+	select {
+	case r := <-panicked:
+		t.Fatalf("Run panicked with a zero WatchlistCheckInterval: %v", r)
+	default:
+	}
+}

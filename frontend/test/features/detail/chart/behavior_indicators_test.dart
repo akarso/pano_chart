@@ -80,7 +80,7 @@ void main() {
           computeBehaviorIndicators(closes, highs, lows, volumes, 20);
 
       // At the end of a strong trend, greed should exceed fear.
-      final last = n - 1;
+      const last = n - 1;
       expect(result.greed[last], greaterThan(result.fear[last]),
           reason: 'greed should exceed fear in uptrend');
     });
@@ -103,7 +103,7 @@ void main() {
       final calm = computeBehaviorIndicators(
           calmCloses, calmHighs, calmLows, volumes, 20);
 
-      final last = n - 1;
+      const last = n - 1;
       expect(volatile.fear[last], greaterThan(calm.fear[last]),
           reason: 'volatile fear > calm fear');
       expect(volatile.panic[last], greaterThan(calm.panic[last]),
@@ -128,7 +128,7 @@ void main() {
       final choppy = computeBehaviorIndicators(
           choppyCloses, choppyHighs, choppyLows, volumes, 20);
 
-      final last = n - 1;
+      const last = n - 1;
       expect(calm.patience[last], greaterThan(choppy.patience[last]),
           reason: 'calm patience > choppy patience');
     });

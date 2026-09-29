@@ -713,39 +713,6 @@ class _GateSetup implements SetupApi {
   }
 }
 
-class _SetupChip implements ScorecardApi {
-  @override
-  Future<ScorecardSummary> summary({
-    required String timeframe,
-    String since = '30d',
-  }) async {
-    return ScorecardSummary(
-      timeframe: timeframe,
-      since: '',
-      sinceRaw: since,
-      items: const [
-        ScorecardSummaryItem(
-          kind: 'setup',
-          label: 'breakout_up',
-          hitRate: 0.58,
-          baseline: 0.4,
-          n: 412,
-        ),
-      ],
-    );
-  }
-
-  @override
-  Future<ScorecardDetail> get({
-    required String kind,
-    required String label,
-    required String timeframe,
-    String since = '30d',
-  }) {
-    throw UnimplementedError();
-  }
-}
-
 SetupData _setup({
   required String timeframe,
   required String bestSetup,

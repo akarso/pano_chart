@@ -186,7 +186,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     return SwitchListTile(
       title: Text(label),
       value: value,
-      activeColor: const Color(0xFF42A5F5),
+      activeThumbColor: const Color(0xFF42A5F5),
       onChanged: onChanged,
     );
   }
@@ -207,7 +207,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             child: SwitchListTile(
               title: Text(label),
               value: enabled,
-              activeColor: const Color(0xFF42A5F5),
+              activeThumbColor: const Color(0xFF42A5F5),
               onChanged: onToggle,
             ),
           ),

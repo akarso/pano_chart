@@ -47,7 +47,7 @@ void main() {
     });
 
     test('dimensions returns all four dimensions', () {
-      final data = BehaviorData(
+      const data = BehaviorData(
         symbol: 'BTCUSDT',
         timeframe: '4h',
         greed: 0.5,

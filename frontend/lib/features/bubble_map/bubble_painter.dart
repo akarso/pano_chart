@@ -149,7 +149,7 @@ class BubblePainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
 
-    final gap = 2.0;
+    const gap = 2.0;
     final totalH = labelPainter.height + gap + changePainter.height;
 
     labelPainter.paint(

@@ -53,6 +53,7 @@ import (
 	appsocial "pano_chart/backend/application/social"
 	infranotify "pano_chart/backend/infrastructure/notifications"
 	infrasocial "pano_chart/backend/infrastructure/social"
+	infrawatchlist "pano_chart/backend/infrastructure/watchlist"
 )
 
 func main() {
@@ -698,6 +699,13 @@ func main() {
 	}
 	log.Println("[main] Notification config store initialized")
 
+	// --- Watchlist store (symbols + transition-alert dedup state) ---
+	watchlistStore, err := infrawatchlist.NewSQLiteStore(deviceStore.DB())
+	if err != nil {
+		log.Fatalf("[main] watchlist store: %v", err)
+	}
+	log.Println("[main] Watchlist store initialized")
+
 	// --- Notification engine (broadcast: market, setup, macro, news) ---
 	if fcmCredsPath != "" {
 		fcmForBroadcast, err := infrasocial.NewFCMNotifier(fcmCredsPath, fcmProjectID)
@@ -724,6 +732,10 @@ func main() {
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
 			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
+			notifyScheduler.SetWatchlistProvider(watchlistStore)
+			notifyScheduler.SetRegimeStackProvider(mtfService)
+			notifyScheduler.SetWatchlistStateStore(watchlistStore)
+			log.Println("[main] Watchlist transition alerts wired into scheduler")
 			backgroundWG.Add(1)
 			go func() {
 				defer backgroundWG.Done()
@@ -837,6 +849,11 @@ func main() {
 	// Notification config endpoint
 	mux.Handle("/api/notification/config", authMW(adhttp.NewNotificationConfigHandler(notifConfigStore)))
 	log.Println("[main] /api/notification/config endpoint registered")
+
+	// Watchlist endpoint — hard-enforced auth regardless of AUTH_ENFORCE,
+	// see adhttp.NewWatchlistRoute's doc.
+	mux.Handle("/api/watchlist", adhttp.NewWatchlistRoute(watchlistStore, credentialStore))
+	log.Println("[main] /api/watchlist endpoint registered")
 
 	// Volatility profile endpoint (handler constructed earlier, alongside
 	// the setup engine's SeasonalityProvider wiring — PR-082)

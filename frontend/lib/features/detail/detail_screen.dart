@@ -833,10 +833,11 @@ class _DetailScreenState extends State<DetailScreen> {
     final pct24h = _last24hPct();
     final pctRef = _referenceAreaPct();
 
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         Navigator.of(context).pop(isFavourite);
-        return false;
       },
       child: Scaffold(
         backgroundColor: const Color.fromARGB(255, 0, 0, 0),
@@ -1540,7 +1541,7 @@ class _DetailScreenState extends State<DetailScreen> {
     // Direction coloring: trend uses sign, compression uses sign heuristic,
     // breakout up = green, breakout down = red, sideways = gray.
     final trendColor = ctx.trendScore >= 0 ? Colors.green : Colors.red;
-    final compressionColor = Colors.amber;
+    const compressionColor = Colors.amber;
     const sidewaysColor = Colors.grey;
 
     return _fieldset(
@@ -1668,18 +1669,6 @@ class _DetailScreenState extends State<DetailScreen> {
 
     // Normalize sub-scores to the total quality percentage
     final subSum = data.scores.values.fold(0.0, (a, b) => a + b);
-
-    // Health label color: green > 0.8, grey > 0.6, orange > 0.4, red otherwise
-    Color healthColor;
-    if (data.trendHealth > 0.8) {
-      healthColor = Colors.green;
-    } else if (data.trendHealth > 0.6) {
-      healthColor = Colors.white54;
-    } else if (data.trendHealth > 0.4) {
-      healthColor = Colors.orange;
-    } else {
-      healthColor = Colors.red;
-    }
 
     // Confidence dot color: green > 0.75, yellow > 0.55, red otherwise
     Color confidenceColor;

@@ -181,28 +181,28 @@ void main() {
     });
 
     testWidgets('shows state and composite data on success', (tester) async {
-      final stateApi = _FakeStateApi(MarketStateData(
+      final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'compression',
         confidence: 0.65,
-        breadth: const MarketBreadth(
+        breadth: MarketBreadth(
           sideways: 0.2,
           compression: 0.5,
           expansion: 0.1,
           trend: 0.2,
         ),
         symbolCount: 100,
-        participation: const ParticipationCounts(
+        participation: ParticipationCounts(
           up: 20,
           down: 15,
           ranging: 65,
           total: 100,
         ),
       ));
-      final compositeApi = _FakeCompositeApi(CompositeIndexData(
+      final compositeApi = _FakeCompositeApi(const CompositeIndexData(
         timeframe: '4h',
         symbolCount: 80,
-        points: const [
+        points: [
           IndexPoint(timestamp: 1000, value: 100.0),
           IndexPoint(timestamp: 2000, value: 101.5),
         ],
@@ -229,12 +229,11 @@ void main() {
     });
 
     testWidgets('back button pops navigation', (tester) async {
-      bool popped = false;
-      final stateApi = _FakeStateApi(MarketStateData(
+      final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'trend',
         confidence: 0.8,
-        breadth: const MarketBreadth(
+        breadth: MarketBreadth(
           sideways: 0.1,
           compression: 0.05,
           expansion: 0.05,
@@ -242,10 +241,10 @@ void main() {
         ),
         symbolCount: 50,
       ));
-      final compositeApi = _FakeCompositeApi(CompositeIndexData(
+      final compositeApi = _FakeCompositeApi(const CompositeIndexData(
         timeframe: '4h',
         symbolCount: 40,
-        points: const [],
+        points: [],
       ));
 
       await tester.pumpWidget(MaterialApp(
@@ -277,11 +276,11 @@ void main() {
     });
 
     testWidgets('timeframe dropdown includes 1m', (tester) async {
-      final stateApi = _FakeStateApi(MarketStateData(
+      final stateApi = _FakeStateApi(const MarketStateData(
         timeframe: '4h',
         state: 'trend',
         confidence: 0.8,
-        breadth: const MarketBreadth(
+        breadth: MarketBreadth(
           sideways: 0.1,
           compression: 0.05,
           expansion: 0.05,
@@ -289,10 +288,10 @@ void main() {
         ),
         symbolCount: 50,
       ));
-      final compositeApi = _FakeCompositeApi(CompositeIndexData(
+      final compositeApi = _FakeCompositeApi(const CompositeIndexData(
         timeframe: '4h',
         symbolCount: 40,
-        points: const [],
+        points: [],
       ));
 
       await tester.pumpWidget(MaterialApp(

@@ -81,7 +81,7 @@ void main() {
   });
 
   group('CrosshairOverlay widget', () {
-    CrosshairState _makeState() {
+    CrosshairState makeState() {
       return CrosshairState(
         candleIndex: 5,
         x: 100.0,
@@ -107,7 +107,7 @@ void main() {
           width: 400,
           height: 400,
           child: CrosshairOverlay(
-            state: _makeState(),
+            state: makeState(),
             symbol: 'BTCUSDT',
             timeframe: '1h',
             priceHeight: 250,
@@ -183,7 +183,7 @@ void main() {
           width: 400,
           height: 400,
           child: CrosshairOverlay(
-            state: _makeState(),
+            state: makeState(),
             symbol: 'X',
             timeframe: '1h',
             priceHeight: 250,
