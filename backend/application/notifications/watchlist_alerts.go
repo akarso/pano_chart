@@ -96,6 +96,11 @@ type watchlistStack struct {
 	err   error
 }
 
+// checkWatchlistTransitions is the per-tick entry point: it only fans out
+// — one job — resolving which users/symbols are in scope and dispatching
+// each to checkWatchlistSymbol. The gating and caching concerns it used to
+// inline are split out below (watchlistEligibility, regimeStackFor) so
+// this loop reads as a single pipeline (AGENTS.md: "methods do one thing").
 func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 	if s.watchlists == nil || s.regimes == nil || s.watchlistState == nil || s.configs == nil {
 		return
@@ -114,18 +119,8 @@ func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 			return
 		}
 
-		// Get, not All: correctly defaults WatchlistTransitions/
-		// WatchlistTimeframe for a user with no saved config row at all
-		// (PR-101 CR) — see WatchlistProvider.Users's doc.
-		cfg, err := s.configs.Get(userID)
-		if err != nil {
-			log.Printf("[notify-scheduler] watchlist config user=%s error: %v", userID, err)
-			continue
-		}
-		if !cfg.WatchlistTransitions {
-			continue
-		}
-		if !s.userHasProAccess(ctx, userID) {
+		cfg, eligible := s.watchlistEligibility(ctx, userID)
+		if !eligible {
 			continue
 		}
 
@@ -140,39 +135,63 @@ func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 				return
 			}
 
-			cached, ok := stacks[symbol]
-			if !ok {
-				stack, err := s.regimes.Calculate(ctx, symbol)
-				cached = watchlistStack{stack: stack, err: err}
-				stacks[symbol] = cached
-			}
-			if cached.err != nil {
-				log.Printf("[notify-scheduler] watchlist regime symbol=%s error: %v", symbol, cached.err)
+			stack, err := s.regimeStackFor(ctx, stacks, symbol)
+			if err != nil {
+				log.Printf("[notify-scheduler] watchlist regime symbol=%s error: %v", symbol, err)
 				continue
 			}
 
-			s.checkWatchlistSymbol(ctx, cfg, symbol, cached.stack, now)
+			s.checkWatchlistSymbol(ctx, cfg, symbol, stack, now)
 		}
 	}
+}
+
+// watchlistEligibility reports whether userID should be scanned this tick,
+// returning their config for reuse if so. Get, not All: correctly defaults
+// WatchlistTransitions/WatchlistTimeframe for a user with no saved config
+// row at all (PR-101 CR) — see WatchlistProvider.Users's doc.
+func (s *Scheduler) watchlistEligibility(ctx context.Context, userID string) (NotificationConfig, bool) {
+	cfg, err := s.configs.Get(userID)
+	if err != nil {
+		log.Printf("[notify-scheduler] watchlist config user=%s error: %v", userID, err)
+		return NotificationConfig{}, false
+	}
+	if !cfg.WatchlistTransitions {
+		return NotificationConfig{}, false
+	}
+	if !s.userHasProAccess(ctx, userID) {
+		return NotificationConfig{}, false
+	}
+	return cfg, true
+}
+
+// regimeStackFor returns symbol's regime stack for this tick, computing
+// and caching it on first request so every user watching the same symbol
+// shares one Calculate call.
+func (s *Scheduler) regimeStackFor(ctx context.Context, stacks map[string]watchlistStack, symbol string) (mtf.Stack, error) {
+	cached, ok := stacks[symbol]
+	if !ok {
+		stack, err := s.regimes.Calculate(ctx, symbol)
+		cached = watchlistStack{stack: stack, err: err}
+		stacks[symbol] = cached
+	}
+	return cached.stack, cached.err
 }
 
 // checkWatchlistSymbol compares symbol's current dominant regime (on
 // cfg.WatchlistTimeframe, read from stack — the tick's shared, already-
 // computed regime stack for this symbol) against the last-observed state,
-// notifying on a tracked transition subject to the dedup window. The
-// current state is persisted whenever it's safe to stop tracking the old
-// "from" — see the SendToUser failure branch below for the one case where
-// it deliberately isn't.
+// notifying on a tracked transition subject to the dedup and quiet-hours
+// gates. It is an orchestrator over single-purpose steps below
+// (frameFor, evaluateWatchlistTransition, isWithinWatchlistDedupWindow,
+// sendWatchlistNotification); the one thing it still owns directly is
+// deciding, per return path, whether next (the state to persist) advances
+// to frame.Dominant — see the sendWatchlistNotification failure branch for
+// the one case where it deliberately doesn't.
 func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationConfig, symbol string, stack mtf.Stack, now time.Time) {
 	timeframe := cfg.WatchlistTimeframe
 
-	var frame *mtf.TFRegime
-	for i := range stack.Frames {
-		if stack.Frames[i].Timeframe == timeframe {
-			frame = &stack.Frames[i]
-			break
-		}
-	}
+	frame := frameFor(stack, timeframe)
 	if frame == nil {
 		return // no fresh frame for this timeframe right now
 	}
@@ -186,7 +205,7 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 	// Starts equal to prev — i.e. "nothing changed yet". Only advanced to
 	// frame.Dominant once we're sure it's safe to stop tracking prev.State
 	// as the pending "from" (every return below sets it explicitly except
-	// the SendToUser failure branch, which deliberately leaves it alone).
+	// the send-failure branch, which deliberately leaves it alone).
 	next := prev
 	defer func() {
 		if err := s.watchlistState.SetState(ctx, cfg.UserID, symbol, timeframe, next); err != nil {
@@ -194,39 +213,18 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 		}
 	}()
 
-	if !found || prev.State == frame.Dominant {
+	title, tracked := evaluateWatchlistTransition(prev, found, frame)
+	if !tracked {
 		next.State = frame.Dominant
-		return // first sighting (nothing to compare against), or no change
+		return // first sighting, no change, or not one of the tracked transitions
 	}
 
-	title, ok := watchlistTransitionTitle(prev.State, frame.Dominant, frame.Bias)
-	if !ok {
-		next.State = frame.Dominant
-		return // not one of the three transitions this feature tracks
-	}
-
-	// frame.Timeframe (== timeframe) came from stack.Frames, which
-	// application/mtf.Service only ever populates via domain.NewTimeframe
-	// on appeval.DefaultTimeframes — always a valid canonical timeframe.
-	tf, err := domain.NewTimeframe(timeframe)
+	deduped, err := s.isWithinWatchlistDedupWindow(ctx, cfg.UserID, symbol, timeframe, now)
 	if err != nil {
-		return // defensive; should never happen — leaves next == prev, retried next tick
-	}
-
-	// Cross-timeframe, not prev.NotifiedAt (PR-101 CR): the dedup window
-	// is a per-(user,symbol) rule, but GetState/SetState are necessarily
-	// scoped per-timeframe (a "current regime" only means anything
-	// relative to one timeframe) — reading only the current timeframe's
-	// row would let a user reset their own cooldown just by changing
-	// WatchlistTimeframe, since the new timeframe's row has no memory of
-	// a very recent send under the old one.
-	lastNotified, err := s.watchlistState.LastNotifiedAt(ctx, cfg.UserID, symbol)
-	if err != nil {
-		log.Printf("[notify-scheduler] watchlist last-notified read user=%s symbol=%s error: %v", cfg.UserID, symbol, err)
+		log.Printf("[notify-scheduler] watchlist dedup check user=%s symbol=%s error: %v", cfg.UserID, symbol, err)
 		return
 	}
-	dedupWindow := watchlistDedupBars * tf.Duration()
-	if !lastNotified.IsZero() && now.Sub(lastNotified) < dedupWindow {
+	if deduped {
 		// Already notified for this transition recently — nothing lost by
 		// advancing state, we just skip the redundant repeat right now.
 		next.State = frame.Dominant
@@ -238,13 +236,94 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 	// otherwise be indistinguishable from a real, successful send. Checked
 	// explicitly, before sending, so this transition is deferred (next
 	// stays == prev) rather than being marked delivered and lost — same
-	// reasoning as the sendErr != nil branch below (PR-101 CR).
+	// reasoning as the send-failure branch below (PR-101 CR).
 	if !s.engine.WithinAllowedHours() {
 		log.Printf("[notify-scheduler] watchlist: user=%s symbol=%s deferred (quiet hours)", cfg.UserID, symbol)
 		return
 	}
 
-	sendErr := s.engine.SendToUser(ctx, cfg.UserID, Notification{
+	sendErr := s.sendWatchlistNotification(ctx, cfg, symbol, timeframe, title, prev, frame, now)
+	if sendErr != nil {
+		// Deliberately leave next == prev: the notification never reached
+		// the user, so this transition is still "owed". The next tick
+		// re-compares frame.Dominant against this same, unchanged
+		// prev.State — if the market hasn't moved on to a third state by
+		// then, the identical transition is detected again and retried,
+		// instead of being silently and permanently lost because one send
+		// attempt failed.
+		log.Printf("[notify-scheduler] watchlist: user=%s symbol=%s send failed, transition not recorded (will retry next tick): %v", cfg.UserID, symbol, sendErr)
+		return
+	}
+	next.State = frame.Dominant
+	next.NotifiedAt = now
+}
+
+// frameFor returns the frame in stack matching timeframe, or nil if the
+// stack has no fresh frame for it right now.
+func frameFor(stack mtf.Stack, timeframe string) *mtf.TFRegime {
+	for i := range stack.Frames {
+		if stack.Frames[i].Timeframe == timeframe {
+			return &stack.Frames[i]
+		}
+	}
+	return nil
+}
+
+// evaluateWatchlistTransition decides whether frame's dominant regime is
+// one of the three transitions this feature tracks, given the previously
+// observed state. tracked=false covers a first sighting (found=false), no
+// change, and an untracked transition shape alike — in every one of those
+// cases the caller still needs to advance its persisted state to
+// frame.Dominant, it just never notifies.
+func evaluateWatchlistTransition(prev WatchlistTransitionState, found bool, frame *mtf.TFRegime) (title string, tracked bool) {
+	if !found || prev.State == frame.Dominant {
+		return "", false
+	}
+	return watchlistTransitionTitle(prev.State, frame.Dominant, frame.Bias)
+}
+
+// isWithinWatchlistDedupWindow reports whether (userID, symbol) was
+// notified recently enough, relative to timeframe's bar duration, that a
+// new transition should be suppressed rather than sent again.
+//
+// Checks LastNotifiedAt (cross-timeframe), not a single row's NotifiedAt
+// (PR-101 CR): the dedup window is a per-(user,symbol) rule, but
+// GetState/SetState are necessarily scoped per-timeframe (a "current
+// regime" only means anything relative to one timeframe) — reading only
+// the current timeframe's row would let a user reset their own cooldown
+// just by changing WatchlistTimeframe, since the new timeframe's row has
+// no memory of a very recent send under the old one.
+func (s *Scheduler) isWithinWatchlistDedupWindow(ctx context.Context, userID, symbol, timeframe string, now time.Time) (bool, error) {
+	// timeframe came from a frame in stack.Frames, which
+	// application/mtf.Service only ever populates via domain.NewTimeframe
+	// on appeval.DefaultTimeframes — always a valid canonical timeframe, so
+	// this error is defensive and should never trigger. Surfaced as an
+	// error (not swallowed) so the caller's existing failure path applies
+	// uniformly: leave state untouched, retry next tick.
+	tf, err := domain.NewTimeframe(timeframe)
+	if err != nil {
+		return false, err
+	}
+
+	lastNotified, err := s.watchlistState.LastNotifiedAt(ctx, userID, symbol)
+	if err != nil {
+		return false, err
+	}
+
+	dedupWindow := watchlistDedupBars * tf.Duration()
+	return !lastNotified.IsZero() && now.Sub(lastNotified) < dedupWindow, nil
+}
+
+// sendWatchlistNotification builds and sends the transition notification.
+func (s *Scheduler) sendWatchlistNotification(
+	ctx context.Context,
+	cfg NotificationConfig,
+	symbol, timeframe, title string,
+	prev WatchlistTransitionState,
+	frame *mtf.TFRegime,
+	now time.Time,
+) error {
+	return s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeWatchlist,
 		Title: title,
 		Body:  fmt.Sprintf("%s (%s): %s → %s", symbol, timeframe, prev.State, frame.Dominant),
@@ -261,28 +340,15 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 		// keys (e.g. market's, which deliberately embeds only a calendar
 		// date so the *engine's own* 24h dedup collapses same-day
 		// repeats), the business rule that should govern repeated
-		// watchlist transitions is the explicit dedupWindow check above,
+		// watchlist transitions is isWithinWatchlistDedupWindow above,
 		// scaled to the user's own timeframe (could be far shorter or
 		// longer than 24h). A Key stable across ticks would let the
 		// engine's independent, fixed 24h TTL silently re-suppress a
-		// second occurrence this dedupWindow check has already decided
-		// is legitimate (e.g. the same symbol flapping compression ->
-		// expansion twice, 5 bars apart, well inside 24h).
+		// second occurrence that check has already decided is legitimate
+		// (e.g. the same symbol flapping compression -> expansion twice,
+		// 5 bars apart, well inside 24h).
 		Key: fmt.Sprintf("watchlist_%s_%s_%s_%s_%d", symbol, timeframe, prev.State, frame.Dominant, now.Unix()),
 	})
-	if sendErr != nil {
-		// Deliberately leave next == prev: the notification never reached
-		// the user, so this transition is still "owed". The next tick
-		// re-compares frame.Dominant against this same, unchanged
-		// prev.State — if the market hasn't moved on to a third state by
-		// then, the identical transition is detected again and retried,
-		// instead of being silently and permanently lost because one send
-		// attempt failed.
-		log.Printf("[notify-scheduler] watchlist: user=%s symbol=%s send failed, transition not recorded (will retry next tick): %v", cfg.UserID, symbol, sendErr)
-		return
-	}
-	next.State = frame.Dominant
-	next.NotifiedAt = now
 }
 
 // watchlistTransitionTitle maps a (from, to) dominant-regime transition to

@@ -67,6 +67,23 @@ func TestSQLiteStore_Replace_OrdersByAddedAt(t *testing.T) {
 		"ETHUSDT was added first and must stay first even though a later PUT included it again")
 }
 
+// PR-101 CR: symbols that are all new in the SAME Replace call must keep
+// their relative input order, not fall back to alphabetical — every one of
+// them ties on the exact same base added_at timestamp.
+func TestSQLiteStore_Replace_PreservesInputOrderForSymbolsAddedTogether(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"ZETAUSDT", "ALPHAUSDT", "BETAUSDT"}))
+
+	symbols, err := store.Get(context.Background(), "user1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ZETAUSDT", "ALPHAUSDT", "BETAUSDT"}, symbols,
+		"symbols added in the same call must keep the caller's order, not sort alphabetically")
+}
+
 // A full PUT resync must not re-timestamp a symbol that was already on the
 // list — only a genuinely new symbol gets "now" as its added_at. Verified
 // indirectly via ordering: if re-adding reset ETHUSDT's added_at, it would

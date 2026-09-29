@@ -74,6 +74,16 @@ func (h *WatchlistHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
 		return
 	}
+	// A missing or explicit-null "symbols" field decodes to the same nil
+	// slice as a deliberate "[]" (PR-101 CR) — Replace treats an empty
+	// list as "clear the whole watchlist", so silently accepting a
+	// probably-accidental omission would be a destructive no-error
+	// surprise. An explicitly-sent "[]" (non-nil, len 0) still passes
+	// through and clears as intended.
+	if req.Symbols == nil {
+		http.Error(w, `{"error":"symbols field is required"}`, http.StatusBadRequest)
+		return
+	}
 
 	symbols, err := normalizeSymbols(req.Symbols)
 	if err != nil {

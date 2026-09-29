@@ -61,7 +61,9 @@ func (s *SQLiteStore) migrate() error {
 
 // ---------- ports.WatchlistStore / appnotify.WatchlistProvider ----------
 
-// Get returns userID's watchlisted symbols, oldest-added first.
+// Get returns userID's watchlisted symbols, oldest-added first. Symbols
+// added together in one Replace call keep their relative input order
+// (PR-101 CR) — see Replace's insertion loop.
 func (s *SQLiteStore) Get(ctx context.Context, userID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT symbol FROM watchlist WHERE user_id = ? ORDER BY added_at ASC, symbol ASC`, userID)
@@ -154,8 +156,19 @@ func (s *SQLiteStore) Replace(ctx context.Context, userID string, symbols []stri
 			return fmt.Errorf("prune watchlist: %w", err)
 		}
 
-		addedAt := s.now().UTC().Format(time.RFC3339Nano)
-		for _, sym := range symbols {
+		// A "#%06d" suffix (index within this call's deduped, ordered
+		// symbols) breaks the tie for symbols that are all new in this
+		// same Replace call (PR-101 CR): without it, every symbol added
+		// in one PUT shares the exact same addedAtBase, and Get's ORDER BY
+		// falls back to alphabetical — silently discarding the caller's
+		// submitted order (e.g. a first-time bulk import of a local
+		// list). A symbol that already existed keeps its own, earlier
+		// added_at via ON CONFLICT DO NOTHING below, so it still sorts
+		// before anything newly added in this call regardless of this
+		// suffix.
+		addedAtBase := s.now().UTC().Format(time.RFC3339Nano)
+		for i, sym := range symbols {
+			addedAt := fmt.Sprintf("%s#%06d", addedAtBase, i)
 			if _, err := tx.ExecContext(ctx,
 				`INSERT INTO watchlist (user_id, symbol, added_at) VALUES (?, ?, ?)
 				 ON CONFLICT(user_id, symbol) DO NOTHING`,

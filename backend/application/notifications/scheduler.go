@@ -162,7 +162,15 @@ func (s *Scheduler) Run(ctx context.Context) {
 	setupTicker := time.NewTicker(s.cfg.SetupCheckInterval)
 	defer setupTicker.Stop()
 
-	watchlistTicker := time.NewTicker(s.cfg.WatchlistCheckInterval)
+	// Falls back to the default rather than passing a zero/negative value
+	// straight to NewTicker (which panics) — only DefaultSchedulerConfig
+	// sets WatchlistCheckInterval today, so this only ever guards a caller
+	// that builds SchedulerConfig by hand without it (PR-101 CR).
+	watchlistInterval := s.cfg.WatchlistCheckInterval
+	if watchlistInterval <= 0 {
+		watchlistInterval = DefaultSchedulerConfig().WatchlistCheckInterval
+	}
+	watchlistTicker := time.NewTicker(watchlistInterval)
 	defer watchlistTicker.Stop()
 
 	for {

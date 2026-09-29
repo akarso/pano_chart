@@ -140,6 +140,51 @@ func TestWatchlistHandler_Put_ReplacesAndReturnsWatchlist(t *testing.T) {
 	assert.Equal(t, []string{"BTCUSDT", "SOLUSDT"}, resp.Symbols)
 }
 
+// PR-101 CR: a missing "symbols" field must not be silently treated as
+// "clear the whole watchlist" — likely a client bug, not intent.
+func TestWatchlistHandler_Put_MissingSymbolsField_400(t *testing.T) {
+	store := &fakeWatchlistStore{bySymbols: map[string][]string{"user1": {"BTCUSDT"}}}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/watchlist", bytes.NewReader([]byte(`{}`)))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	assert.Nil(t, store.lastReplaceSymbols, "Replace must never be called for a missing symbols field")
+}
+
+// Explicit JSON null is indistinguishable from "absent" and must be
+// rejected the same way.
+func TestWatchlistHandler_Put_NullSymbolsField_400(t *testing.T) {
+	store := &fakeWatchlistStore{bySymbols: map[string][]string{"user1": {"BTCUSDT"}}}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/watchlist", bytes.NewReader([]byte(`{"symbols":null}`)))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	assert.Nil(t, store.lastReplaceSymbols)
+}
+
+// An explicitly-sent empty array is a deliberate "clear my watchlist" and
+// must still be accepted — only absence/null is rejected, not emptiness.
+func TestWatchlistHandler_Put_ExplicitEmptySymbolsArray_ClearsWatchlist(t *testing.T) {
+	store := &fakeWatchlistStore{bySymbols: map[string][]string{"user1": {"BTCUSDT"}}}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/watchlist", bytes.NewReader([]byte(`{"symbols":[]}`)))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, []string{}, store.lastReplaceSymbols)
+}
+
 func TestWatchlistHandler_Put_TooManySymbols_400(t *testing.T) {
 	store := &fakeWatchlistStore{replaceErr: ports.ErrWatchlistTooLarge}
 	handler := adhttp.NewWatchlistHandler(store)
