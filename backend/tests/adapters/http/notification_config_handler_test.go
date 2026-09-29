@@ -158,6 +158,96 @@ func TestNotificationConfigHandler_Get_StoreError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
 }
 
+// PR-101 CR: an app built before WatchlistTransitions existed sends a PUT
+// body without a "watchlist_transitions" key at all — that must not
+// silently disable watchlist alerts (which default true) just because the
+// user changed an unrelated, already-known setting.
+func TestNotificationConfigHandler_Put_OmittedWatchlistTransitions_PreservesExisting(t *testing.T) {
+	store := &fakeNotificationConfigStore{get: appnotify.NotificationConfig{
+		WatchlistTransitions: true,
+		WatchlistTimeframe:   "1h",
+	}}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	// An old client's PUT body — no watchlist fields at all.
+	body, _ := json.Marshal(map[string]interface{}{"uptrend": true})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.True(t, store.saved.WatchlistTransitions,
+		"an old client's PUT must not silently turn off watchlist alerts it never mentioned")
+}
+
+// An explicit false must still be respected — the omitted-field fallback
+// above must not swallow a deliberate opt-out from a client that does know
+// about the field.
+func TestNotificationConfigHandler_Put_ExplicitWatchlistTransitionsFalse_IsSaved(t *testing.T) {
+	store := &fakeNotificationConfigStore{get: appnotify.NotificationConfig{WatchlistTransitions: true}}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	body, _ := json.Marshal(map[string]interface{}{"watchlist_transitions": false})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.False(t, store.saved.WatchlistTransitions,
+		"an explicit false must be honored, not overridden by the previously-stored value")
+}
+
+// PR-101 CR: application/mtf.Service only ever produces frames for
+// appeval.DefaultTimeframes — a watchlist_timeframe outside that set
+// (valid for every other timeframe field on this config) would otherwise
+// silently never match a frame, so checkWatchlistSymbol would return early
+// on every single scan forever, with no error surfaced anywhere.
+func TestNotificationConfigHandler_Put_InvalidWatchlistTimeframe_400(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	body, _ := json.Marshal(map[string]interface{}{"watchlist_timeframe": "5m"})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+}
+
+func TestNotificationConfigHandler_Put_ValidWatchlistTimeframe_Saved(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	body, _ := json.Marshal(map[string]interface{}{"watchlist_timeframe": "4h"})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Equal(t, "4h", store.saved.WatchlistTimeframe)
+}
+
+// An omitted watchlist_timeframe (empty string) is the "use the stored/
+// default value" sentinel, not an invalid value — must not 400.
+func TestNotificationConfigHandler_Put_EmptyWatchlistTimeframe_AllowedAsDefaultSentinel(t *testing.T) {
+	store := &fakeNotificationConfigStore{}
+	handler := adhttp.NewNotificationConfigHandler(store)
+
+	body, _ := json.Marshal(map[string]interface{}{"uptrend": true})
+	req := httptest.NewRequest(http.MethodPut, "/api/notification/config", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+}
+
 func TestNotificationConfigHandler_MethodNotAllowed(t *testing.T) {
 	store := &fakeNotificationConfigStore{}
 	handler := adhttp.NewNotificationConfigHandler(store)

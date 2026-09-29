@@ -153,6 +153,26 @@ func TestWatchlistHandler_Put_TooManySymbols_400(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 }
 
+// PR-101 CR: an oversized body must be rejected before json.Decode
+// allocates for the whole thing.
+func TestWatchlistHandler_Put_OversizedBody_400(t *testing.T) {
+	store := &fakeWatchlistStore{}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	huge := make([]string, 2000)
+	for i := range huge {
+		huge[i] = "BTCUSDT"
+	}
+	body, _ := json.Marshal(map[string]interface{}{"symbols": huge})
+	req := httptest.NewRequest(http.MethodPut, "/api/watchlist", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	assert.Nil(t, store.lastReplaceSymbols)
+}
+
 func TestWatchlistHandler_Put_InvalidBody_400(t *testing.T) {
 	store := &fakeWatchlistStore{}
 	handler := adhttp.NewWatchlistHandler(store)
@@ -253,6 +273,45 @@ func TestWatchlistHandler_Delete_RemovesAndReturnsWatchlist(t *testing.T) {
 	}
 	_ = json.NewDecoder(w.Body).Decode(&resp)
 	assert.Equal(t, []string{"BTCUSDT"}, resp.Symbols)
+}
+
+// PR-101 CR: DELETE has no store-level cap the way Replace does, so the
+// handler must enforce one itself — otherwise a client could request
+// removal of far more distinct symbols than any real watchlist could ever
+// hold, building an unbounded SQL IN(...) clause.
+func TestWatchlistHandler_Delete_TooManySymbols_400(t *testing.T) {
+	store := &fakeWatchlistStore{}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	tooMany := make([]string, ports.WatchlistMaxSymbols+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("SYM%d", i)
+	}
+	body, _ := json.Marshal(map[string]interface{}{"symbols": tooMany})
+	req := httptest.NewRequest(http.MethodDelete, "/api/watchlist", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	assert.Nil(t, store.lastRemoveSymbols, "Remove must never be called with an invalid payload")
+}
+
+func TestWatchlistHandler_Delete_OversizedBody_400(t *testing.T) {
+	store := &fakeWatchlistStore{}
+	handler := adhttp.NewWatchlistHandler(store)
+
+	huge := make([]string, 2000)
+	for i := range huge {
+		huge[i] = "BTCUSDT"
+	}
+	body, _ := json.Marshal(map[string]interface{}{"symbols": huge})
+	req := httptest.NewRequest(http.MethodDelete, "/api/watchlist", bytes.NewReader(body))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user1"))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
 }
 
 func TestWatchlistHandler_MethodNotAllowed(t *testing.T) {

@@ -24,6 +24,19 @@ func (f *fakeWatchlistProvider) Get(_ context.Context, userID string) ([]string,
 	return f.symbols[userID], nil
 }
 
+func (f *fakeWatchlistProvider) Users(_ context.Context) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	var userIDs []string
+	for userID, symbols := range f.symbols {
+		if len(symbols) > 0 {
+			userIDs = append(userIDs, userID)
+		}
+	}
+	return userIDs, nil
+}
+
 // fakeRegimeStackProvider returns a fixed dominant/bias for a symbol on a
 // single timeframe. Tests set stacks[symbol] to the frame they want back —
 // only Timeframe/Dominant/Bias/Score matter to checkWatchlistSymbol. calls
@@ -79,6 +92,20 @@ func (m *memWatchlistStateStore) GetState(_ context.Context, userID, symbol, tim
 func (m *memWatchlistStateStore) SetState(_ context.Context, userID, symbol, timeframe string, state notifications.WatchlistTransitionState) error {
 	m.states[m.key(userID, symbol, timeframe)] = state
 	return nil
+}
+
+func (m *memWatchlistStateStore) LastNotifiedAt(_ context.Context, userID, symbol string) (time.Time, error) {
+	prefix := userID + "|" + symbol + "|"
+	var latest time.Time
+	for key, state := range m.states {
+		if len(key) < len(prefix) || key[:len(prefix)] != prefix {
+			continue
+		}
+		if state.NotifiedAt.After(latest) {
+			latest = state.NotifiedAt
+		}
+	}
+	return latest, nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────
@@ -519,5 +546,142 @@ func TestScheduler_Watchlist_SendFailure_RetriesNextTick(t *testing.T) {
 	state, found, _ = states.GetState(context.Background(), "u1", "BTCUSDT", "1h")
 	if !found || state.State != mkt.StateExpansion {
 		t.Fatalf("expected state to advance to expansion once the retry succeeded, got %+v (found=%v)", state, found)
+	}
+}
+
+// A user who has never saved any notification preference (no config row at
+// all, plausible for someone who goes straight to starring a symbol) must
+// still be scanned — checkWatchlistTransitions must not rely on
+// NotificationConfigStore.All(), which only returns saved rows (PR-101 CR).
+func TestScheduler_Watchlist_UserWithNoSavedConfig_StillScanned(t *testing.T) {
+	spy := &spySender{}
+	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	cfgStore := newMemConfigStore() // nothing saved for "no-config-user"
+
+	watchlists := &fakeWatchlistProvider{symbols: map[string][]string{"no-config-user": {"BTCUSDT"}}}
+	regimes := &fakeRegimeStackProvider{stacks: map[string]mtf.Stack{
+		"BTCUSDT": oneFrameStack("BTCUSDT", "1h", mkt.StateCompression, "neutral"),
+	}}
+	states := newMemWatchlistStateStore()
+
+	sched := newWatchlistScheduler(spy, now, watchlists, regimes, states, cfgStore)
+	sched.CheckWatchlistTransitions(context.Background()) // seeds compression
+
+	regimes.stacks["BTCUSDT"] = oneFrameStack("BTCUSDT", "1h", mkt.StateExpansion, "up")
+	sched.CheckWatchlistTransitions(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected a notification for a user with no saved config row (default WatchlistTransitions=true), got %d", spy.userCount())
+	}
+}
+
+// A quiet-hours tick must not consume the transition: Engine.SendToUser
+// would return nil without actually attempting delivery, indistinguishable
+// from a real success unless checked for explicitly (PR-101 CR).
+func TestScheduler_Watchlist_QuietHours_DoesNotConsumeTransition(t *testing.T) {
+	spy := &spySender{}
+	quietHour := time.Date(2025, 6, 1, 3, 0, 0, 0, time.UTC) // 3am, outside [7,22]
+
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	eng.SetClock(func() time.Time { return quietHour })
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(watchlistCfg("u1", "1h"))
+
+	watchlists := &fakeWatchlistProvider{symbols: map[string][]string{"u1": {"BTCUSDT"}}}
+	regimes := &fakeRegimeStackProvider{stacks: map[string]mtf.Stack{
+		"BTCUSDT": oneFrameStack("BTCUSDT", "1h", mkt.StateCompression, "neutral"),
+	}}
+	states := newMemWatchlistStateStore()
+
+	sched := notifications.NewScheduler(eng, nil, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return quietHour })
+	sched.SetConfigStore(cfgStore)
+	sched.SetWatchlistProvider(watchlists)
+	sched.SetRegimeStackProvider(regimes)
+	sched.SetWatchlistStateStore(states)
+
+	sched.CheckWatchlistTransitions(context.Background()) // seeds compression
+
+	regimes.stacks["BTCUSDT"] = oneFrameStack("BTCUSDT", "1h", mkt.StateExpansion, "up")
+	sched.CheckWatchlistTransitions(context.Background()) // quiet hours — must defer
+
+	if spy.userCount() != 0 {
+		t.Fatalf("expected no delivered notification during quiet hours, got %d", spy.userCount())
+	}
+	state, found, _ := states.GetState(context.Background(), "u1", "BTCUSDT", "1h")
+	if !found || state.State != mkt.StateCompression {
+		t.Fatalf("expected state to still read compression after the quiet-hours tick (transition not consumed), got %+v (found=%v)", state, found)
+	}
+
+	// Once hours open, the identical transition must still be detected.
+	dayHour := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	eng.SetClock(func() time.Time { return dayHour })
+	sched.SetClock(func() time.Time { return dayHour })
+	sched.CheckWatchlistTransitions(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected the deferred transition to notify once hours opened, got %d", spy.userCount())
+	}
+}
+
+// The (user, symbol) dedup window must survive a WatchlistTimeframe change
+// — GetState/SetState are necessarily scoped per-timeframe (a "current
+// regime" only means anything relative to one timeframe), but the dedup
+// rule itself is per-(user,symbol) only; a naive per-row NotifiedAt would
+// let a user reset their own cooldown just by switching timeframes
+// (PR-101 CR).
+func TestScheduler_Watchlist_DedupSurvivesTimeframeChange(t *testing.T) {
+	spy := &spySender{}
+	t0 := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock := t0
+
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	eng.SetClock(func() time.Time { return clock })
+
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(watchlistCfg("u1", "1h"))
+
+	watchlists := &fakeWatchlistProvider{symbols: map[string][]string{"u1": {"BTCUSDT"}}}
+	regimes := &fakeRegimeStackProvider{stacks: map[string]mtf.Stack{
+		"BTCUSDT": oneFrameStack("BTCUSDT", "1h", mkt.StateCompression, "neutral"),
+	}}
+	states := newMemWatchlistStateStore()
+
+	sched := notifications.NewScheduler(eng, nil, nil, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return clock })
+	sched.SetConfigStore(cfgStore)
+	sched.SetWatchlistProvider(watchlists)
+	sched.SetRegimeStackProvider(regimes)
+	sched.SetWatchlistStateStore(states)
+
+	sched.CheckWatchlistTransitions(context.Background()) // seeds compression under 1h
+
+	regimes.stacks["BTCUSDT"] = oneFrameStack("BTCUSDT", "1h", mkt.StateExpansion, "up")
+	sched.CheckWatchlistTransitions(context.Background()) // notifies at t0, under 1h
+	if spy.userCount() != 1 {
+		t.Fatalf("expected the initial notification to fire, got %d", spy.userCount())
+	}
+
+	// User switches their watchlist timeframe to 4h shortly after.
+	clock = clock.Add(10 * time.Minute)
+	cfg := watchlistCfg("u1", "4h")
+	_ = cfgStore.Save(cfg)
+
+	// First 4h observation: nothing to compare against yet, seeds only.
+	regimes.stacks["BTCUSDT"] = oneFrameStack("BTCUSDT", "4h", mkt.StateCompression, "neutral")
+	sched.CheckWatchlistTransitions(context.Background())
+
+	// Shortly after, a genuine tracked transition occurs under 4h — well
+	// within the original dedup window from the 1h notification 10-15
+	// minutes ago. This must be suppressed, not treated as a fresh cooldown
+	// just because it's a different (timeframe-scoped) state row.
+	clock = clock.Add(5 * time.Minute)
+	regimes.stacks["BTCUSDT"] = oneFrameStack("BTCUSDT", "4h", mkt.StateExpansion, "up")
+	sched.CheckWatchlistTransitions(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected the transition shortly after a timeframe change to still be deduped against the recent 1h notification, got %d", spy.userCount())
 	}
 }

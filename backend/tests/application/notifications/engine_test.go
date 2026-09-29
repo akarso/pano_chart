@@ -291,3 +291,20 @@ func TestEngine_BoundaryHours(t *testing.T) {
 		t.Fatal("expected 23:00 to be suppressed")
 	}
 }
+
+// WithinAllowedHours lets a caller (e.g. the watchlist scheduler) tell a
+// quiet-hours no-op apart from a genuine send before calling
+// Send/SendToUser, since both return nil (PR-101 CR).
+func TestEngine_WithinAllowedHours(t *testing.T) {
+	eng := notifications.NewEngine(&spySender{}, notifications.DefaultEngineConfig())
+
+	eng.SetClock(func() time.Time { return time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC) })
+	if !eng.WithinAllowedHours() {
+		t.Fatal("expected noon to be within allowed hours")
+	}
+
+	eng.SetClock(func() time.Time { return time.Date(2025, 6, 1, 3, 0, 0, 0, time.UTC) })
+	if eng.WithinAllowedHours() {
+		t.Fatal("expected 3am to be outside allowed hours")
+	}
+}

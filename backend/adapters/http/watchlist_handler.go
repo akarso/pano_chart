@@ -11,6 +11,14 @@ import (
 	"pano_chart/backend/domain"
 )
 
+// maxWatchlistBodyBytes caps the request body for PUT/DELETE (PR-101 CR) —
+// a legitimate payload (WatchlistMaxSymbols entries, each up to
+// WatchlistMaxSymbolLength chars, plus JSON overhead) is under 2KB; this
+// leaves generous headroom while still rejecting an oversized body before
+// json.Decode allocates for it, the same guard device_claim_handler.go
+// uses for its own public-ish endpoint.
+const maxWatchlistBodyBytes = 8192
+
 type watchlistRequest struct {
 	Symbols []string `json:"symbols"`
 }
@@ -60,6 +68,7 @@ func (h *WatchlistHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 func (h *WatchlistHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxWatchlistBodyBytes)
 	var req watchlistRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -92,6 +101,7 @@ func (h *WatchlistHandler) handlePut(w http.ResponseWriter, r *http.Request) {
 func (h *WatchlistHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromContext(r.Context())
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxWatchlistBodyBytes)
 	var req watchlistRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -101,6 +111,16 @@ func (h *WatchlistHandler) handleDelete(w http.ResponseWriter, r *http.Request) 
 	symbols, err := normalizeSymbols(req.Symbols)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	// Remove has no cap of its own the way Replace does (a watchlist can
+	// never legitimately exceed WatchlistMaxSymbols, so there's never a
+	// reason to ask for more distinct removals than that in one call) —
+	// PR-101 CR: without this, a client could still submit far more
+	// distinct symbols than any real watchlist could ever hold, building
+	// an unbounded SQL IN(...) clause.
+	if len(symbols) > ports.WatchlistMaxSymbols {
+		http.Error(w, fmt.Sprintf(`{"error":"too many symbols, max %d"}`, ports.WatchlistMaxSymbols), http.StatusBadRequest)
 		return
 	}
 

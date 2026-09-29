@@ -279,3 +279,199 @@ func TestSQLiteStore_State_ScopedPerTimeframe(t *testing.T) {
 	assert.Equal(t, mkt.StateTrend, got1h.State)
 	assert.Equal(t, mkt.StateSideways, got4h.State)
 }
+
+// ── Users ────────────────────────────────────────────────────────────────
+
+func TestSQLiteStore_Users_ReturnsDistinctUsersWithSymbols(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT", "ETHUSDT"}))
+	require.NoError(t, store.Replace(context.Background(), "user2", []string{"SOLUSDT"}))
+
+	users, err := store.Users(context.Background())
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"user1", "user2"}, users)
+}
+
+func TestSQLiteStore_Users_EmptyWhenNoWatchlists(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	users, err := store.Users(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, users)
+}
+
+func TestSQLiteStore_Users_ExcludesUserAfterFullClear(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT"}))
+	require.NoError(t, store.Replace(context.Background(), "user1", nil))
+
+	users, err := store.Users(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, users)
+}
+
+// ── LastNotifiedAt ───────────────────────────────────────────────────────
+
+func TestSQLiteStore_LastNotifiedAt_ZeroWhenNeverNotified(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend}))
+
+	got, err := store.LastNotifiedAt(context.Background(), "user1", "BTCUSDT")
+	require.NoError(t, err)
+	assert.True(t, got.IsZero())
+}
+
+// PR-101 CR: LastNotifiedAt must find a notification recorded under a
+// DIFFERENT timeframe row for the same (user, symbol) — the dedup window
+// is per-(user,symbol), not per-(user,symbol,timeframe).
+func TestSQLiteStore_LastNotifiedAt_FindsAcrossTimeframes(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	older := time.Date(2025, 6, 1, 10, 0, 0, 0, time.UTC)
+	newer := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend, NotifiedAt: older}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "4h",
+		appnotify.WatchlistTransitionState{State: mkt.StateSideways, NotifiedAt: newer}))
+
+	got, err := store.LastNotifiedAt(context.Background(), "user1", "BTCUSDT")
+	require.NoError(t, err)
+	assert.True(t, newer.Equal(got), "expected the most recent NotifiedAt across all timeframe rows, got %v", got)
+}
+
+func TestSQLiteStore_LastNotifiedAt_ScopedPerUserAndSymbol(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	notifiedAt := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend, NotifiedAt: notifiedAt}))
+
+	otherSymbol, err := store.LastNotifiedAt(context.Background(), "user1", "ETHUSDT")
+	require.NoError(t, err)
+	assert.True(t, otherSymbol.IsZero())
+
+	otherUser, err := store.LastNotifiedAt(context.Background(), "user2", "BTCUSDT")
+	require.NoError(t, err)
+	assert.True(t, otherUser.IsZero())
+}
+
+// ── watchlist_state cleanup on Remove / Replace ─────────────────────────
+
+// PR-101 CR: unwatching a symbol must clear its transition state, so a
+// later re-add starts fresh instead of inheriting a stale regime (a false
+// "transition" on the very first post-re-add scan) or a stale NotifiedAt
+// (wrongly suppressing a genuinely new alert).
+func TestSQLiteStore_Remove_ClearsWatchlistState(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT"}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend, NotifiedAt: time.Now()}))
+
+	require.NoError(t, store.Remove(context.Background(), "user1", []string{"BTCUSDT"}))
+
+	_, found, err := store.GetState(context.Background(), "user1", "BTCUSDT", "1h")
+	require.NoError(t, err)
+	assert.False(t, found, "watchlist_state must be cleared when a symbol is removed")
+}
+
+// Removing one symbol must not clear another symbol's transition state.
+func TestSQLiteStore_Remove_OnlyClearsStateForRemovedSymbols(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT", "ETHUSDT"}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "ETHUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend}))
+
+	require.NoError(t, store.Remove(context.Background(), "user1", []string{"BTCUSDT"}))
+
+	_, found, err := store.GetState(context.Background(), "user1", "ETHUSDT", "1h")
+	require.NoError(t, err)
+	assert.True(t, found, "an untouched symbol's state must survive removing a different symbol")
+}
+
+// PR-101 CR: a full PUT resync that drops a symbol must clear its state,
+// same as an explicit DELETE.
+func TestSQLiteStore_Replace_ClearsStateForDroppedSymbols(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT", "ETHUSDT"}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "ETHUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend}))
+
+	// Resync drops ETHUSDT.
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT"}))
+
+	_, found, err := store.GetState(context.Background(), "user1", "ETHUSDT", "1h")
+	require.NoError(t, err)
+	assert.False(t, found, "watchlist_state must be cleared for a symbol dropped by a PUT resync")
+}
+
+// A symbol that survives a resync must keep its transition state.
+func TestSQLiteStore_Replace_PreservesStateForRetainedSymbols(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT"}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend}))
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT", "ETHUSDT"}))
+
+	got, found, err := store.GetState(context.Background(), "user1", "BTCUSDT", "1h")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, mkt.StateTrend, got.State)
+}
+
+// Clearing the whole watchlist (empty PUT) must clear all its state too.
+func TestSQLiteStore_Replace_EmptyList_ClearsAllState(t *testing.T) {
+	db := openTestDB(t)
+	defer func() { _ = db.Close() }()
+	store, err := watchlist.NewSQLiteStore(db)
+	require.NoError(t, err)
+
+	require.NoError(t, store.Replace(context.Background(), "user1", []string{"BTCUSDT"}))
+	require.NoError(t, store.SetState(context.Background(), "user1", "BTCUSDT", "1h",
+		appnotify.WatchlistTransitionState{State: mkt.StateTrend}))
+
+	require.NoError(t, store.Replace(context.Background(), "user1", nil))
+
+	_, found, err := store.GetState(context.Background(), "user1", "BTCUSDT", "1h")
+	require.NoError(t, err)
+	assert.False(t, found)
+}

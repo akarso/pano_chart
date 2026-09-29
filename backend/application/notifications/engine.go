@@ -102,5 +102,15 @@ func (e *Engine) withinAllowedHours() bool {
 	return hour >= e.cfg.AllowedStart && hour <= e.cfg.AllowedEnd
 }
 
+// WithinAllowedHours reports whether Send/SendToUser would actually attempt
+// delivery right now rather than silently no-op (returning nil) for quiet
+// hours. A caller that needs to distinguish "genuinely delivered" from
+// "intentionally skipped" — because unlike an outright send failure, a
+// quiet-hours skip must not be treated as if the notification went out —
+// checks this before calling Send/SendToUser (see
+// notifications.watchlist_alerts.go's checkWatchlistSymbol for why that
+// distinction matters there).
+func (e *Engine) WithinAllowedHours() bool { return e.withinAllowedHours() }
+
 // SetClock overrides the time source (for testing).
 func (e *Engine) SetClock(fn func() time.Time) { e.now = fn }

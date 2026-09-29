@@ -11,10 +11,21 @@ import (
 	mkt "pano_chart/backend/domain/market"
 )
 
-// WatchlistProvider returns the symbols on a user's watchlist
-// (infrastructure/watchlist.SQLiteStore satisfies this — ROADMAP PR-101).
+// WatchlistProvider returns the symbols on a user's watchlist, and which
+// users have one at all (infrastructure/watchlist.SQLiteStore satisfies
+// this — ROADMAP PR-101).
 type WatchlistProvider interface {
 	Get(ctx context.Context, userID string) ([]string, error)
+
+	// Users returns every user ID with at least one watchlisted symbol.
+	// checkWatchlistTransitions scans this set directly (PR-101 CR) rather
+	// than NotificationConfigStore.All()'s saved-config rows: a user who
+	// has never saved any notification preference — plausible for a
+	// brand-new user who goes straight to starring a symbol — has no row
+	// there at all, so All() would silently skip them forever even though
+	// Get(userID) (used per-user below) correctly defaults
+	// WatchlistTransitions to true for exactly that case.
+	Users(ctx context.Context) ([]string, error)
 }
 
 // RegimeStackProvider builds a symbol's multi-timeframe regime stack.
@@ -40,6 +51,20 @@ type WatchlistTransitionState struct {
 type WatchlistStateStore interface {
 	GetState(ctx context.Context, userID, symbol, timeframe string) (WatchlistTransitionState, bool, error)
 	SetState(ctx context.Context, userID, symbol, timeframe string, state WatchlistTransitionState) error
+
+	// LastNotifiedAt returns the most recent NotifiedAt recorded for
+	// (userID, symbol) across every timeframe it has ever been tracked
+	// under, or the zero Time if never notified (PR-101 CR). The "(user,
+	// symbol)" dedup window (see watchlistDedupBars) must not reset just
+	// because the user changed their WatchlistTimeframe setting in
+	// between — that config is a single per-user value covering every
+	// watchlisted symbol, and GetState/SetState above are necessarily
+	// scoped per-timeframe too (a "current regime" is only meaningful
+	// relative to one specific timeframe), so a plain per-row NotifiedAt
+	// would let a timeframe change silently start a fresh, unrelated
+	// dedup clock for a symbol that was already notified about very
+	// recently under the old setting.
+	LastNotifiedAt(ctx context.Context, userID, symbol string) (time.Time, error)
 }
 
 // watchlistDedupBars is how many bars of the user's chosen timeframe must
@@ -76,28 +101,37 @@ func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 		return
 	}
 
-	configs, err := s.configs.All()
+	userIDs, err := s.watchlists.Users(ctx)
 	if err != nil {
-		log.Printf("[notify-scheduler] fetch configs for watchlist error: %v", err)
+		log.Printf("[notify-scheduler] fetch watchlist users error: %v", err)
 		return
 	}
 
 	now := s.now()
 	stacks := make(map[string]watchlistStack)
-	for _, cfg := range configs {
+	for _, userID := range userIDs {
 		if ctx.Err() != nil {
 			return
+		}
+
+		// Get, not All: correctly defaults WatchlistTransitions/
+		// WatchlistTimeframe for a user with no saved config row at all
+		// (PR-101 CR) — see WatchlistProvider.Users's doc.
+		cfg, err := s.configs.Get(userID)
+		if err != nil {
+			log.Printf("[notify-scheduler] watchlist config user=%s error: %v", userID, err)
+			continue
 		}
 		if !cfg.WatchlistTransitions {
 			continue
 		}
-		if !s.userHasProAccess(ctx, cfg.UserID) {
+		if !s.userHasProAccess(ctx, userID) {
 			continue
 		}
 
-		symbols, err := s.watchlists.Get(ctx, cfg.UserID)
+		symbols, err := s.watchlists.Get(ctx, userID)
 		if err != nil {
-			log.Printf("[notify-scheduler] watchlist symbols user=%s error: %v", cfg.UserID, err)
+			log.Printf("[notify-scheduler] watchlist symbols user=%s error: %v", userID, err)
 			continue
 		}
 
@@ -178,11 +212,35 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 	if err != nil {
 		return // defensive; should never happen — leaves next == prev, retried next tick
 	}
+
+	// Cross-timeframe, not prev.NotifiedAt (PR-101 CR): the dedup window
+	// is a per-(user,symbol) rule, but GetState/SetState are necessarily
+	// scoped per-timeframe (a "current regime" only means anything
+	// relative to one timeframe) — reading only the current timeframe's
+	// row would let a user reset their own cooldown just by changing
+	// WatchlistTimeframe, since the new timeframe's row has no memory of
+	// a very recent send under the old one.
+	lastNotified, err := s.watchlistState.LastNotifiedAt(ctx, cfg.UserID, symbol)
+	if err != nil {
+		log.Printf("[notify-scheduler] watchlist last-notified read user=%s symbol=%s error: %v", cfg.UserID, symbol, err)
+		return
+	}
 	dedupWindow := watchlistDedupBars * tf.Duration()
-	if !prev.NotifiedAt.IsZero() && now.Sub(prev.NotifiedAt) < dedupWindow {
+	if !lastNotified.IsZero() && now.Sub(lastNotified) < dedupWindow {
 		// Already notified for this transition recently — nothing lost by
 		// advancing state, we just skip the redundant repeat right now.
 		next.State = frame.Dominant
+		return
+	}
+
+	// Quiet hours: SendToUser would return nil below without actually
+	// attempting delivery (Engine's own quiet-hours check), which would
+	// otherwise be indistinguishable from a real, successful send. Checked
+	// explicitly, before sending, so this transition is deferred (next
+	// stays == prev) rather than being marked delivered and lost — same
+	// reasoning as the sendErr != nil branch below (PR-101 CR).
+	if !s.engine.WithinAllowedHours() {
+		log.Printf("[notify-scheduler] watchlist: user=%s symbol=%s deferred (quiet hours)", cfg.UserID, symbol)
 		return
 	}
 
