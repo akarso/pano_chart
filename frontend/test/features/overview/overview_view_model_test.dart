@@ -837,5 +837,58 @@ void main() {
             [true, true, true]);
       });
     });
+
+    group('aligned sort auto-completes pagination (PR-100 CR)', () {
+      test(
+          'fetches every remaining page so a later page\'s aligned symbol is not stranded',
+          () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            hasMore: true,
+            items: [
+              OverviewItem(symbol: 'PAGE1LOW', alignment: 0.25, totalScore: 0.9),
+            ],
+          ),
+          const OverviewResult(
+            hasMore: false,
+            items: [
+              OverviewItem(symbol: 'PAGE2HIGH', alignment: 1.0, totalScore: 0.1),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+        // Let the fire-and-forget completion loop run to exhaustion.
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(fakeGetOverview.calls.length, 2,
+            reason: 'both pages must be fetched automatically, not just page 1');
+        expect(vm.state.hasMore, false);
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['PAGE2HIGH', 'PAGE1LOW'],
+          reason:
+              "the page-2 symbol's higher alignment must place it first once "
+              'the full universe is in — not stranded behind page 1',
+        );
+      });
+
+      test('does not auto-paginate for a non-aligned sort', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(hasMore: true, items: [OverviewItem(symbol: 'A')]),
+          const OverviewResult(hasMore: false, items: [OverviewItem(symbol: 'B')]),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        // Default sort is 'volume', not 'aligned'.
+        await vm.loadInitial('1h');
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(fakeGetOverview.calls.length, 1);
+        expect(vm.state.hasMore, true);
+      });
+    });
   });
 }

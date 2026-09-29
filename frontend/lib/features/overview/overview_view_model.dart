@@ -276,6 +276,7 @@ class OverviewViewModel {
               : _state.effectiveSort,
         ),
       );
+      _completeUniverseForAlignedSort(timeframe, currentGen);
       try {
         await _writeRankingsCacheIfCurrent(timeframe, currentGen, cache);
       } catch (_) {
@@ -368,6 +369,7 @@ class OverviewViewModel {
               : _state.effectiveSort,
         ),
       );
+      _completeUniverseForAlignedSort(timeframe, currentGen);
       try {
         await _writeRankingsCacheIfCurrent(timeframe, currentGen, cache);
       } catch (_) {
@@ -376,6 +378,29 @@ class OverviewViewModel {
     } catch (e) {
       if (currentGen != _generation) return;
       _setState(_state.copyWith(isLoading: false, error: e.toString()));
+    }
+  }
+
+  /// The `aligned` sort is client-only — the backend doesn't recognize
+  /// `sort=aligned` and falls back to its own default before paginating
+  /// (PR-100 CR), so pagination order has nothing to do with alignment.
+  /// Re-sorting only the page(s) fetched so far can silently drop a
+  /// highly-aligned symbol that landed on a later, not-yet-fetched page.
+  /// Auto-fetches every remaining page (fire-and-forget: the first page
+  /// already renders immediately, this just keeps extending [_state.items]
+  /// via [loadNext]'s own notify) so the local sort always ends up
+  /// operating over the complete result set. No-ops once [sort] changes
+  /// away from `aligned`, a newer load/refresh starts, or one is already
+  /// in flight.
+  Future<void> _completeUniverseForAlignedSort(
+    String timeframe,
+    int generation,
+  ) async {
+    while (_state.sort == 'aligned' &&
+        _state.hasMore &&
+        !_state.isLoading &&
+        generation == _generation) {
+      await loadNext(timeframe);
     }
   }
 

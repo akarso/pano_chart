@@ -309,6 +309,12 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _behaviorFetched = false;
       _loadBehaviorData();
+      // MTF is symbol-scoped, not timeframe-scoped, so (unlike the panels
+      // above) it's called without resetting _mtfFetched first: a prior
+      // success is left alone (no pointless re-fetch every tick), while a
+      // prior failure (still _mtfFetched == false) gets retried here
+      // (PR-100 CR).
+      _loadMtfRegimes();
     } catch (_) {
       // Silently ignore — next tick will retry.
     }
@@ -569,6 +575,11 @@ class _DetailScreenState extends State<DetailScreen> {
 
   /// Fetches the MTF regime stack once per symbol (PR-100) — not reloaded
   /// on chart timeframe switch, since the stack itself is fixed-timeframe.
+  /// `_mtfFetched` is only ever set on *success*: a failure leaves it false
+  /// so a later call (reload / auto-refresh) naturally retries, while a
+  /// successful, symbol-scoped reading is never redundantly re-fetched —
+  /// this guard is what makes both "Reload chart" and the auto-refresh
+  /// tick safe to call unconditionally (PR-100 CR).
   Future<void> _loadMtfRegimes() async {
     final api = widget.mtfRegimesApi;
     if (api == null || _mtfFetched) return;
@@ -581,8 +592,8 @@ class _DetailScreenState extends State<DetailScreen> {
         _mtfFetched = true;
       });
     } catch (_) {
-      if (!mounted || generation != _mtfGeneration) return;
-      setState(() => _mtfFetched = true);
+      // Deliberately do not set _mtfFetched here — leave it false so the
+      // guard above allows a retry next time this is called.
     }
   }
 
@@ -652,6 +663,13 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _loadBehaviorData();
       _loadVolatilityData();
+      // No _mtfFetched reset here (unlike the panels above): MTF is
+      // symbol-scoped, not timeframe-scoped, so a prior success shouldn't
+      // be redundantly re-fetched just because the chart reloaded. The
+      // call is still safe to make unconditionally — _loadMtfRegimes's own
+      // guard only retries when the previous attempt hadn't succeeded
+      // (PR-100 CR).
+      _loadMtfRegimes();
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -1610,7 +1628,11 @@ class _DetailScreenState extends State<DetailScreen> {
             pill.timeframe,
             style: const TextStyle(fontSize: 11, color: Colors.white70),
           ),
-          if (dominant == 'trend') ...[
+          // Bias is a per-frame reading independent of which regime is
+          // dominant (sideways/compression/expansion can still lean up or
+          // down), so it shows for every real frame — just not on a
+          // missing/placeholder pill, which has nothing to report.
+          if (dominant != null) ...[
             const SizedBox(width: 4),
             Icon(
               trendBiasIcon(pill.bias),
