@@ -392,6 +392,15 @@ class OverviewViewModel {
   /// operating over the complete result set. No-ops once [sort] changes
   /// away from `aligned`, a newer load/refresh starts, or one is already
   /// in flight.
+  ///
+  /// Stops (rather than looping forever) on a page fetch failure:
+  /// [loadNext]'s catch path resets `isLoading` but leaves `page`/`hasMore`
+  /// unchanged, so without this check the loop would immediately re-request
+  /// the identical page — hammering the backend indefinitely on a
+  /// persistent failure instead of backing off. The user's own retry paths
+  /// (pull-to-refresh, scrolling to trigger [loadNext] again) pick this
+  /// back up later; the ranking is left incomplete in the meantime, same
+  /// as it would be for any other sort whose pagination stalls.
   Future<void> _completeUniverseForAlignedSort(
     String timeframe,
     int generation,
@@ -401,6 +410,8 @@ class OverviewViewModel {
         !_state.isLoading &&
         generation == _generation) {
       await loadNext(timeframe);
+      if (generation != _generation) return;
+      if (_state.error != null) return;
     }
   }
 

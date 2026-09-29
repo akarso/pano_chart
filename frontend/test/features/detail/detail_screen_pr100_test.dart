@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/domain/symbol.dart';
@@ -52,6 +54,20 @@ class _CountingMtfRegimesApi implements MtfRegimesApi {
   Future<MtfRegimesData> fetch({required String symbol}) async {
     calls++;
     return success;
+  }
+}
+
+/// Hands back a fresh, manually-resolved [Completer] for every call — used
+/// to prove that an overlapping, later call failing first does not discard
+/// an earlier call's success (PR-100 CR).
+class _RacingMtfRegimesApi implements MtfRegimesApi {
+  final completers = <Completer<MtfRegimesData>>[];
+
+  @override
+  Future<MtfRegimesData> fetch({required String symbol}) {
+    final c = Completer<MtfRegimesData>();
+    completers.add(c);
+    return c.future;
   }
 }
 
@@ -283,6 +299,47 @@ void main() {
           reason: 'MTF is symbol-scoped; a successful reading must not be '
               'redundantly re-fetched just because the chart reloaded');
       expect(find.byKey(const Key('mtf-pill-15m')), findsOneWidget);
+    });
+
+    testWidgets(
+        "an earlier call's success is not discarded by a later, overlapping "
+        'call failing first (PR-100 CR)', (tester) async {
+      final api = _RacingMtfRegimesApi();
+
+      await tester.pumpWidget(
+        _app(mtfRegimesApi: api, getCandleSeries: _FakeGetCandleSeries()),
+      );
+      await tester.pump();
+
+      // First fetch (from initState) is now in flight.
+      expect(api.completers.length, 1);
+
+      // Reload chart while the first fetch is still pending — starts a
+      // second, overlapping fetch (both fetch identical, symbol-scoped
+      // data, so which one resolves first should not matter).
+      await tester.tap(find.byTooltip('Reload chart'));
+      await tester.pump();
+      expect(api.completers.length, 2);
+
+      // The newer call fails first.
+      api.completers[1].completeError(Exception('transient network error'));
+      await tester.pump();
+      expect(find.byKey(const Key('mtf-pill-15m')), findsNothing);
+
+      // The older call then succeeds — its data must still be applied,
+      // not discarded just because a newer attempt happened to fail.
+      api.completers[0].complete(const MtfRegimesData(
+        symbol: 'ETHUSDT',
+        frames: [
+          MtfFrame(timeframe: '15m', dominant: 'trend', bias: 'up', score: 0.8),
+        ],
+        alignment: 0.25,
+        alignedState: 'indecisive',
+      ));
+      await tester.pump();
+
+      expect(find.byKey(const Key('mtf-pill-15m')), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 }

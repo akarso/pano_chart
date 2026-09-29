@@ -54,6 +54,33 @@ class _FakeGetOverview extends GetOverview {
   }
 }
 
+/// First call succeeds with a hasMore:true page; every call after that
+/// fails — used to prove pagination retry stops rather than looping
+/// forever on a persistent failure (PR-100 CR).
+class _FailAfterFirstPageGetOverview extends GetOverview {
+  int calls = 0;
+
+  @override
+  Future<OverviewResult> call({
+    required String timeframe,
+    required int page,
+    required String sort,
+    String? snapshot,
+    String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
+    bool mtf = false,
+  }) async {
+    calls++;
+    if (calls == 1) {
+      return const OverviewResult(
+        hasMore: true,
+        items: [OverviewItem(symbol: 'A', alignment: 0.5)],
+      );
+    }
+    throw Exception('persistent network error');
+  }
+}
+
 void main() {
   group('OverviewViewModel', () {
     late _FakeGetOverview fakeGetOverview;
@@ -888,6 +915,26 @@ void main() {
 
         expect(fakeGetOverview.calls.length, 1);
         expect(vm.state.hasMore, true);
+      });
+
+      test(
+          'stops instead of retrying forever when a page fetch fails (PR-100 CR)',
+          () async {
+        final failing = _FailAfterFirstPageGetOverview();
+        vm = OverviewViewModel(failing);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+        // Give the fire-and-forget loop several turns to run — with the
+        // bug, each turn would add another identical, failing call.
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(failing.calls, 2,
+            reason: 'must stop after the one failed page, not hammer it '
+                'forever');
+        expect(vm.state.hasMore, true,
+            reason: 'left incomplete rather than silently claiming done');
       });
     });
   });

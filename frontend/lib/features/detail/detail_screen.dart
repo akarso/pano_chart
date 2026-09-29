@@ -163,7 +163,6 @@ class _DetailScreenState extends State<DetailScreen> {
   // 15m/1h/4h/1d set regardless of the chart's selected timeframe).
   MtfRegimesData? _mtfData;
   bool _mtfFetched = false;
-  int _mtfGeneration = 0;
 
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
@@ -580,13 +579,22 @@ class _DetailScreenState extends State<DetailScreen> {
   /// successful, symbol-scoped reading is never redundantly re-fetched —
   /// this guard is what makes both "Reload chart" and the auto-refresh
   /// tick safe to call unconditionally (PR-100 CR).
+  ///
+  /// Deliberately has no generation guard: every call fetches the exact
+  /// same thing (this symbol's stack has no per-call parameters), so two
+  /// overlapping in-flight calls are always fetching identical data — a
+  /// "newest generation wins" rule would only serve to discard a perfectly
+  /// valid success just because a differently-ordered concurrent attempt
+  /// (e.g. an overlapping reload + auto-refresh tick) happened to fail
+  /// first (PR-100 CR). Applying a stale success is harmless here; the
+  /// [_mtfFetched] guard above still prevents further redundant fetches
+  /// once any call succeeds.
   Future<void> _loadMtfRegimes() async {
     final api = widget.mtfRegimesApi;
     if (api == null || _mtfFetched) return;
-    final generation = ++_mtfGeneration;
     try {
       final data = await api.fetch(symbol: widget.symbol.value);
-      if (!mounted || generation != _mtfGeneration) return;
+      if (!mounted) return;
       setState(() {
         _mtfData = data;
         _mtfFetched = true;
