@@ -57,6 +57,7 @@ Widget bootstrapApp({
   final fragilityApi = root.createFragilityApi();
   final behaviorApi = root.createBehaviorApi();
   final volatilityApi = root.createVolatilityApi();
+  final mtfRegimesApi = root.createMtfRegimesApi();
   final notificationConfigApi = root.createNotificationConfigApi();
   final socialVm = socialFeedViewModel;
   final component = AppComponent(
@@ -82,6 +83,7 @@ Widget bootstrapApp({
       fragilityApi: fragilityApi,
       behaviorApi: behaviorApi,
       volatilityApi: volatilityApi,
+      mtfRegimesApi: mtfRegimesApi,
       socialFeedViewModel: socialVm,
       notificationConfigApi: notificationConfigApi,
       scorecardApi: scorecardApi,
@@ -105,6 +107,11 @@ Widget bootstrapApp({
             fragilityApi: fragilityApi,
             behaviorApi: behaviorApi,
             volatilityApi: volatilityApi,
+            // Gated like the overview/Bubble Map routes: a free user can
+            // reach a setup notification's detail screen too, so this
+            // pro-tier field must not ride along ungated (PR-100 CR).
+            mtfRegimesApi:
+                (billingManager?.hasFullAccess ?? false) ? mtfRegimesApi : null,
             scorecardApi: scorecardApi,
             isProUser: billingManager?.hasFullAccess ?? false,
           ),

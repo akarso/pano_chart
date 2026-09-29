@@ -9,5 +9,6 @@ abstract class RankingsApi {
     required int pageSize,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
   });
 }

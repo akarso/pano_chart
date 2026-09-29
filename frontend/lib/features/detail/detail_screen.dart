@@ -26,9 +26,13 @@ import 'detail_context.dart';
 import 'http_setup_api.dart';
 import 'http_fragility_api.dart';
 import 'http_behavior_api.dart';
+import 'http_mtf_regimes_api.dart';
 import 'fragility_data.dart';
 import 'behavior_data.dart';
+import 'mtf_regimes_data.dart';
+import 'mtf_strip_presentation.dart';
 import 'setup_data.dart';
+import '../market_state/regime_colors.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/reliability_chip.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -58,6 +62,9 @@ class DetailScreen extends StatefulWidget {
 
   /// API for fetching retail behavior scores.
   final BehaviorApi? behaviorApi;
+
+  /// API for fetching the multi-timeframe regime stack (PR-100).
+  final MtfRegimesApi? mtfRegimesApi;
 
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
@@ -89,6 +96,7 @@ class DetailScreen extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.mtfRegimesApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -150,6 +158,14 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _volatilityFetched = false;
   int _volatilityGeneration = 0;
 
+  // ---- MTF regime stack state (PR-100) — symbol-scoped, not reloaded on
+  // chart timeframe switch (the backend stack always covers the same fixed
+  // 15m/1h/4h/1d set regardless of the chart's selected timeframe).
+  MtfRegimesData? _mtfData;
+  bool _mtfFetched = false;
+  int _mtfRequestSeq = 0;
+  int _mtfAppliedSeq = 0;
+
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
@@ -177,6 +193,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadFragilityData();
     _loadBehaviorData();
     _loadVolatilityData();
+    _loadMtfRegimes();
     _startAutoRefresh();
     _startEventsRefreshTimer();
   }
@@ -293,6 +310,12 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _behaviorFetched = false;
       _loadBehaviorData();
+      // MTF is symbol-scoped, not timeframe-scoped, so (unlike the panels
+      // above) it's called without resetting _mtfFetched first: a prior
+      // success is left alone (no pointless re-fetch every tick), while a
+      // prior failure (still _mtfFetched == false) gets retried here
+      // (PR-100 CR).
+      _loadMtfRegimes();
     } catch (_) {
       // Silently ignore — next tick will retry.
     }
@@ -551,6 +574,41 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
+  /// Fetches the MTF regime stack once per symbol (PR-100) — not reloaded
+  /// on chart timeframe switch, since the stack itself is fixed-timeframe.
+  /// `_mtfFetched` is only ever set on *success*: a failure leaves it false
+  /// so a later call (reload / auto-refresh) naturally retries, while a
+  /// successful, symbol-scoped reading is never redundantly re-fetched —
+  /// this guard is what makes both "Reload chart" and the auto-refresh
+  /// tick safe to call unconditionally (PR-100 CR).
+  ///
+  /// No "newest dispatch wins" guard here: rejecting a response just
+  /// because a differently-ordered concurrent attempt was *dispatched*
+  /// later would discard a perfectly valid success whenever that later
+  /// attempt happens to fail first (PR-100 CR). Instead, [_mtfAppliedSeq]
+  /// tracks the sequence number of the last *applied* response, so a
+  /// success is applied only if it isn't older than whatever is already
+  /// on screen — this still lets an older call's success land when nothing
+  /// newer ever succeeds, while stopping an older, slower response from
+  /// overwriting a newer one that already landed (PR-100 CR).
+  Future<void> _loadMtfRegimes() async {
+    final api = widget.mtfRegimesApi;
+    if (api == null || _mtfFetched) return;
+    final seq = ++_mtfRequestSeq;
+    try {
+      final data = await api.fetch(symbol: widget.symbol.value);
+      if (!mounted || seq < _mtfAppliedSeq) return;
+      _mtfAppliedSeq = seq;
+      setState(() {
+        _mtfData = data;
+        _mtfFetched = true;
+      });
+    } catch (_) {
+      // Deliberately do not set _mtfFetched here — leave it false so the
+      // guard above allows a retry next time this is called.
+    }
+  }
+
   Future<void> _loadVolatilityData() async {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
@@ -617,6 +675,13 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _loadBehaviorData();
       _loadVolatilityData();
+      // No _mtfFetched reset here (unlike the panels above): MTF is
+      // symbol-scoped, not timeframe-scoped, so a prior success shouldn't
+      // be redundantly re-fetched just because the chart reloaded. The
+      // call is still safe to make unconditionally — _loadMtfRegimes's own
+      // guard only retries when the previous attempt hadn't succeeded
+      // (PR-100 CR).
+      _loadMtfRegimes();
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -887,6 +952,10 @@ class _DetailScreenState extends State<DetailScreen> {
             children: [
               if (ctx != null) _buildHeaderBlock(ctx, pct24h, pctRef),
               if (ctx != null) const SizedBox(height: 12),
+              if (_mtfData != null) ...[
+                _buildMtfStrip(_mtfData!),
+                const SizedBox(height: 12),
+              ],
               Text(
                 _timeRangeLabel(),
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
@@ -1540,6 +1609,51 @@ class _DetailScreenState extends State<DetailScreen> {
           'Gainer — positive price change.\n'
           'Loser — negative price change.\n\n'
           'Bar width shows magnitude relative to 100%.',
+    );
+  }
+
+  // ---- MTF regime strip (PR-100) ----
+
+  Widget _buildMtfStrip(MtfRegimesData data) {
+    final pills = buildMtfPills(data);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: pills.map(_buildMtfPill).toList(),
+    );
+  }
+
+  Widget _buildMtfPill(MtfPill pill) {
+    final dominant = pill.dominant;
+    final color = dominant == null ? Colors.white24 : regimeColor(dominant);
+    return Container(
+      key: Key('mtf-pill-${pill.timeframe}'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withAlpha((0.15 * 255).round()),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            pill.timeframe,
+            style: const TextStyle(fontSize: 11, color: Colors.white70),
+          ),
+          // Bias is a per-frame reading independent of which regime is
+          // dominant (sideways/compression/expansion can still lean up or
+          // down), so it shows for every real frame — just not on a
+          // missing/placeholder pill, which has nothing to report.
+          if (dominant != null) ...[
+            const SizedBox(width: 4),
+            Icon(
+              trendBiasIcon(pill.bias),
+              size: 12,
+              color: trendBiasColor(pill.bias),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

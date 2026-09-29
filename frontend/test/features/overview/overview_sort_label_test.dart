@@ -27,4 +27,9 @@ void main() {
     expect(state.rsSortFellBack, false);
     expect(overviewSortMenuLabel(state), 'Leaders (vs market)');
   });
+
+  test('overviewSortMenuLabel shows Aligned for the aligned sort (PR-100)', () {
+    final state = OverviewState.initial().copyWith(sort: 'aligned');
+    expect(overviewSortMenuLabel(state), 'Aligned');
+  });
 }

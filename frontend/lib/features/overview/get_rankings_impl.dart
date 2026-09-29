@@ -19,6 +19,7 @@ class GetRankingsImpl implements GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
   }) async {
     final dto = await api.fetchRankings(
       timeframe: timeframe,
@@ -27,6 +28,7 @@ class GetRankingsImpl implements GetOverview {
       pageSize: pageSize,
       sidewaysAlgo: sidewaysAlgo,
       symbols: symbols,
+      mtf: mtf,
     );
 
     final items = dto.results
@@ -46,6 +48,8 @@ class GetRankingsImpl implements GetOverview {
               rs: e.rs,
               beta: e.beta,
               rsRank: e.rsRank,
+              alignment: e.alignment,
+              alignedState: e.alignedState,
             ))
         .toList();
 

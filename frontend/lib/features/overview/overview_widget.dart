@@ -46,6 +46,7 @@ import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
+import '../detail/http_mtf_regimes_api.dart';
 import '../detail/http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -53,6 +54,8 @@ import '../scorecards/scorecard_data.dart';
 import '../scorecards/scorecards_screen.dart';
 import '../scorecards/reliability_chip.dart';
 import '../volatility/http_volatility_api.dart';
+import '../market_state/regime_colors.dart';
+import 'aligned_badge_presentation.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 import 'relative_strength_chip.dart';
@@ -81,6 +84,7 @@ class OverviewWidget extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
+  final MtfRegimesApi? mtfRegimesApi;
   final SocialFeedViewModel? socialFeedViewModel;
   final NotificationConfigApi? notificationConfigApi;
   final ScorecardApi? scorecardApi;
@@ -106,6 +110,7 @@ class OverviewWidget extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.volatilityApi,
+    this.mtfRegimesApi,
     this.socialFeedViewModel,
     this.notificationConfigApi,
     this.scorecardApi,
@@ -183,6 +188,15 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   /// Whether auto-refresh is enabled (pro tier).
   bool get _isProUser => _capabilities.isPro;
+
+  /// Syncs the view model's entitlement flag before any fetch that might
+  /// request the `?mtf=1` overlay (PR-100) — `_isProUser` is a live getter
+  /// (re-evaluated from `widget.billingManager` on every access), so this
+  /// must run right before each trigger rather than once, since entitlement
+  /// can change mid-lifetime (purchase/restore).
+  void _syncViewModelEntitlement() {
+    vm.isProUser = _isProUser;
+  }
 
   @override
   void initState() {
@@ -276,6 +290,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       });
     };
     _scrollController.addListener(_onScroll);
+    _syncViewModelEntitlement();
     vm.loadInitial(_timeframe);
     _loadScorecards();
 
@@ -367,6 +382,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       // reached almost immediately, and there's no point fetching more
       // data the cap won't display anyway — see PR-077 CR follow-up.
       if (!vm.state.isLoading && vm.state.hasMore && !_freeTierCapActive) {
+        _syncViewModelEntitlement();
         vm.loadNext(_timeframe);
       }
     }
@@ -517,6 +533,7 @@ class OverviewWidgetState extends State<OverviewWidget>
     _captureSparklineValues();
     _isRefreshing = true;
     _isAutoRefreshing = true;
+    _syncViewModelEntitlement();
     await vm.refresh(_timeframe);
   }
 
@@ -593,6 +610,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             fragilityApi: _isProUser ? widget.fragilityApi : null,
             behaviorApi: _isProUser ? widget.behaviorApi : null,
             volatilityApi: _isProUser ? widget.volatilityApi : null,
+            mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
             scorecardApi: widget.scorecardApi,
             isProUser: _isProUser,
             detailContext: DetailContext(
@@ -634,6 +652,7 @@ class OverviewWidgetState extends State<OverviewWidget>
   Future<void> _onRefresh() async {
     _captureSparklineValues();
     _isRefreshing = true;
+    _syncViewModelEntitlement();
     await vm.refresh(_timeframe);
   }
 
@@ -765,6 +784,7 @@ class OverviewWidgetState extends State<OverviewWidget>
               final willShow = !_showFavourites;
               setState(() => _showFavourites = willShow);
               if (willShow && _favourites.isNotEmpty) {
+                _syncViewModelEntitlement();
                 vm.loadMissingFavourites(_timeframe, _favourites);
               }
             },
@@ -892,6 +912,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                       // _maybeStartAutoRefresh once new data arrives.
                       _autoRefreshTimer?.stop();
                       _autoRefreshTimer = null;
+                      _syncViewModelEntitlement();
                       vm.loadInitial(_timeframe);
                     },
                   ),
@@ -903,6 +924,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     initialValue: state.sort,
                     onSelected: (v) {
                       _prefs?.sort = v;
+                      _syncViewModelEntitlement();
                       vm.changeSort(v, _timeframe);
                     },
                     itemBuilder: (context) => [
@@ -927,6 +949,10 @@ class OverviewWidgetState extends State<OverviewWidget>
                         PopupMenuItem(
                           value: 'laggards',
                           child: Text('Laggards (vs market)'),
+                        ),
+                        PopupMenuItem(
+                          value: 'aligned',
+                          child: Text('Aligned'),
                         ),
                         const PopupMenuDivider(),
                       ],
@@ -1171,6 +1197,12 @@ class OverviewWidgetState extends State<OverviewWidget>
                     fragilityApi: widget.fragilityApi,
                     behaviorApi: widget.behaviorApi,
                     volatilityApi: widget.volatilityApi,
+                    // Gated here (unlike the sibling APIs above, which are
+                    // pre-existing behavior out of scope for this PR — see
+                    // PR-100 CR): a free user can reach Bubble Map and tap
+                    // through to a symbol detail screen, so this new
+                    // pro-tier field must not ride along ungated.
+                    mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
                   ),
@@ -1774,6 +1806,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     reliability: _badgeReliability(item),
                     rsAvailable: state.rsAvailable,
                     showRsChip: _isProUser,
+                    showAlignmentBadge: _isProUser,
                   ),
                 );
                 return child;
@@ -1957,6 +1990,7 @@ class _OverviewGridItem extends StatelessWidget {
   final ScorecardSummaryItem? reliability;
   final bool rsAvailable;
   final bool showRsChip;
+  final bool showAlignmentBadge;
 
   const _OverviewGridItem({
     required this.item,
@@ -1971,12 +2005,19 @@ class _OverviewGridItem extends StatelessWidget {
     this.reliability,
     this.rsAvailable = false,
     this.showRsChip = false,
+    this.showAlignmentBadge = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final borderRadius = columns == 3 ? 6.0 : 12.0;
-    return Card(
+    final card = Card(
+      // Zero margin so the aligned-badge border (drawn on the wrapping
+      // Container, see _wrapWithAlignmentBadge) hugs the card's actual
+      // edge instead of leaving Card's default margin as a visible gap.
+      // Grid spacing is controlled by the GridView's own
+      // crossAxisSpacing/mainAxisSpacing, not by this margin.
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(borderRadius),
       ),
@@ -2099,6 +2140,34 @@ class _OverviewGridItem extends StatelessWidget {
             );
           },
         ),
+      ),
+    );
+
+    return _wrapWithAlignmentBadge(card, borderRadius);
+  }
+
+  /// Wraps [card] with a top-edge colored border + tooltip when this item's
+  /// MTF stack is strongly aligned (>= 0.75, PR-100). Otherwise returns
+  /// [card] unchanged — no extra widget nesting for the common case.
+  Widget _wrapWithAlignmentBadge(Widget card, double borderRadius) {
+    final alignment = item.alignment;
+    final alignedState = item.alignedState;
+    if (!showAlignmentBadge ||
+        alignment == null ||
+        alignedState == null ||
+        alignment < 0.75) {
+      return card;
+    }
+    final color = regimeColor(alignedState);
+    return Tooltip(
+      message: alignedTooltip(alignedState, alignment),
+      child: Container(
+        key: Key('aligned-badge-${item.symbol}'),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+          border: Border(top: BorderSide(color: color, width: 3)),
+        ),
+        child: card,
       ),
     );
   }

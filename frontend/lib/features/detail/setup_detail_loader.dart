@@ -8,6 +8,7 @@ import 'chart_navigation.dart';
 import 'detail_screen.dart';
 import 'http_behavior_api.dart';
 import 'http_fragility_api.dart';
+import 'http_mtf_regimes_api.dart';
 import 'http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
 
@@ -23,6 +24,7 @@ class SetupDetailLoader extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
+  final MtfRegimesApi? mtfRegimesApi;
   final ScorecardApi? scorecardApi;
   final bool isProUser;
 
@@ -35,6 +37,7 @@ class SetupDetailLoader extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.volatilityApi,
+    this.mtfRegimesApi,
     this.scorecardApi,
     this.isProUser = false,
   }) : super(key: key);
@@ -74,6 +77,7 @@ class _SetupDetailLoaderState extends State<SetupDetailLoader> {
             fragilityApi: widget.fragilityApi,
             behaviorApi: widget.behaviorApi,
             volatilityApi: widget.volatilityApi,
+            mtfRegimesApi: widget.mtfRegimesApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
           ),

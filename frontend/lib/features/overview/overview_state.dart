@@ -22,6 +22,14 @@ class OverviewItem {
   /// Percentile among scored RS rows only (0–1). Null when unscored.
   final double? rsRank;
 
+  /// Share of the symbol's timeframe frames agreeing with [alignedState]
+  /// (PR-099/100). Null when unrequested or the store had no fresh frames.
+  final double? alignment;
+
+  /// The regime [alignment] frames agree on when it clears the alignment
+  /// floor (else "indecisive"). Null alongside [alignment].
+  final String? alignedState;
+
   const OverviewItem({
     required this.symbol,
     this.totalScore = 0.0,
@@ -38,6 +46,8 @@ class OverviewItem {
     this.rs,
     this.beta,
     this.rsRank,
+    this.alignment,
+    this.alignedState,
   });
 }
 
@@ -155,6 +165,8 @@ String overviewSortMenuLabel(OverviewState state) {
       return 'Volume';
     case 'total':
       return 'Total';
+    case 'aligned':
+      return 'Aligned';
     default:
       return sort;
   }

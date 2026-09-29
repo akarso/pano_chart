@@ -19,6 +19,7 @@ class GetOverviewImpl implements GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
   }) async {
     final dto = await api.fetchOverview(
       timeframe: timeframe,
