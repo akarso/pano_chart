@@ -110,14 +110,11 @@ class BillingManager {
   final Map<String, List<PurchaseDetails>> _pendingAckByToken = {};
 
   BillingManager({
-    required SubscriptionApi api,
-    required String userId,
+    required this._api,
+    required this._userId,
     InAppPurchase? iap,
-    TrialManager? trialManager,
-  })  : _api = api,
-        _userId = userId,
-        _iapOverride = iap,
-        _trialManager = trialManager;
+    this._trialManager,
+  })  : _iapOverride = iap;
 
   // ---- lifecycle ----
 

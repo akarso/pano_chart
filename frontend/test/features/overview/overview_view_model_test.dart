@@ -512,11 +512,11 @@ void main() {
 
       test('leaders sorts by rs descending with nulls last', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
               OverviewItem(symbol: 'SKIPUSDT'),
               OverviewItem(symbol: 'HIUSDT', rs: 0.05),
@@ -538,11 +538,11 @@ void main() {
 
       test('laggards sorts by rs ascending with nulls last', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'laggards',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
               OverviewItem(symbol: 'SKIPUSDT'),
               OverviewItem(symbol: 'HIUSDT', rs: 0.05),
@@ -563,12 +563,12 @@ void main() {
       test('leaders fallback keeps backend total order not A-Z', () async {
         // Backend fell back to total — items already ordered by totalScore.
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
               OverviewItem(symbol: 'MMUSDT', totalScore: 0.1),
@@ -589,8 +589,8 @@ void main() {
       });
 
       test('equal rs ties break by symbol', () {
-        final a = const OverviewItem(symbol: 'BBBUSDT', rs: 0.01);
-        final b = const OverviewItem(symbol: 'AAAUSDT', rs: 0.01);
+        const a = OverviewItem(symbol: 'BBBUSDT', rs: 0.01);
+        const b = OverviewItem(symbol: 'AAAUSDT', rs: 0.01);
         // Ascending symbol: AAA before BBB.
         expect(
           OverviewViewModel.compareRsNullsLast(a, b, descending: true),
@@ -604,21 +604,21 @@ void main() {
 
       test('favourites merge does not promote fallback board', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'FAVUSDT', totalScore: 0.2, rs: 0.99),
             ],
           ),
@@ -644,21 +644,21 @@ void main() {
       test('favourites merge inserts mid-score into total order on fallback',
           () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'FAVUSDT', totalScore: 0.7, rs: 0.99),
             ],
           ),
@@ -679,20 +679,20 @@ void main() {
 
       test('timeframe change clears effectiveSort until new response', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ETHUSDT', rs: 0.02),
             ],
           ),
@@ -718,12 +718,12 @@ void main() {
 
       test('failed timeframe load keeps cleared effectiveSort', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
             ],
           ),
@@ -745,21 +745,21 @@ void main() {
 
       test('loadNext does not promote rsAvailable from a later page', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: true,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'HIUSDT', totalScore: 0.2, rs: 0.5),
             ],
           ),
@@ -783,9 +783,9 @@ void main() {
     group('aligned sort (PR-100)', () {
       test('sorts by alignment descending, nulls treated as 0', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'MIDUSDT', alignment: 0.75),
               OverviewItem(symbol: 'SKIPUSDT'), // no alignment (null)
               OverviewItem(symbol: 'HIUSDT', alignment: 1.0),
@@ -805,9 +805,9 @@ void main() {
 
       test('ties break by total score descending', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(
                   symbol: 'LOWSCORE', alignment: 1.0, totalScore: 0.2),
               OverviewItem(

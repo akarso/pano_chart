@@ -404,7 +404,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
         volH = hasVolatility ? widget.height * 0.16 : 0.0;
         break;
     }
-    final xAxisH = 18.0;
+    const xAxisH = 18.0;
     final totalH = priceH + volumeH + volH + oscH + behH + xAxisH + 20;
 
     return SizedBox(
@@ -818,7 +818,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         child: Text(
                           'Greed',
                           style: TextStyle(
-                            color: BehaviorOscillatorPainter.greedColor.withOpacity(0.55),
+                            color: BehaviorOscillatorPainter.greedColor.withValues(alpha: 0.55),
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),
@@ -831,7 +831,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         child: Text(
                           'Fear',
                           style: TextStyle(
-                            color: BehaviorOscillatorPainter.fearColor.withOpacity(0.55),
+                            color: BehaviorOscillatorPainter.fearColor.withValues(alpha: 0.55),
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),
@@ -844,7 +844,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         child: Text(
                           'Patience',
                           style: TextStyle(
-                            color: BehaviorOscillatorPainter.patienceColor.withOpacity(0.55),
+                            color: BehaviorOscillatorPainter.patienceColor.withValues(alpha: 0.55),
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),
@@ -857,7 +857,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         child: Text(
                           'Panic',
                           style: TextStyle(
-                            color: BehaviorOscillatorPainter.panicColor.withOpacity(0.55),
+                            color: BehaviorOscillatorPainter.panicColor.withValues(alpha: 0.55),
                             fontSize: 9,
                             fontWeight: FontWeight.w600,
                           ),
@@ -875,7 +875,7 @@ class _InteractiveChartState extends State<InteractiveChart> {
                         child: Text(
                           'Hard candle limit reached',
                           style: TextStyle(
-                            color: Colors.red.withOpacity(0.7),
+                            color: Colors.red.withValues(alpha: 0.7),
                             fontSize: 9,
                             fontWeight: FontWeight.w500,
                           ),

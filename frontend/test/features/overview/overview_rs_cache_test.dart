@@ -37,11 +37,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = PreferencesService(await SharedPreferences.getInstance());
 
-    final result = OverviewResult(
+    const result = OverviewResult(
       rsAvailable: true,
       effectiveSort: 'leaders',
       hasMore: false,
-      items: const [
+      items: [
         OverviewItem(symbol: 'BTCUSDT', rs: 0.0, beta: 1.0, rsRank: 0.5),
         OverviewItem(symbol: 'ETHUSDT', rs: 0.02, beta: 1.1, rsRank: 1.0),
       ],
@@ -165,11 +165,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = _ThrowingPrefs(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: true,
         effectiveSort: 'leaders',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'BTCUSDT', rs: 0.01)],
+        items: [OverviewItem(symbol: 'BTCUSDT', rs: 0.01)],
       ),
     ]);
     final vm = OverviewViewModel(fake);
@@ -186,17 +186,17 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = PreferencesService(await SharedPreferences.getInstance());
 
-    final first = OverviewResult(
+    const first = OverviewResult(
       rsAvailable: false,
       effectiveSort: 'volume',
       hasMore: false,
-      items: const [OverviewItem(symbol: 'OLDUSDT', volume: 1)],
+      items: [OverviewItem(symbol: 'OLDUSDT', volume: 1)],
     );
-    final refreshed = OverviewResult(
+    const refreshed = OverviewResult(
       rsAvailable: true,
       effectiveSort: 'volume',
       hasMore: false,
-      items: const [
+      items: [
         OverviewItem(symbol: 'NEWUSDT', volume: 2, rs: 0.01, beta: 1.0),
       ],
     );
@@ -221,11 +221,11 @@ void main() {
     final gate = Completer<void>();
     final prefs = PreferencesService(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: false,
         effectiveSort: 'volume',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
+        items: [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
       ),
     ]);
     final vm = OverviewViewModel(fake);
@@ -257,17 +257,17 @@ void main() {
     final gate = Completer<void>();
     final prefs = PreferencesService(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: false,
         effectiveSort: 'volume',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
+        items: [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
       ),
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: true,
         effectiveSort: 'leaders',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'LEADUSDT', rs: 0.1)],
+        items: [OverviewItem(symbol: 'LEADUSDT', rs: 0.1)],
       ),
     ]);
     final vm = OverviewViewModel(fake);

@@ -142,11 +142,6 @@ void main() {
 
       await vm.load(timeframe: '15m', pageIndex: 0, width: 400, height: 400);
 
-      final beforeA =
-          vm.state.bubbles.firstWhere((b) => b.token.symbol == 'A').radius;
-      final beforeB =
-          vm.state.bubbles.firstWhere((b) => b.token.symbol == 'B').radius;
-
       vm.changeSizeBy('change');
 
       expect(vm.state.sizeBy, 'change');

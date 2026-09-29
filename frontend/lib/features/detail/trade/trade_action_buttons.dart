@@ -217,7 +217,7 @@ class _ActionButton extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            border: Border.all(color: color.withOpacity(0.5), width: 1),
+            border: Border.all(color: color.withValues(alpha: 0.5), width: 1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(

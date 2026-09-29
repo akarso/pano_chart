@@ -357,7 +357,7 @@ void main() {
   // ─── CrosshairOverlay future zone rendering ───
 
   group('CrosshairOverlay future zone', () {
-    Widget _wrap(Widget child) =>
+    Widget wrap(Widget child) =>
         MaterialApp(home: Scaffold(body: child));
 
     testWidgets('hides OHLC and shows "Future zone" in future mode',
@@ -370,7 +370,7 @@ void main() {
         close: 63510,
         volume: 18200,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(
           width: 400,
           height: 400,
@@ -413,7 +413,7 @@ void main() {
         close: 63510,
         volume: 18200,
       );
-      await tester.pumpWidget(_wrap(
+      await tester.pumpWidget(wrap(
         SizedBox(
           width: 400,
           height: 400,

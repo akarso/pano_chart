@@ -929,36 +929,36 @@ class OverviewWidgetState extends State<OverviewWidget>
                     },
                     itemBuilder: (context) => [
                       if (_isProUser) ...[
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'sideways',
                           child: Text('Sideways'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'compression',
                           child: Text('Compression'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'breakout',
                           child: Text('Breakout'),
                         ),
-                        PopupMenuItem(value: 'trend', child: Text('Trend')),
-                        PopupMenuItem(
+                        const PopupMenuItem(value: 'trend', child: Text('Trend')),
+                        const PopupMenuItem(
                           value: 'leaders',
                           child: Text('Leaders (vs market)'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'laggards',
                           child: Text('Laggards (vs market)'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'aligned',
                           child: Text('Aligned'),
                         ),
                         const PopupMenuDivider(),
                       ],
-                      PopupMenuItem(value: 'gain', child: Text('Gainers')),
-                      PopupMenuItem(value: 'losers', child: Text('Losers')),
-                      PopupMenuItem(value: 'volume', child: Text('Volume')),
+                      const PopupMenuItem(value: 'gain', child: Text('Gainers')),
+                      const PopupMenuItem(value: 'losers', child: Text('Losers')),
+                      const PopupMenuItem(value: 'volume', child: Text('Volume')),
                     ],
                     child: Row(
                       mainAxisSize: MainAxisSize.min,

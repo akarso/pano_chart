@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-import 'package:pano_chart_frontend/features/social/api/device_registration_api.dart';
 import 'package:pano_chart_frontend/features/social/infrastructure/http_device_registration_api.dart';
 
 void main() {

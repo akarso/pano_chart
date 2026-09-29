@@ -45,26 +45,6 @@ CandleSeriesResponse _series({
   );
 }
 
-/// Series where all candles are within 24 hours of each other (5-min candles).
-CandleSeriesResponse _shortSeries({int count = 50}) {
-  final base = DateTime.utc(2025, 1, 1);
-  return CandleSeriesResponse(
-    symbol: 'ETHUSDT',
-    timeframe: '5m',
-    candles: List.generate(count, (i) {
-      final close = 100.0 + i;
-      return CandleDto(
-        timestamp: base.add(Duration(minutes: 5 * i)),
-        open: close,
-        high: close + 2,
-        low: close - 2,
-        close: close,
-        volume: 500,
-      );
-    }),
-  );
-}
-
 Widget _app({
   CandleSeriesResponse? series,
   DetailContext? detailContext,

@@ -128,7 +128,7 @@ class CrosshairOverlay extends StatelessWidget {
     final lines = <_TooltipLine>[
       _TooltipLine(symbol, isBold: true),
       _TooltipLine(_formatTimestamp(ts)),
-      _TooltipLine(''),
+      const _TooltipLine(''),
       const _TooltipLine('Future zone', color: Color(0x88FFFFFF)),
       const _TooltipLine('No price data'),
     ];
@@ -186,7 +186,7 @@ class CrosshairOverlay extends StatelessWidget {
     final lines = <_TooltipLine>[
       _TooltipLine(symbol, isBold: true),
       _TooltipLine(_formatTimestamp(c.timestamp)),
-      _TooltipLine(''),
+      const _TooltipLine(''),
       _TooltipLine('O: ${_fmtPrice(c.open)}'),
       _TooltipLine('H: ${_fmtPrice(c.high)}'),
       _TooltipLine('L: ${_fmtPrice(c.low)}'),
@@ -428,7 +428,7 @@ class _CrosshairPainter extends CustomPainter {
     if (!state.isFutureZone) {
       final volTop = priceHeight;
       final volBot = priceHeight + volumeHeight;
-      final halfCW = 6.0; // approximate half-candle visual width
+      const halfCW = 6.0; // approximate half-candle visual width
       canvas.drawRect(
         Rect.fromLTRB(
           state.x - halfCW,

@@ -8,7 +8,7 @@ void main() {
       final service = NotificationService();
       // Should not throw — silently skipped when not initialized.
       await service.showNewPostNotification(
-        SocialPost(
+        const SocialPost(
           id: 'p1',
           accountId: 'twitter:satoshi',
           author: 'satoshi',

@@ -46,9 +46,9 @@ void main() {
 
     testWidgets('shows "No events" when all filtered out', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(
+        const MaterialApp(
           home: EventsListScreen(
-            events: const [],
+            events: [],
             filterLevel: EventFilterLevel.all,
           ),
         ),

@@ -25,7 +25,7 @@ void main() {
   });
 
   group('alignBucketsToCandles', () {
-    CandleDto _candle(DateTime ts) => CandleDto(
+    CandleDto candle(DateTime ts) => CandleDto(
           timestamp: ts,
           open: 1,
           high: 2,
@@ -46,7 +46,7 @@ void main() {
       ]);
 
       final result = alignBucketsToCandles(
-        candles: [_candle(ts)],
+        candles: [candle(ts)],
         bucketsByMinute: buckets,
       );
 
@@ -58,7 +58,7 @@ void main() {
 
     test('returns null for unmatched minute', () {
       final candles = [
-        _candle(DateTime.utc(2024, 1, 1, 5, 30)),
+        candle(DateTime.utc(2024, 1, 1, 5, 30)),
       ];
 
       final result = alignBucketsToCandles(
@@ -87,7 +87,7 @@ void main() {
       final lookup = buildBucketLookup([bucket]);
 
       final result = alignBucketsToCandles(
-        candles: [_candle(ts1), _candle(ts2)],
+        candles: [candle(ts1), candle(ts2)],
         bucketsByMinute: lookup,
       );
 
@@ -108,7 +108,7 @@ void main() {
       final lookup = buildBucketLookup([bucket]);
 
       final result = alignBucketsToCandles(
-        candles: [_candle(utcMidnight)],
+        candles: [candle(utcMidnight)],
         bucketsByMinute: lookup,
       );
 
@@ -117,10 +117,10 @@ void main() {
 
       // A bucket at UTC minute 0 should NOT match (unless local == UTC).
       if (localMinute != 0) {
-        final utcBucket = const VolatilityBucket(minute: 0, normalized: 9.9, spikeProb: 0.9);
+        const utcBucket = VolatilityBucket(minute: 0, normalized: 9.9, spikeProb: 0.9);
         final utcLookup = buildBucketLookup([utcBucket]);
         final utcResult = alignBucketsToCandles(
-          candles: [_candle(utcMidnight)],
+          candles: [candle(utcMidnight)],
           bucketsByMinute: utcLookup,
         );
         expect(utcResult[0], isNull);
@@ -133,12 +133,12 @@ void main() {
       // 2024-01-21 is a Sunday → Dart weekday 7 → Go weekday 0
       final sunday = DateTime.utc(2024, 1, 21, 0, 0);
 
-      final monBucket = const VolatilityBucket(minute: 1, normalized: 1.5, spikeProb: 0.3);
-      final sunBucket = const VolatilityBucket(minute: 0, normalized: 0.7, spikeProb: 0.1);
+      const monBucket = VolatilityBucket(minute: 1, normalized: 1.5, spikeProb: 0.3);
+      const sunBucket = VolatilityBucket(minute: 0, normalized: 0.7, spikeProb: 0.1);
       final lookup = buildBucketLookup([sunBucket, monBucket]);
 
       final result = alignBucketsToCandles(
-        candles: [_candle(monday), _candle(sunday)],
+        candles: [candle(monday), candle(sunday)],
         bucketsByMinute: lookup,
         isDailyTimeframe: true,
       );
@@ -152,11 +152,11 @@ void main() {
     test('isDailyTimeframe returns null for missing day', () {
       // Only have Monday bucket (day 1), candle is on Tuesday (day 2)
       final tuesday = DateTime.utc(2024, 1, 16, 0, 0);
-      final monBucket = const VolatilityBucket(minute: 1, normalized: 1.5, spikeProb: 0.3);
+      const monBucket = VolatilityBucket(minute: 1, normalized: 1.5, spikeProb: 0.3);
       final lookup = buildBucketLookup([monBucket]);
 
       final result = alignBucketsToCandles(
-        candles: [_candle(tuesday)],
+        candles: [candle(tuesday)],
         bucketsByMinute: lookup,
         isDailyTimeframe: true,
       );
