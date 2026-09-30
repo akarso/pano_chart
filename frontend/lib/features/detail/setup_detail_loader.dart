@@ -15,8 +15,9 @@ import '../watchlist/watchlist_controller.dart';
 
 /// Loads candle data for [symbol] then pushes [DetailScreen].
 ///
-/// Used by [NotificationRouter] for setup-of-the-day notifications where
-/// only the symbol string is available.
+/// Used by [NotificationRouter] for setup-of-the-day and watchlist
+/// transition notifications. [timeframe] comes from the payload when
+/// present; otherwise defaults to `4h`.
 class SetupDetailLoader extends StatefulWidget {
   final String symbol;
   final String timeframe;

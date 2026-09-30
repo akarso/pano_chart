@@ -107,8 +107,9 @@ Widget bootstrapApp({
         isProUser: billingManager?.hasFullAccess ?? false,
       ),
       newsScreen: () => NewsListScreen(viewModel: newsViewModel),
-      setupScreen: (symbol) => SetupDetailLoader(
+      setupScreen: (symbol, [timeframe]) => SetupDetailLoader(
         symbol: symbol,
+        timeframe: timeframe ?? '4h',
         getCandleSeries: getCandleSeries,
         setupApi: setupApi,
         fragilityApi: fragilityApi,

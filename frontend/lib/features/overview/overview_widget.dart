@@ -2079,6 +2079,56 @@ String _signalLabel(
   }
 }
 
+/// Measured slots for one overview grid tile. Built by
+/// [_OverviewGridItem._resolveTileLayout], consumed by the overlay builders.
+class _OverviewTileLayout {
+  final BoxConstraints constraints;
+  final double fontSize;
+  final double pad;
+  final double starExtent;
+  final double starIconSize;
+  final bool starInBottomRow;
+  final double nameLeft;
+  final double nameRight;
+  final bool reservedMetaStrip;
+  final double metaTopBound;
+  final bool lockMetaBelowName;
+  final double metaBand;
+  final double metaLeft;
+  final double metaWidth;
+  final bool showMetaRow;
+  final bool showBottomMeta;
+  final double pctFontSize;
+  final bool showRsInBand;
+  final double badgeColumnMaxHeight;
+  final bool showReliabilityPill;
+  final ScorecardSummaryItem? reliabilityRow;
+
+  const _OverviewTileLayout({
+    required this.constraints,
+    required this.fontSize,
+    required this.pad,
+    required this.starExtent,
+    required this.starIconSize,
+    required this.starInBottomRow,
+    required this.nameLeft,
+    required this.nameRight,
+    required this.reservedMetaStrip,
+    required this.metaTopBound,
+    required this.lockMetaBelowName,
+    required this.metaBand,
+    required this.metaLeft,
+    required this.metaWidth,
+    required this.showMetaRow,
+    required this.showBottomMeta,
+    required this.pctFontSize,
+    required this.showRsInBand,
+    required this.badgeColumnMaxHeight,
+    required this.showReliabilityPill,
+    required this.reliabilityRow,
+  });
+}
+
 class _OverviewGridItem extends StatelessWidget {
   final OverviewItem item;
   final int columns;
@@ -2129,409 +2179,435 @@ class _OverviewGridItem extends StatelessWidget {
         aspectRatio: 2.5,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // Scale font proportionally to card width.
-            final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
-            final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
-            final textScaler = MediaQuery.textScalerOf(context);
-            final scaledFont = textScaler.scale(fontSize);
-            // 48px when the card has room. Floor at 32px when the card
-            // can hold it; never larger than the card. On a short tile
-            // the name sits beside the star when both the star and the
-            // badge leave room; otherwise the name stays on the top row
-            // and the star sits below it.
-            const minStarExtent = 32.0;
-            const minNameWidth = 24.0;
-            const minTapExtent = 32.0;
-            var starExtent = 48.0;
-            final maxStarExtent = constraints.maxHeight - pad;
-            if (maxStarExtent < minStarExtent) {
-              starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
-            } else {
-              if (starExtent > maxStarExtent) starExtent = maxStarExtent;
-              if (starExtent < minStarExtent) starExtent = minStarExtent;
-            }
-            final nameBand = scaledFont * 1.5;
-            final sidePad = pad + 4;
-            final starTop = constraints.maxHeight - pad - starExtent;
-            // Keep the name band inside the card so a bottom Positioned
-            // never gets top below bottom at large text scales.
-            final nameBottom = (pad + nameBand).clamp(
-              pad,
-              pad > constraints.maxHeight - pad
-                  ? pad
-                  : constraints.maxHeight - pad,
+            final layout = _resolveTileLayout(
+              constraints,
+              MediaQuery.textScalerOf(context),
             );
-            // Reliability pill is a second line under the badge. Prefer
-            // keeping price/RS (≥14px). If the full column would starve
-            // that band, scale the column into the room above a 14px meta
-            // strip; only drop the pill when even that room is gone.
-            final reliabilityRow = reliability;
-            var showReliabilityPill =
-                item.badgeComponent.isNotEmpty &&
-                reliabilityRow != null &&
-                reliabilityTone(reliabilityRow) != null;
-            final unscaledBadgeColumnHeight = _badgeColumnHeight(
-              item,
-              fontSize: fontSize,
-              columns: columns,
-              textScaler: textScaler,
-              includePill: showReliabilityPill,
-            );
-            var badgeColumnHeight = unscaledBadgeColumnHeight;
-            var badgeColumnMaxHeight = badgeColumnHeight;
-            var badgeColumnBottom = pad + badgeColumnHeight;
-            var metaGap = 0.0;
-            var reservedMetaStrip = false;
-            final hangsPastName =
-                showReliabilityPill && badgeColumnBottom > nameBottom;
-            // Gap is applied whenever the column hangs past the name band,
-            // so include it when deciding whether the meta strip stays ≥14px.
-            const columnMetaGap = 2.0;
-            final bandUnderColumn =
-                (constraints.maxHeight -
-                        badgeColumnBottom -
-                        pad -
-                        (hangsPastName ? columnMetaGap : 0.0))
-                    .clamp(0.0, double.infinity);
-            if (showReliabilityPill && bandUnderColumn < 14) {
-              // Leave a full 14px meta strip; scale the badge column above it.
-              // No gap on this path — the strip is reserved exactly.
-              final maxCol = (constraints.maxHeight - 2 * pad - 14).clamp(
-                0.0,
-                double.infinity,
-              );
-              if (maxCol >= 10) {
-                badgeColumnMaxHeight = maxCol;
-                badgeColumnHeight = maxCol;
-                badgeColumnBottom = pad + maxCol;
-                reservedMetaStrip = true;
-              } else {
-                // Not enough room to keep both — drop the pill and put
-                // meta back under the name band.
-                showReliabilityPill = false;
-                badgeColumnHeight = _badgeColumnHeight(
-                  item,
-                  fontSize: fontSize,
-                  columns: columns,
-                  textScaler: textScaler,
-                  includePill: false,
-                );
-                badgeColumnMaxHeight = badgeColumnHeight;
-                badgeColumnBottom = pad + badgeColumnHeight;
-              }
-            } else if (hangsPastName) {
-              metaGap = columnMetaGap;
-            }
-            // After scaling, keep meta at the reserved strip even when the
-            // name band sits lower — the name ellipsizes above that line.
-            final metaTopBound = reservedMetaStrip
-                ? badgeColumnBottom
-                : (badgeColumnBottom > nameBottom
-                          ? badgeColumnBottom
-                          : nameBottom) +
-                      metaGap;
-            // FittedBox scales the column uniformly; match the name inset to
-            // the painted width so a tall scale-2 pill cannot zero the slot.
-            var badgeReserve = _badgeReserveWidth(
-              item,
-              fontSize: fontSize,
-              columns: columns,
-              textScaler: textScaler,
-              reliability: showReliabilityPill ? reliabilityRow : null,
-            );
-            if (reservedMetaStrip &&
-                unscaledBadgeColumnHeight > 0 &&
-                badgeColumnMaxHeight < unscaledBadgeColumnHeight) {
-              badgeReserve *= badgeColumnMaxHeight / unscaledBadgeColumnHeight;
-            }
-            final wantBesideStar = starTop < nameBottom;
-            var starIndent = 0.0;
-            // Name on the top row; bottom row is clipped to the leftover
-            // band under the name.
-            var nameAboveStar = false;
-            // Star stays in the bottom row unless that band is too short
-            // for a usable tap target.
-            var starInBottomRow = true;
-            var showBottomMeta = true;
-
-            void adoptBelowNameBand() {
-              nameAboveStar = true;
-              final maxBelow = constraints.maxHeight - nameBottom - pad;
-              if (maxBelow >= minTapExtent) {
-                starExtent = maxBelow < starExtent ? maxBelow : starExtent;
-                starInBottomRow = true;
-                showBottomMeta = true;
-              } else {
-                // Band is only a few pixels — move the control to the
-                // top-left so it stays tappable and clear of the name.
-                starInBottomRow = false;
-                starExtent = minTapExtent;
-                if (starExtent > constraints.maxHeight - 2 * pad) {
-                  starExtent = constraints.maxHeight - 2 * pad;
-                }
-                if (starExtent < 8) starExtent = 8;
-                starIndent = starExtent;
-                showBottomMeta = maxBelow >= 14;
-              }
-            }
-
-            if (wantBesideStar) {
-              final besideWidth =
-                  constraints.maxWidth -
-                  2 * sidePad -
-                  starExtent -
-                  badgeReserve;
-              if (besideWidth >= minNameWidth) {
-                // Star on the top-left beside the name — not in the
-                // bottom row, so percent/RS cannot inherit its height.
-                starIndent = starExtent;
-                starInBottomRow = false;
-              } else {
-                adoptBelowNameBand();
-              }
-            }
-            var nameLeft = sidePad + starIndent;
-            // Keep the measured badge inset so the name never sits under
-            // the badge. If the beside-star band is still too narrow,
-            // drop the star indent and use the below-name layout.
-            var nameRight = sidePad + badgeReserve;
-            if (constraints.maxWidth - nameLeft - nameRight < minNameWidth &&
-                starIndent > 0 &&
-                !nameAboveStar) {
-              starIndent = 0;
-              nameLeft = sidePad;
-              adoptBelowNameBand();
-              nameLeft = sidePad + starIndent;
-            }
-            if (constraints.maxWidth - nameLeft - nameRight < 8) {
-              if (starInBottomRow) {
-                starIndent = 0;
-                nameLeft = sidePad;
-              }
-            }
-            // Leftover band under the name / badge column — used whenever
-            // the meta row is height-bounded (beside-star or below-name).
-            final lockMetaBelowName = !starInBottomRow || nameAboveStar;
-            final metaBand = (constraints.maxHeight - metaTopBound - pad).clamp(
-              0.0,
-              double.infinity,
-            );
-            if (lockMetaBelowName) {
-              showBottomMeta = metaBand >= 14;
-            }
-            var starIconSize = starExtent * 0.5;
-            if (starIconSize < 14) starIconSize = 14;
-            if (starIconSize > 22) starIconSize = 22;
-            if (starIconSize > starExtent) starIconSize = starExtent;
-            final pctFontSize = lockMetaBelowName && showBottomMeta
-                ? (metaBand * 0.4).clamp(
-                    6.0,
-                    (fontSize * 0.55).clamp(7.0, 11.0),
-                  )
-                : (fontSize * 0.55).clamp(7.0, 11.0);
-            final showRsInBand =
-                showRsChip &&
-                showBottomMeta &&
-                (!lockMetaBelowName || metaBand >= 14);
-            // When the star is pinned top-left, keep percent/RS to its right
-            // so they never cover the button's lower half.
-            final metaLeft = !starInBottomRow ? pad + starExtent : pad + 4;
-            final metaWidth = (constraints.maxWidth - metaLeft - (pad + 4))
-                .clamp(0.0, double.infinity);
-            final showMetaRow =
-                (starInBottomRow || showBottomMeta) &&
-                (!lockMetaBelowName || metaBand > 0) &&
-                metaWidth > 0;
-
-            Widget starButton() {
-              return IconButton(
-                tooltip: isFavourite
-                    ? 'Remove from watchlist'
-                    : 'Add to watchlist',
-                onPressed: onToggleWatchlist,
-                style: IconButton.styleFrom(
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  padding: EdgeInsets.zero,
-                  minimumSize: Size(starExtent, starExtent),
-                  maximumSize: Size(starExtent, starExtent),
-                  fixedSize: Size(starExtent, starExtent),
-                ),
-                constraints: BoxConstraints.tightFor(
-                  width: starExtent,
-                  height: starExtent,
-                ),
-                icon: Icon(
-                  isFavourite ? Icons.star : Icons.star_border,
-                  color: isFavourite
-                      ? Colors.amber.withAlpha((0.8 * 255).round())
-                      : Colors.white.withAlpha((0.5 * 255).round()),
-                  size: starIconSize,
-                ),
-              );
-            }
-
-            return Stack(
-              clipBehavior: Clip.hardEdge,
-              children: [
-                Padding(
-                  padding: EdgeInsets.all(pad),
-                  child: _buildSparkline(
-                    hiRes ? item.sparkline : _downsample(item.sparkline),
-                  ),
-                ),
-                Positioned(
-                  left: nameLeft,
-                  top: pad,
-                  right: nameRight,
-                  // When a 14px meta strip is reserved under a scaled badge
-                  // column, keep the name inside the space above that strip.
-                  bottom: reservedMetaStrip
-                      ? constraints.maxHeight - metaTopBound
-                      : null,
-                  child: ClipRect(
-                    child: Text(
-                      key: Key('overview-name-${item.symbol}'),
-                      item.symbol.replaceAll('USDT', ''),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: fontSize,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white.withAlpha(
-                          ((columns == 1
-                                      ? 0.9
-                                      : columns == 2
-                                      ? 0.8
-                                      : 0.7) *
-                                  255)
-                              .round(),
-                        ),
-                        backgroundColor: Colors.black.withAlpha(
-                          (0.25 * 255).round(),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                // Bottom row: price (and favourite star) left, RS chip right.
-                // Height-bounded under the name / badge column whenever the
-                // star is beside or below the name; inset past a top-left
-                // star so taps still hit the button.
-                if (showMetaRow)
-                  Positioned(
-                    left: metaLeft,
-                    right: pad + 4,
-                    top: lockMetaBelowName ? metaTopBound : null,
-                    bottom: pad,
-                    child: Builder(
-                      builder: (_) {
-                        final pct = _sparklinePriceChange(item.sparkline);
-                        final rounded = pct.toStringAsFixed(1);
-                        // Treat ±0.0 as zero — grey, no sign.
-                        final isZero = rounded == '0.0' || rounded == '-0.0';
-                        final label = isZero
-                            ? '0.0%'
-                            : '${pct >= 0 ? '+' : ''}$rounded%';
-                        final color = isZero
-                            ? Colors.grey
-                            : (pct >= 0 ? Colors.green : Colors.red);
-                        final narrow = columns == 3 || lockMetaBelowName;
-                        final row = Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            if (starInBottomRow) starButton(),
-                            if (showBottomMeta) ...[
-                              Expanded(
-                                child: Text(
-                                  key: Key('overview-pct-${item.symbol}'),
-                                  label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: pctFontSize,
-                                    color: color,
-                                    fontWeight: FontWeight.w600,
-                                    shadows: const [
-                                      Shadow(
-                                        color: Colors.black,
-                                        blurRadius: 3,
-                                      ),
-                                      Shadow(
-                                        color: Colors.black,
-                                        blurRadius: 3,
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              if (showRsInBand)
-                                Flexible(
-                                  child: RelativeStrengthChip(
-                                    rsAvailable: rsAvailable,
-                                    rs: item.rs,
-                                    beta: item.beta,
-                                    dense: true,
-                                    compactLabel: narrow,
-                                  ),
-                                ),
-                            ],
-                          ],
-                        );
-                        if (!lockMetaBelowName) return row;
-                        // Scale or clip percent/RS into the leftover band.
-                        return ClipRect(
-                          child: Align(
-                            alignment: Alignment.bottomLeft,
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              alignment: Alignment.bottomLeft,
-                              child: SizedBox(
-                                height: metaBand > 0 ? metaBand : null,
-                                width: metaWidth,
-                                child: row,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                // Badge column after the meta row so the reliability pill
-                // keeps its taps when heights are tight.
-                if (item.badgeComponent.isNotEmpty)
-                  Positioned(
-                    right: pad + 4,
-                    top: pad,
-                    height: badgeColumnMaxHeight,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.topRight,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          KeyedSubtree(
-                            key: Key('overview-badge-${item.symbol}'),
-                            child: _buildBadge(item, fontSize),
-                          ),
-                          if (showReliabilityPill)
-                            ReliabilityChip(item: reliabilityRow, dense: true),
-                        ],
-                      ),
-                    ),
-                  ),
-                // Paint the top-left star after the meta row so hit tests
-                // prefer the button over any residual overlap.
-                if (!starInBottomRow)
-                  Positioned(left: pad, top: pad, child: starButton()),
-              ],
-            );
+            return _buildTileStack(layout);
           },
         ),
       ),
     );
 
     return _wrapWithAlignmentBadge(card, borderRadius);
+  }
+
+  /// Measures badge/star/name/meta slots for the current tile size.
+  _OverviewTileLayout _resolveTileLayout(
+    BoxConstraints constraints,
+    TextScaler textScaler,
+  ) {
+    final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
+    final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
+    final scaledFont = textScaler.scale(fontSize);
+    // 48px when the card has room. Floor at 32px when the card can hold
+    // it; never larger than the card. On a short tile the name sits
+    // beside the star when both the star and the badge leave room;
+    // otherwise the name stays on the top row and the star sits below.
+    const minStarExtent = 32.0;
+    const minNameWidth = 24.0;
+    const minTapExtent = 32.0;
+    var starExtent = 48.0;
+    final maxStarExtent = constraints.maxHeight - pad;
+    if (maxStarExtent < minStarExtent) {
+      starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
+    } else {
+      if (starExtent > maxStarExtent) starExtent = maxStarExtent;
+      if (starExtent < minStarExtent) starExtent = minStarExtent;
+    }
+    final nameBand = scaledFont * 1.5;
+    final sidePad = pad + 4;
+    final starTop = constraints.maxHeight - pad - starExtent;
+    // Keep the name band inside the card so a bottom Positioned never
+    // gets top below bottom at large text scales.
+    final nameBottom = (pad + nameBand).clamp(
+      pad,
+      pad > constraints.maxHeight - pad ? pad : constraints.maxHeight - pad,
+    );
+    // Reliability pill is a second line under the badge. Prefer keeping
+    // price/RS (≥14px). If the full column would starve that band, scale
+    // the column into the room above a 14px meta strip; only drop the
+    // pill when even that room is gone.
+    final reliabilityRow = reliability;
+    var showReliabilityPill =
+        item.badgeComponent.isNotEmpty &&
+        reliabilityRow != null &&
+        reliabilityTone(reliabilityRow) != null;
+    final unscaledBadgeColumnHeight = _badgeColumnHeight(
+      item,
+      fontSize: fontSize,
+      columns: columns,
+      textScaler: textScaler,
+      includePill: showReliabilityPill,
+    );
+    var badgeColumnHeight = unscaledBadgeColumnHeight;
+    var badgeColumnMaxHeight = badgeColumnHeight;
+    var badgeColumnBottom = pad + badgeColumnHeight;
+    var metaGap = 0.0;
+    var reservedMetaStrip = false;
+    final hangsPastName = showReliabilityPill && badgeColumnBottom > nameBottom;
+    // Gap is applied whenever the column hangs past the name band, so
+    // include it when deciding whether the meta strip stays ≥14px.
+    const columnMetaGap = 2.0;
+    final bandUnderColumn =
+        (constraints.maxHeight -
+                badgeColumnBottom -
+                pad -
+                (hangsPastName ? columnMetaGap : 0.0))
+            .clamp(0.0, double.infinity);
+    if (showReliabilityPill && bandUnderColumn < 14) {
+      // Leave a full 14px meta strip; scale the badge column above it.
+      // No gap on this path — the strip is reserved exactly.
+      final maxCol = (constraints.maxHeight - 2 * pad - 14).clamp(
+        0.0,
+        double.infinity,
+      );
+      if (maxCol >= 10) {
+        badgeColumnMaxHeight = maxCol;
+        badgeColumnHeight = maxCol;
+        badgeColumnBottom = pad + maxCol;
+        reservedMetaStrip = true;
+      } else {
+        // Not enough room to keep both — drop the pill and put meta
+        // back under the name band.
+        showReliabilityPill = false;
+        badgeColumnHeight = _badgeColumnHeight(
+          item,
+          fontSize: fontSize,
+          columns: columns,
+          textScaler: textScaler,
+          includePill: false,
+        );
+        badgeColumnMaxHeight = badgeColumnHeight;
+        badgeColumnBottom = pad + badgeColumnHeight;
+      }
+    } else if (hangsPastName) {
+      metaGap = columnMetaGap;
+    }
+    // After scaling, keep meta at the reserved strip even when the name
+    // band sits lower — the name ellipsizes above that line.
+    final metaTopBound = reservedMetaStrip
+        ? badgeColumnBottom
+        : (badgeColumnBottom > nameBottom ? badgeColumnBottom : nameBottom) +
+              metaGap;
+    // FittedBox scales the column uniformly; match the name inset to
+    // the painted width so a tall scale-2 pill cannot zero the slot.
+    var badgeReserve = _badgeReserveWidth(
+      item,
+      fontSize: fontSize,
+      columns: columns,
+      textScaler: textScaler,
+      reliability: showReliabilityPill ? reliabilityRow : null,
+    );
+    if (reservedMetaStrip &&
+        unscaledBadgeColumnHeight > 0 &&
+        badgeColumnMaxHeight < unscaledBadgeColumnHeight) {
+      badgeReserve *= badgeColumnMaxHeight / unscaledBadgeColumnHeight;
+    }
+    final wantBesideStar = starTop < nameBottom;
+    var starIndent = 0.0;
+    // Name on the top row; bottom row is clipped to the leftover band
+    // under the name.
+    var nameAboveStar = false;
+    // Star stays in the bottom row unless that band is too short for a
+    // usable tap target.
+    var starInBottomRow = true;
+    var showBottomMeta = true;
+
+    void adoptBelowNameBand() {
+      nameAboveStar = true;
+      final maxBelow = constraints.maxHeight - nameBottom - pad;
+      if (maxBelow >= minTapExtent) {
+        starExtent = maxBelow < starExtent ? maxBelow : starExtent;
+        starInBottomRow = true;
+        showBottomMeta = true;
+      } else {
+        // Band is only a few pixels — move the control to the top-left
+        // so it stays tappable and clear of the name.
+        starInBottomRow = false;
+        starExtent = minTapExtent;
+        if (starExtent > constraints.maxHeight - 2 * pad) {
+          starExtent = constraints.maxHeight - 2 * pad;
+        }
+        if (starExtent < 8) starExtent = 8;
+        starIndent = starExtent;
+        showBottomMeta = maxBelow >= 14;
+      }
+    }
+
+    if (wantBesideStar) {
+      final besideWidth =
+          constraints.maxWidth - 2 * sidePad - starExtent - badgeReserve;
+      if (besideWidth >= minNameWidth) {
+        // Star on the top-left beside the name — not in the bottom row,
+        // so percent/RS cannot inherit its height.
+        starIndent = starExtent;
+        starInBottomRow = false;
+      } else {
+        adoptBelowNameBand();
+      }
+    }
+    var nameLeft = sidePad + starIndent;
+    // Keep the measured badge inset so the name never sits under the
+    // badge. If the beside-star band is still too narrow, drop the star
+    // indent and use the below-name layout.
+    var nameRight = sidePad + badgeReserve;
+    if (constraints.maxWidth - nameLeft - nameRight < minNameWidth &&
+        starIndent > 0 &&
+        !nameAboveStar) {
+      starIndent = 0;
+      nameLeft = sidePad;
+      adoptBelowNameBand();
+      nameLeft = sidePad + starIndent;
+    }
+    if (constraints.maxWidth - nameLeft - nameRight < 8) {
+      if (starInBottomRow) {
+        starIndent = 0;
+        nameLeft = sidePad;
+      }
+    }
+    // Leftover band under the name / badge column — used whenever the
+    // meta row is height-bounded (beside-star or below-name).
+    final lockMetaBelowName = !starInBottomRow || nameAboveStar;
+    final metaBand = (constraints.maxHeight - metaTopBound - pad).clamp(
+      0.0,
+      double.infinity,
+    );
+    if (lockMetaBelowName) {
+      showBottomMeta = metaBand >= 14;
+    }
+    var starIconSize = starExtent * 0.5;
+    if (starIconSize < 14) starIconSize = 14;
+    if (starIconSize > 22) starIconSize = 22;
+    if (starIconSize > starExtent) starIconSize = starExtent;
+    final pctFontSize = lockMetaBelowName && showBottomMeta
+        ? (metaBand * 0.4).clamp(6.0, (fontSize * 0.55).clamp(7.0, 11.0))
+        : (fontSize * 0.55).clamp(7.0, 11.0);
+    final showRsInBand =
+        showRsChip && showBottomMeta && (!lockMetaBelowName || metaBand >= 14);
+    // When the star is pinned top-left, keep percent/RS to its right so
+    // they never cover the button's lower half.
+    final metaLeft = !starInBottomRow ? pad + starExtent : pad + 4;
+    final metaWidth = (constraints.maxWidth - metaLeft - (pad + 4)).clamp(
+      0.0,
+      double.infinity,
+    );
+    final showMetaRow =
+        (starInBottomRow || showBottomMeta) &&
+        (!lockMetaBelowName || metaBand > 0) &&
+        metaWidth > 0;
+
+    return _OverviewTileLayout(
+      constraints: constraints,
+      fontSize: fontSize,
+      pad: pad,
+      starExtent: starExtent,
+      starIconSize: starIconSize,
+      starInBottomRow: starInBottomRow,
+      nameLeft: nameLeft,
+      nameRight: nameRight,
+      reservedMetaStrip: reservedMetaStrip,
+      metaTopBound: metaTopBound,
+      lockMetaBelowName: lockMetaBelowName,
+      metaBand: metaBand,
+      metaLeft: metaLeft,
+      metaWidth: metaWidth,
+      showMetaRow: showMetaRow,
+      showBottomMeta: showBottomMeta,
+      pctFontSize: pctFontSize,
+      showRsInBand: showRsInBand,
+      badgeColumnMaxHeight: badgeColumnMaxHeight,
+      showReliabilityPill: showReliabilityPill,
+      reliabilityRow: showReliabilityPill ? reliabilityRow : null,
+    );
+  }
+
+  Widget _buildTileStack(_OverviewTileLayout layout) {
+    return Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        Padding(
+          padding: EdgeInsets.all(layout.pad),
+          child: _buildSparkline(
+            hiRes ? item.sparkline : _downsample(item.sparkline),
+          ),
+        ),
+        _buildNameOverlay(layout),
+        if (layout.showMetaRow) _buildMetaOverlay(layout),
+        if (item.badgeComponent.isNotEmpty) _buildBadgeOverlay(layout),
+        // Paint the top-left star after the meta row so hit tests prefer
+        // the button over any residual overlap.
+        if (!layout.starInBottomRow)
+          Positioned(
+            left: layout.pad,
+            top: layout.pad,
+            child: _buildStarButton(layout),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildNameOverlay(_OverviewTileLayout layout) {
+    return Positioned(
+      left: layout.nameLeft,
+      top: layout.pad,
+      right: layout.nameRight,
+      // When a 14px meta strip is reserved under a scaled badge column,
+      // keep the name inside the space above that strip.
+      bottom: layout.reservedMetaStrip
+          ? layout.constraints.maxHeight - layout.metaTopBound
+          : null,
+      child: ClipRect(
+        child: Text(
+          key: Key('overview-name-${item.symbol}'),
+          item.symbol.replaceAll('USDT', ''),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: layout.fontSize,
+            fontWeight: FontWeight.w600,
+            color: Colors.white.withAlpha(
+              ((columns == 1
+                          ? 0.9
+                          : columns == 2
+                          ? 0.8
+                          : 0.7) *
+                      255)
+                  .round(),
+            ),
+            backgroundColor: Colors.black.withAlpha((0.25 * 255).round()),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetaOverlay(_OverviewTileLayout layout) {
+    // Bottom row: price (and favourite star) left, RS chip right.
+    // Height-bounded under the name / badge column whenever the star is
+    // beside or below the name; inset past a top-left star so taps still
+    // hit the button.
+    return Positioned(
+      left: layout.metaLeft,
+      right: layout.pad + 4,
+      top: layout.lockMetaBelowName ? layout.metaTopBound : null,
+      bottom: layout.pad,
+      child: Builder(
+        builder: (_) {
+          final pct = _sparklinePriceChange(item.sparkline);
+          final rounded = pct.toStringAsFixed(1);
+          // Treat ±0.0 as zero — grey, no sign.
+          final isZero = rounded == '0.0' || rounded == '-0.0';
+          final label = isZero ? '0.0%' : '${pct >= 0 ? '+' : ''}$rounded%';
+          final color = isZero
+              ? Colors.grey
+              : (pct >= 0 ? Colors.green : Colors.red);
+          final narrow = columns == 3 || layout.lockMetaBelowName;
+          final row = Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (layout.starInBottomRow) _buildStarButton(layout),
+              if (layout.showBottomMeta) ...[
+                Expanded(
+                  child: Text(
+                    key: Key('overview-pct-${item.symbol}'),
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: layout.pctFontSize,
+                      color: color,
+                      fontWeight: FontWeight.w600,
+                      shadows: const [
+                        Shadow(color: Colors.black, blurRadius: 3),
+                        Shadow(color: Colors.black, blurRadius: 3),
+                      ],
+                    ),
+                  ),
+                ),
+                if (layout.showRsInBand)
+                  Flexible(
+                    child: RelativeStrengthChip(
+                      rsAvailable: rsAvailable,
+                      rs: item.rs,
+                      beta: item.beta,
+                      dense: true,
+                      compactLabel: narrow,
+                    ),
+                  ),
+              ],
+            ],
+          );
+          if (!layout.lockMetaBelowName) return row;
+          // Scale or clip percent/RS into the leftover band.
+          return ClipRect(
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.bottomLeft,
+                child: SizedBox(
+                  height: layout.metaBand > 0 ? layout.metaBand : null,
+                  width: layout.metaWidth,
+                  child: row,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBadgeOverlay(_OverviewTileLayout layout) {
+    // Badge column after the meta row so the reliability pill keeps its
+    // taps when heights are tight.
+    return Positioned(
+      right: layout.pad + 4,
+      top: layout.pad,
+      height: layout.badgeColumnMaxHeight,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.topRight,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            KeyedSubtree(
+              key: Key('overview-badge-${item.symbol}'),
+              child: _buildBadge(item, layout.fontSize),
+            ),
+            if (layout.showReliabilityPill && layout.reliabilityRow != null)
+              ReliabilityChip(item: layout.reliabilityRow!, dense: true),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStarButton(_OverviewTileLayout layout) {
+    return IconButton(
+      tooltip: isFavourite ? 'Remove from watchlist' : 'Add to watchlist',
+      onPressed: onToggleWatchlist,
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: EdgeInsets.zero,
+        minimumSize: Size(layout.starExtent, layout.starExtent),
+        maximumSize: Size(layout.starExtent, layout.starExtent),
+        fixedSize: Size(layout.starExtent, layout.starExtent),
+      ),
+      constraints: BoxConstraints.tightFor(
+        width: layout.starExtent,
+        height: layout.starExtent,
+      ),
+      icon: Icon(
+        isFavourite ? Icons.star : Icons.star_border,
+        color: isFavourite
+            ? Colors.amber.withAlpha((0.8 * 255).round())
+            : Colors.white.withAlpha((0.5 * 255).round()),
+        size: layout.starIconSize,
+      ),
+    );
   }
 
   /// Wraps [card] with a top-edge colored border + tooltip when this item's

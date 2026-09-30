@@ -84,6 +84,8 @@ class PreferencesService {
   static const _keyWatchlistMigrated = 'watchlist.migrated';
   static const _keyWatchlistBlockedUpgrade = 'watchlist.blockedUpgrade';
   static const _keyWatchlistUpgradePending = 'watchlist.upgradePending';
+  static const _keyWatchlistPendingAdds = 'watchlist.pendingAdds';
+  static const _keyWatchlistPendingRemoves = 'watchlist.pendingRemoves';
   static const _keyShowEvents = 'settings.showEvents';
   static const _keyEventFilter = 'settings.eventFilter';
   static const _keyPreferredExchange = 'settings.preferredExchange';
@@ -229,6 +231,20 @@ class PreferencesService {
 
   set watchlistUpgradePending(bool v) =>
       _prefs.setBool(_keyWatchlistUpgradePending, v);
+
+  /// Symbols starred on this device that have not landed on the server yet.
+  Set<String> get watchlistPendingAdds =>
+      (_prefs.getStringList(_keyWatchlistPendingAdds) ?? []).toSet();
+
+  set watchlistPendingAdds(Set<String> v) =>
+      _prefs.setStringList(_keyWatchlistPendingAdds, v.toList());
+
+  /// Symbols unstarred on this device that are still on the server.
+  Set<String> get watchlistPendingRemoves =>
+      (_prefs.getStringList(_keyWatchlistPendingRemoves) ?? []).toSet();
+
+  set watchlistPendingRemoves(Set<String> v) =>
+      _prefs.setStringList(_keyWatchlistPendingRemoves, v.toList());
 
   void addFavourite(String symbol) {
     final favs = favourites;

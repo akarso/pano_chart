@@ -73,6 +73,11 @@ class _Api implements WatchlistApi {
   @override
   Future<List<String>> remove(List<String> toRemove) async {
     removeCalls.add(List.of(toRemove));
+    await _maybeHold();
+    if (timeoutWithoutCommit || timeoutsRemaining > 0) {
+      if (timeoutsRemaining > 0) timeoutsRemaining--;
+      throw TimeoutException('watchlist');
+    }
     for (final symbol in toRemove) {
       if (_invalidSymbol(symbol)) {
         throw HttpWatchlistApiException(
@@ -790,6 +795,82 @@ void main() {
 
         final restarted = WatchlistController(prefs: prefs, api: api);
         expect(restarted.takeStatus(), isNull);
+      },
+    );
+
+    test('a pending add survives restart and is pushed on reconcile', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await PreferencesService.create();
+      final api = _Api();
+      final watchlist = WatchlistController(prefs: prefs, api: api);
+      await watchlist.reconcile();
+
+      api.timeoutWithoutCommit = true;
+      await watchlist.toggle('BTCUSDT');
+      expect(watchlist.symbols, {'BTCUSDT'});
+      expect(api.symbols, isEmpty);
+
+      api.timeoutWithoutCommit = false;
+      final restarted = WatchlistController(prefs: prefs, api: api);
+      expect(restarted.symbols, {'BTCUSDT'});
+
+      await restarted.reconcile();
+
+      expect(restarted.symbols, {'BTCUSDT'});
+      expect(api.symbols, ['BTCUSDT']);
+      expect(api.replaceCalls, isNotEmpty);
+      expect(api.replaceCalls.last, ['BTCUSDT']);
+      expect(prefs.favourites, {'BTCUSDT'});
+    });
+
+    test(
+      'a pending remove survives restart and is pushed on reconcile',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await PreferencesService.create();
+        final api = _Api(['BTCUSDT']);
+        final watchlist = WatchlistController(prefs: prefs, api: api);
+        await watchlist.reconcile();
+        expect(watchlist.symbols, {'BTCUSDT'});
+
+        api.timeoutWithoutCommit = true;
+        await watchlist.toggle('BTCUSDT');
+        expect(watchlist.symbols, isEmpty);
+        expect(api.symbols, ['BTCUSDT']);
+
+        api.timeoutWithoutCommit = false;
+        final restarted = WatchlistController(prefs: prefs, api: api);
+        expect(restarted.symbols, isEmpty);
+
+        await restarted.reconcile();
+
+        expect(restarted.symbols, isEmpty);
+        expect(api.symbols, isEmpty);
+        expect(api.removeCalls, isNotEmpty);
+        expect(prefs.favourites, isEmpty);
+      },
+    );
+
+    test(
+      'a pending edit is kept when reconcile merges a server symbol',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await PreferencesService.create();
+        final api = _Api();
+        final watchlist = WatchlistController(prefs: prefs, api: api);
+        await watchlist.reconcile();
+
+        api.timeoutWithoutCommit = true;
+        await watchlist.toggle('BTCUSDT');
+
+        api.timeoutWithoutCommit = false;
+        api.symbols = ['ETHUSDT'];
+        final restarted = WatchlistController(prefs: prefs, api: api);
+
+        await restarted.reconcile();
+
+        expect(restarted.symbols, {'BTCUSDT', 'ETHUSDT'});
+        expect(api.symbols.toSet(), {'BTCUSDT', 'ETHUSDT'});
       },
     );
 

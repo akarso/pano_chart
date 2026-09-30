@@ -58,7 +58,9 @@ String watchlistLeftOffMessage(Iterable<String> dropped) {
 /// returns. Until then the controller does not PUT, because replace
 /// deletes every server symbol missing from the body. A toggle made
 /// while the snapshot is unknown stays pending and is merged after the
-/// next successful fetch (startup, failure retry, or resume).
+/// next successful fetch (startup, failure retry, or resume). Pending
+/// adds and removals are stored in preferences so a restart before sync
+/// does not lose them.
 ///
 /// The first successful fetch for an install that is not yet migrated
 /// unions the local cache with the server list, uploads that union
@@ -74,6 +76,10 @@ class WatchlistController extends ChangeNotifier {
 
   WatchlistController._(this._prefs, this._api) {
     _symbols = Set.of(_prefs?.favourites ?? const <String>{});
+    _pendingAdds = Set.of(_prefs?.watchlistPendingAdds ?? const <String>{});
+    _pendingRemoves = Set.of(
+      _prefs?.watchlistPendingRemoves ?? const <String>{},
+    );
     final blocked = _prefs?.watchlistBlockedUpgrade;
     if (blocked != null) _blockedUpgrade = List.of(blocked);
     if (_prefs?.watchlistUpgradePending ?? false) {
@@ -90,8 +96,8 @@ class WatchlistController extends ChangeNotifier {
   /// [serverSnapshotKnown] is true — it is not a copy of the local cache.
   Set<String> _confirmed = {};
 
-  final Set<String> _pendingAdds = {};
-  final Set<String> _pendingRemoves = {};
+  Set<String> _pendingAdds = {};
+  Set<String> _pendingRemoves = {};
 
   bool _serverKnown = false;
   int _generation = 0;
@@ -145,6 +151,7 @@ class WatchlistController extends ChangeNotifier {
       _pendingAdds.remove(symbol);
       _pendingRemoves.add(symbol);
     }
+    _persistPendings();
     final gen = ++_generation;
     _notify();
     return _enqueueBool(() => _push(gen));
@@ -206,6 +213,7 @@ class WatchlistController extends ChangeNotifier {
     _serverKnown = true;
     _pendingAdds.removeWhere(_confirmed.contains);
     _pendingRemoves.removeWhere((s) => !_confirmed.contains(s));
+    _persistPendings();
     _prefs?.favourites = _symbols;
     _notify();
   }
@@ -255,8 +263,6 @@ class WatchlistController extends ChangeNotifier {
           _serverKnown = false;
           return;
         }
-        _pendingAdds.clear();
-        _pendingRemoves.clear();
         _clearBlockedUpgrade();
         _markMigrated();
         _adopt(uploaded.toSet());
@@ -281,6 +287,7 @@ class WatchlistController extends ChangeNotifier {
         if (bad != null) {
           _symbols.remove(bad);
           _pendingAdds.remove(bad);
+          _persistPendings();
           _prefs?.removeFavourite(bad);
           skipped.add(bad);
           capped = _capForMigration(server, serverOrder, exclude: skipped);
@@ -362,8 +369,6 @@ class WatchlistController extends ChangeNotifier {
       return;
     }
     if (_sameSymbols(payload, remote.toSet())) {
-      _pendingAdds.clear();
-      _pendingRemoves.clear();
       _clearBlockedUpgrade();
       _markMigrated();
       _adopt(remote.toSet());
@@ -404,8 +409,6 @@ class WatchlistController extends ChangeNotifier {
   }
 
   void _finishMigration(Set<String> next) {
-    _pendingAdds.clear();
-    _pendingRemoves.clear();
     _clearBlockedUpgrade();
     _markMigrated();
     _adopt(next);
@@ -432,8 +435,6 @@ class WatchlistController extends ChangeNotifier {
         _serverKnown = false;
         return true;
       }
-      _pendingAdds.removeAll(added);
-      _pendingRemoves.removeAll(removed);
       _adopt(result.toSet());
       return true;
     } on TimeoutException {
@@ -507,6 +508,9 @@ class WatchlistController extends ChangeNotifier {
     _symbols = Set.of(next);
     _confirmed = Set.of(next);
     _serverKnown = true;
+    _pendingAdds.clear();
+    _pendingRemoves.clear();
+    _persistPendings();
     _prefs?.favourites = _symbols;
     _prefs?.watchlistUpgradePending = false;
     _clearPendingFromStatus();
@@ -552,9 +556,11 @@ class WatchlistController extends ChangeNotifier {
     } else if (!current.contains(watchlistPendingMessage)) {
       _status = '$current $watchlistPendingMessage';
     }
-    // Persisted only with a blocked upgrade body (_blockUpgrade). A
-    // post-migration timeout stays in-memory so the next launch does
-    // not announce stars a migrated fetch is about to drop.
+    // The snackbar flag is persisted only with a blocked upgrade body
+    // (_blockUpgrade). Pending adds/removes are always written to
+    // preferences so a restart can still merge them. A post-migration
+    // timeout keeps the snackbar in-memory so the next launch does not
+    // re-announce an edit that reconcile is about to push.
     _notify();
   }
 
@@ -594,8 +600,14 @@ class WatchlistController extends ChangeNotifier {
     _symbols = Set.of(_confirmed);
     _pendingAdds.clear();
     _pendingRemoves.clear();
+    _persistPendings();
     _prefs?.favourites = _symbols;
     _notify();
+  }
+
+  void _persistPendings() {
+    _prefs?.watchlistPendingAdds = _pendingAdds;
+    _prefs?.watchlistPendingRemoves = _pendingRemoves;
   }
 
   void _markMigrated() {

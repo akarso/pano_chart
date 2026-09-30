@@ -174,7 +174,7 @@ void main() {
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        setupScreen: (symbol) {
+        setupScreen: (symbol, [timeframe]) {
           receivedSymbol = symbol;
           return Scaffold(body: Text('Setup: $symbol'));
         },
@@ -198,12 +198,14 @@ void main() {
       tester,
     ) async {
       String? receivedSymbol;
+      String? receivedTimeframe;
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        setupScreen: (symbol) {
+        setupScreen: (symbol, [timeframe]) {
           receivedSymbol = symbol;
-          return Scaffold(body: Text('Detail: $symbol'));
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Detail: $symbol $timeframe'));
         },
       );
 
@@ -222,7 +224,39 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(receivedSymbol, 'ETHUSDT');
-      expect(find.text('Detail: ETHUSDT'), findsOneWidget);
+      expect(receivedTimeframe, '1h');
+      expect(find.text('Detail: ETHUSDT 1h'), findsOneWidget);
+    });
+
+    testWidgets('watchlist_transition forwards a non-default timeframe', (
+      tester,
+    ) async {
+      String? receivedTimeframe;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Detail: $symbol $timeframe'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({
+        'type': 'watchlist_transition',
+        'symbol': 'BTCUSDT',
+        'timeframe': '15m',
+      });
+      await tester.pumpAndSettle();
+
+      expect(receivedTimeframe, '15m');
+      expect(find.text('Detail: BTCUSDT 15m'), findsOneWidget);
     });
 
     testWidgets('disabled watchlist alerts do not navigate', (tester) async {
@@ -231,7 +265,7 @@ void main() {
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        setupScreen: (symbol) {
+        setupScreen: (symbol, [timeframe]) {
           pushed = true;
           return Scaffold(body: Text('Detail: $symbol'));
         },
@@ -256,7 +290,7 @@ void main() {
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        setupScreen: (symbol) {
+        setupScreen: (symbol, [timeframe]) {
           pushed = true;
           return Scaffold(body: Text('Detail: $symbol'));
         },

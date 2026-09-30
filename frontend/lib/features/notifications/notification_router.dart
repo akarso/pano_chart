@@ -6,8 +6,9 @@ import 'notification_settings_model.dart';
 /// Callback that builds a screen for a given notification type.
 typedef ScreenFactory = Widget Function();
 
-/// Callback for setup deep-links that receive a symbol argument.
-typedef SymbolScreenFactory = Widget Function(String symbol);
+/// Callback for detail deep-links that receive a symbol and optional timeframe.
+typedef SymbolTimeframeScreenFactory =
+    Widget Function(String symbol, [String? timeframe]);
 
 /// Callback for market deep-links that receive an optional timeframe.
 typedef TimeframeScreenFactory = Widget Function(String? timeframe);
@@ -24,7 +25,7 @@ class NotificationRouter {
   final ScreenFactory? macroScreen;
   final ScreenFactory? newsScreen;
   final TimeframeScreenFactory? marketScreen;
-  final SymbolScreenFactory? setupScreen;
+  final SymbolTimeframeScreenFactory? setupScreen;
 
   NotificationRouter({
     required this.navigatorKey,
@@ -71,13 +72,19 @@ class NotificationRouter {
       case 'setup':
         final symbol = data['symbol'] as String?;
         if (symbol != null && setupScreen != null) {
-          nav.push(MaterialPageRoute(builder: (_) => setupScreen!(symbol)));
+          final timeframe = data['timeframe'] as String?;
+          nav.push(
+            MaterialPageRoute(builder: (_) => setupScreen!(symbol, timeframe)),
+          );
         }
         break;
       case 'watchlist_transition':
         final symbol = data['symbol'] as String?;
         if (symbol != null && symbol.isNotEmpty && setupScreen != null) {
-          nav.push(MaterialPageRoute(builder: (_) => setupScreen!(symbol)));
+          final timeframe = data['timeframe'] as String?;
+          nav.push(
+            MaterialPageRoute(builder: (_) => setupScreen!(symbol, timeframe)),
+          );
         }
         break;
     }
