@@ -20,6 +20,7 @@ import '../detail/http_mtf_regimes_api.dart';
 import '../detail/http_setup_api.dart';
 import '../volatility/http_volatility_api.dart';
 import '../scorecards/http_scorecard_api.dart';
+import '../watchlist/watchlist_controller.dart';
 import '../events/events_view_model.dart';
 import 'bubble_map_state.dart';
 import 'bubble_map_view_model.dart';
@@ -44,6 +45,7 @@ class BubbleMapScreen extends StatefulWidget {
   final VolatilityApi? volatilityApi;
   final MtfRegimesApi? mtfRegimesApi;
   final ScorecardApi? scorecardApi;
+  final WatchlistController? watchlist;
 
   /// Whether the user has pro access (enables auto-refresh).
   final bool isProUser;
@@ -60,6 +62,7 @@ class BubbleMapScreen extends StatefulWidget {
     this.mtfRegimesApi,
     this.scorecardApi,
     this.isProUser = false,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -86,6 +89,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
   Pausable? _pausable;
+  AppLifecycleManager? _lifecycle;
 
   /// Bubble positions driven by physics (overrides packed positions while
   /// physics mode is active or frozen).
@@ -118,26 +122,23 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_pausable == null) {
-      final mgr = AppLifecycleScope.of(context);
-      if (mgr != null) {
-        _pausable = Pausable(
-          onPause: () {
-            _autoRefreshTimer?.stop();
-          },
-          onResume: () {
-            _autoRefreshTimer?.start();
-          },
-        );
-        mgr.addPausable(_pausable!);
-      }
+    _lifecycle ??= AppLifecycleScope.of(context);
+    if (_pausable == null && _lifecycle != null) {
+      _pausable = Pausable(
+        onPause: () {
+          _autoRefreshTimer?.stop();
+        },
+        onResume: () {
+          _autoRefreshTimer?.start();
+        },
+      );
+      _lifecycle!.addPausable(_pausable!);
     }
   }
 
   @override
   void dispose() {
-    final mgr = AppLifecycleScope.of(context);
-    if (_pausable != null) mgr?.removePausable(_pausable!);
+    if (_pausable != null) _lifecycle?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _stopPhysics();
     vm.onChanged = null;
@@ -170,8 +171,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
         vx: i < _bodies.length ? _bodies[i].vx : 0,
         vy: i < _bodies.length ? _bodies[i].vy : 0,
         angle: i < _bodies.length ? _bodies[i].angle : 0,
-        angularVelocity:
-            i < _bodies.length ? _bodies[i].angularVelocity : 0,
+        angularVelocity: i < _bodies.length ? _bodies[i].angularVelocity : 0,
       );
     });
     _syncPhysicsBubbles();
@@ -241,8 +241,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
         colorValue: orig[i].colorValue,
       );
     });
-    _physicsAngles =
-        _bodies.map((b) => b.angle).toList(growable: false);
+    _physicsAngles = _bodies.map((b) => b.angle).toList(growable: false);
   }
 
   // ---- auto-refresh (pro only) ----
@@ -316,6 +315,8 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             mtfRegimesApi: widget.mtfRegimesApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
+            isFavourite: widget.watchlist?.contains(token.symbol) ?? false,
+            watchlist: widget.watchlist,
             detailContext: DetailContext(
               rank: 0,
               totalScore: token.totalScore,
@@ -333,9 +334,9 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load chart: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load chart: $e')));
     }
   }
 
@@ -397,17 +398,17 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
           // Size-by toggle (pro only — free is locked to volume)
           IconButton(
             icon: Icon(
-              state.sizeBy == 'volume'
-                  ? Icons.bar_chart
-                  : Icons.show_chart,
+              state.sizeBy == 'volume' ? Icons.bar_chart : Icons.show_chart,
               color: widget.isProUser ? Colors.white : Colors.white38,
             ),
-            tooltip:
-                state.sizeBy == 'volume' ? 'Size by volume' : 'Size by change',
+            tooltip: state.sizeBy == 'volume'
+                ? 'Size by volume'
+                : 'Size by change',
             onPressed: widget.isProUser
                 ? () {
                     vm.changeSizeBy(
-                        state.sizeBy == 'volume' ? 'change' : 'volume');
+                      state.sizeBy == 'volume' ? 'change' : 'volume',
+                    );
                   }
                 : null,
           ),
@@ -464,7 +465,9 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  _physicsMode ? Icons.check_box : Icons.check_box_outline_blank,
+                  _physicsMode
+                      ? Icons.check_box
+                      : Icons.check_box_outline_blank,
                   size: 18,
                   color: _physicsMode
                       ? const Color(0xFF00e6c0)
@@ -478,8 +481,9 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
                         ? const Color(0xFF00e6c0)
                         : Colors.white54,
                     fontSize: 11,
-                    fontWeight:
-                        _physicsMode ? FontWeight.w600 : FontWeight.normal,
+                    fontWeight: _physicsMode
+                        ? FontWeight.w600
+                        : FontWeight.normal,
                   ),
                 ),
               ],

@@ -11,6 +11,7 @@ import 'http_fragility_api.dart';
 import 'http_mtf_regimes_api.dart';
 import 'http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
+import '../watchlist/watchlist_controller.dart';
 
 /// Loads candle data for [symbol] then pushes [DetailScreen].
 ///
@@ -27,6 +28,7 @@ class SetupDetailLoader extends StatefulWidget {
   final MtfRegimesApi? mtfRegimesApi;
   final ScorecardApi? scorecardApi;
   final bool isProUser;
+  final WatchlistController? watchlist;
 
   const SetupDetailLoader({
     Key? key,
@@ -40,6 +42,7 @@ class SetupDetailLoader extends StatefulWidget {
     this.mtfRegimesApi,
     this.scorecardApi,
     this.isProUser = false,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -80,6 +83,8 @@ class _SetupDetailLoaderState extends State<SetupDetailLoader> {
             mtfRegimesApi: widget.mtfRegimesApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
+            isFavourite: widget.watchlist?.contains(widget.symbol) ?? false,
+            watchlist: widget.watchlist,
           ),
         ),
       );

@@ -201,9 +201,10 @@ ReliabilityTone? reliabilityTone(ScorecardSummaryItem item) {
 /// Hundredths of a percentage point. 500 is five percentage points.
 int reliabilityBasisPoints(double rate) => (rate * 10000).round();
 
-/// Pill text: `58% · n=412`.
-String reliabilityChipLabel(ScorecardSummaryItem item) {
+/// Pill text: `58% · n=412`, or `58%` when [dense] (overview tiles).
+String reliabilityChipLabel(ScorecardSummaryItem item, {bool dense = false}) {
   final pct = (item.hitRate * 100).round();
+  if (dense) return '$pct%';
   return '$pct% · n=${item.n}';
 }
 

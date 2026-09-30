@@ -14,6 +14,15 @@ class AppLifecycleManager with WidgetsBindingObserver {
   final List<Pausable> _pausables = [];
   bool _isPaused = false;
 
+  /// Set when the app has been [AppLifecycleState.paused] or
+  /// [AppLifecycleState.detached] since the last resume. A notification
+  /// shade only passes through [AppLifecycleState.inactive].
+  bool _sawBackground = false;
+
+  /// True while [Pausable.onResume] is running if the app actually left
+  /// the foreground. False for an inactive → resumed shade pull.
+  bool resumeFollowsBackground = false;
+
   /// Whether the app is currently in the background.
   bool get isPaused => _isPaused;
 
@@ -47,25 +56,34 @@ class AppLifecycleManager with WidgetsBindingObserver {
     _pausables.remove(p);
   }
 
+  void _pauseAll() {
+    if (_isPaused) return;
+    _isPaused = true;
+    for (final p in List<Pausable>.of(_pausables)) {
+      p.onPause();
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.paused:
-      case AppLifecycleState.inactive:
       case AppLifecycleState.detached:
-        if (!_isPaused) {
-          _isPaused = true;
-          for (final p in _pausables) {
-            p.onPause();
-          }
-        }
+        _sawBackground = true;
+        _pauseAll();
+        break;
+      case AppLifecycleState.inactive:
+        _pauseAll();
         break;
       case AppLifecycleState.resumed:
         if (_isPaused) {
           _isPaused = false;
-          for (final p in _pausables) {
+          resumeFollowsBackground = _sawBackground;
+          _sawBackground = false;
+          for (final p in List<Pausable>.of(_pausables)) {
             p.onResume();
           }
+          resumeFollowsBackground = false;
         }
         break;
       case AppLifecycleState.hidden:

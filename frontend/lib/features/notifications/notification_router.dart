@@ -74,6 +74,12 @@ class NotificationRouter {
           nav.push(MaterialPageRoute(builder: (_) => setupScreen!(symbol)));
         }
         break;
+      case 'watchlist_transition':
+        final symbol = data['symbol'] as String?;
+        if (symbol != null && symbol.isNotEmpty && setupScreen != null) {
+          nav.push(MaterialPageRoute(builder: (_) => setupScreen!(symbol)));
+        }
+        break;
     }
   }
 }

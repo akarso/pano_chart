@@ -82,6 +82,8 @@ void main() {
       find.byKey(const ValueKey('reliability-chip-badge|trend_up')),
     );
     expect(size.height, lessThan(24));
+    expect(find.text('58%'), findsOneWidget);
+    expect(find.text('58% · n=412'), findsNothing);
   });
 
   testWidgets('hidden when n is below 30', (tester) async {

@@ -59,6 +59,7 @@ import 'aligned_badge_presentation.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 import 'relative_strength_chip.dart';
+import '../watchlist/watchlist_controller.dart';
 
 /// Overview widget that displays a scrollable grid of market sparklines.
 ///
@@ -89,6 +90,10 @@ class OverviewWidget extends StatefulWidget {
   final NotificationConfigApi? notificationConfigApi;
   final ScorecardApi? scorecardApi;
 
+  /// Shared watchlist. When null, this widget owns a local controller
+  /// backed by [prefs] so the grid star still paints from the cache.
+  final WatchlistController? watchlist;
+
   const OverviewWidget({
     Key? key,
     required this.viewModel,
@@ -114,6 +119,7 @@ class OverviewWidget extends StatefulWidget {
     this.socialFeedViewModel,
     this.notificationConfigApi,
     this.scorecardApi,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -139,7 +145,9 @@ class OverviewWidgetState extends State<OverviewWidget>
   // list is capped at 15 items) — set at the end of every build so
   // _checkAndLoadMore can skip paginating for data the cap won't show.
   bool _freeTierCapActive = false;
-  Set<String> _favourites = {};
+  late final WatchlistController _watchlist;
+  bool _ownsWatchlist = false;
+  Set<String> _shownFavourites = {};
 
   /// Which overlay panel is open (none by default).
   _OverlayKind _overlay = _OverlayKind.none;
@@ -182,6 +190,8 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   PreferencesService? get _prefs => widget.prefs;
 
+  Set<String> get _favourites => _watchlist.symbols;
+
   /// Capabilities derived from current subscription state.
   Capabilities get _capabilities =>
       Capabilities.fromBilling(widget.billingManager);
@@ -202,6 +212,7 @@ class OverviewWidgetState extends State<OverviewWidget>
   void initState() {
     super.initState();
     vm = widget.viewModel;
+    _bindWatchlist();
 
     // ---- staleness tracker ----
     _stalenessTracker
@@ -225,7 +236,6 @@ class OverviewWidgetState extends State<OverviewWidget>
       _normalizeSparklines = p.normalizeSparklines;
       _hiResSparklines = p.hiResSparklines;
       _excludeStablecoins = p.excludeStablecoins;
-      _favourites = p.favourites;
 
       // Sync sort, sidewaysAlgo, and sortDirection into the view model
       // state so the first loadInitial uses the persisted values.
@@ -346,6 +356,12 @@ class OverviewWidgetState extends State<OverviewWidget>
         onResume: () {
           _autoRefreshTimer?.start();
           _stalenessTracker.start();
+          // A notification shade is inactive → resumed and never paused.
+          // That transition restarts timers and does not spend a watchlist
+          // GET from the rate-limit burst.
+          if (_lifecycleManager?.resumeFollowsBackground ?? false) {
+            _watchlist.reconcile();
+          }
         },
       );
       newManager.addPausable(_pausable!);
@@ -354,6 +370,8 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   @override
   void dispose() {
+    _watchlist.removeListener(_onWatchlistChanged);
+    if (_ownsWatchlist) _watchlist.dispose();
     if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     vm.onChanged = null;
     _autoRefreshTimer?.dispose();
@@ -594,7 +612,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       final series = await widget.getCandleSeries.execute(input);
       if (!mounted) return;
       Navigator.of(context).pop();
-      final result = await Navigator.of(context).push<bool>(
+      await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => DetailScreen(
             symbol: AppSymbol(item.symbol),
@@ -602,7 +620,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             series: series,
             warmupCount: _indicatorWarmup,
             initialVisibleCount: _sparklineCandles,
-            isFavourite: _favourites.contains(item.symbol),
+            isFavourite: _watchlist.contains(item.symbol),
             eventsViewModel: _isProUser ? widget.eventsViewModel : null,
             socialFeedViewModel: _isProUser ? widget.socialFeedViewModel : null,
             getCandleSeries: widget.getCandleSeries,
@@ -613,6 +631,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
             scorecardApi: widget.scorecardApi,
             isProUser: _isProUser,
+            watchlist: _watchlist,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -627,17 +646,6 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         ),
       );
-      // Update favourites from detail screen result.
-      if (result != null && mounted) {
-        setState(() {
-          if (result) {
-            _favourites.add(item.symbol);
-          } else {
-            _favourites.remove(item.symbol);
-          }
-          _prefs?.favourites = _favourites;
-        });
-      }
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -645,6 +653,52 @@ class OverviewWidgetState extends State<OverviewWidget>
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to load chart: $e')));
     }
+  }
+
+  void _bindWatchlist() {
+    final shared = widget.watchlist;
+    if (shared != null) {
+      _watchlist = shared;
+    } else {
+      _watchlist = WatchlistController(prefs: widget.prefs);
+      _ownsWatchlist = true;
+    }
+    _shownFavourites = Set.of(_watchlist.symbols);
+    _watchlist.addListener(_onWatchlistChanged);
+    _watchlist.reconcile();
+  }
+
+  void _onWatchlistChanged() {
+    if (!mounted) return;
+    final next = _watchlist.symbols;
+    final changed = !setEquals(next, _shownFavourites);
+    _shownFavourites = Set.of(next);
+    setState(() {});
+    if (changed && _showFavourites && next.isNotEmpty) {
+      _syncViewModelEntitlement();
+      vm.loadMissingFavourites(_timeframe, next);
+    }
+    if (_watchlist.statusMessage == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWatchlistStatus());
+  }
+
+  void _showWatchlistStatus() {
+    if (!mounted) return;
+    final message = _watchlist.takeStatus();
+    if (message == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Toggles [symbol] on the shared watchlist. The controller repaints
+  /// every listener. A rejection is reported here when this route is
+  /// still mounted; otherwise the post-frame status handler shows it.
+  void _toggleWatchlist(String symbol) {
+    _watchlist.toggle(symbol).then((_) {
+      if (!mounted) return;
+      _showWatchlistStatus();
+    });
   }
 
   // ---- pull-to-refresh ----
@@ -717,106 +771,137 @@ class OverviewWidgetState extends State<OverviewWidget>
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          if (_showFavourites) ...[
-            // Back arrow + title (matches Bubble Map AppBar style)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => setState(() => _showFavourites = false),
-              child: const SizedBox(
-                width: 36,
-                height: 44,
-                child: Center(
-                  child: Icon(
-                    Icons.arrow_back_ios_new,
-                    color: Colors.white,
-                    size: 18,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tight = constraints.maxWidth < 340;
+          final iconBox = tight ? 36.0 : 44.0;
+          return Row(
+            children: [
+              if (_showFavourites) ...[
+                // Back arrow + title (matches Bubble Map AppBar style)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _showFavourites = false),
+                  child: const SizedBox(
+                    width: 36,
+                    height: 44,
+                    child: Center(
+                      child: Icon(
+                        Icons.arrow_back_ios_new,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Watchlist',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF00E6C0),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ] else ...[
+                // Logo + branding
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    _scrollController.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 0, right: 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          margin: EdgeInsets.only(right: tight ? 4 : 14),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: Image.asset(
+                              'assets/icon.png',
+                              width: 26,
+                              height: 26,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              // "Watchlist" filter chip (ROADMAP PR-101) — filters the grid to
+              // starred symbols, same underlying _showFavourites flag/filtering
+              // logic the app already had (the "favourites" star doubles as
+              // the backend-synced watchlist, see the toggle methods above).
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: FilterChip(
+                        label: const Text('Watchlist'),
+                        avatar: Icon(
+                          _showFavourites ? Icons.star : Icons.star_border,
+                          size: 16,
+                          color: _showFavourites
+                              ? Colors.black
+                              : Colors.white70,
+                        ),
+                        selected: _showFavourites,
+                        showCheckmark: false,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        labelStyle: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _showFavourites ? Colors.black : Colors.white,
+                        ),
+                        backgroundColor: Colors.white.withAlpha(
+                          (0.08 * 255).round(),
+                        ),
+                        selectedColor: Colors.amber,
+                        onSelected: (selected) {
+                          final willShow = selected;
+                          setState(() => _showFavourites = willShow);
+                          if (willShow && _favourites.isNotEmpty) {
+                            _syncViewModelEntitlement();
+                            vm.loadMissingFavourites(_timeframe, _favourites);
+                          }
+                        },
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const Text(
-              'Favourites',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF00E6C0),
-                letterSpacing: 0.5,
+              const SizedBox(width: 8),
+              // Settings icon
+              _NavBarIcon(
+                isActive: _overlay == _OverlayKind.settings,
+                svgAsset: 'assets/gear-setting-settings.svg',
+                onTap: () => _toggleOverlay(_OverlayKind.settings),
+                boxSize: iconBox,
               ),
-            ),
-          ] else ...[
-            // Logo + branding
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _scrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOut,
-                );
-              },
-              child: Padding(
-                padding: const EdgeInsets.only(left: 0, right: 8),
-                child: Row(
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(right: 14),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: Image.asset(
-                          'assets/icon.png',
-                          width: 26,
-                          height: 26,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+              const SizedBox(width: 8),
+              // Menu icon
+              _NavBarIcon(
+                key: const ValueKey('overview-menu-nav-icon'),
+                isActive: _overlay == _OverlayKind.menu,
+                svgAsset: 'assets/menu.svg',
+                onTap: () => _toggleOverlay(_OverlayKind.menu),
+                boxSize: iconBox,
               ),
-            ),
-          ],
-          const Spacer(),
-          // Favourites toggle
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              final willShow = !_showFavourites;
-              setState(() => _showFavourites = willShow);
-              if (willShow && _favourites.isNotEmpty) {
-                _syncViewModelEntitlement();
-                vm.loadMissingFavourites(_timeframe, _favourites);
-              }
-            },
-            child: SizedBox(
-              width: 44,
-              height: 44,
-              child: Center(
-                child: Icon(
-                  _showFavourites ? Icons.star : Icons.star_border,
-                  color: _showFavourites ? Colors.amber : Colors.white,
-                  size: 22,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Settings icon
-          _NavBarIcon(
-            isActive: _overlay == _OverlayKind.settings,
-            svgAsset: 'assets/gear-setting-settings.svg',
-            onTap: () => _toggleOverlay(_OverlayKind.settings),
-          ),
-          const SizedBox(width: 8),
-          // Menu icon
-          _NavBarIcon(
-            key: const ValueKey('overview-menu-nav-icon'),
-            isActive: _overlay == _OverlayKind.menu,
-            svgAsset: 'assets/menu.svg',
-            onTap: () => _toggleOverlay(_OverlayKind.menu),
-          ),
-          const SizedBox(width: 4),
-        ],
+              const SizedBox(width: 4),
+            ],
+          );
+        },
       ),
     );
   }
@@ -941,7 +1026,10 @@ class OverviewWidgetState extends State<OverviewWidget>
                           value: 'breakout',
                           child: Text('Breakout'),
                         ),
-                        const PopupMenuItem(value: 'trend', child: Text('Trend')),
+                        const PopupMenuItem(
+                          value: 'trend',
+                          child: Text('Trend'),
+                        ),
                         const PopupMenuItem(
                           value: 'leaders',
                           child: Text('Leaders (vs market)'),
@@ -956,9 +1044,18 @@ class OverviewWidgetState extends State<OverviewWidget>
                         ),
                         const PopupMenuDivider(),
                       ],
-                      const PopupMenuItem(value: 'gain', child: Text('Gainers')),
-                      const PopupMenuItem(value: 'losers', child: Text('Losers')),
-                      const PopupMenuItem(value: 'volume', child: Text('Volume')),
+                      const PopupMenuItem(
+                        value: 'gain',
+                        child: Text('Gainers'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'losers',
+                        child: Text('Losers'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'volume',
+                        child: Text('Volume'),
+                      ),
                     ],
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1205,6 +1302,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
+                    watchlist: _watchlist,
                   ),
                 ),
               );
@@ -1713,7 +1811,7 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (_showFavourites && visibleItems.isEmpty) {
       return const Center(
         child: Text(
-          'No favourites yet.\nTap ★ on any detail screen to add.',
+          'Your watchlist is empty.\nTap ★ on any tile or detail screen to add.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white38, fontSize: 14),
         ),
@@ -1807,6 +1905,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     rsAvailable: state.rsAvailable,
                     showRsChip: _isProUser,
                     showAlignmentBadge: _isProUser,
+                    onToggleWatchlist: () => _toggleWatchlist(item.symbol),
                   ),
                 );
                 return child;
@@ -1890,11 +1989,14 @@ class _NavBarIcon extends StatelessWidget {
   final String svgAsset;
   final VoidCallback onTap;
 
+  final double boxSize;
+
   const _NavBarIcon({
     super.key,
     required this.isActive,
     required this.svgAsset,
     required this.onTap,
+    this.boxSize = 44,
   });
 
   @override
@@ -1903,8 +2005,8 @@ class _NavBarIcon extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: SizedBox(
-        width: 44,
-        height: 44,
+        width: boxSize,
+        height: boxSize,
         child: Center(
           child: isActive
               ? const Icon(Icons.close, color: Colors.white, size: 22)
@@ -1991,6 +2093,7 @@ class _OverviewGridItem extends StatelessWidget {
   final bool rsAvailable;
   final bool showRsChip;
   final bool showAlignmentBadge;
+  final VoidCallback? onToggleWatchlist;
 
   const _OverviewGridItem({
     required this.item,
@@ -2006,6 +2109,7 @@ class _OverviewGridItem extends StatelessWidget {
     this.rsAvailable = false,
     this.showRsChip = false,
     this.showAlignmentBadge = false,
+    this.onToggleWatchlist,
   });
 
   @override
@@ -2028,7 +2132,246 @@ class _OverviewGridItem extends StatelessWidget {
             // Scale font proportionally to card width.
             final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
             final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
+            final textScaler = MediaQuery.textScalerOf(context);
+            final scaledFont = textScaler.scale(fontSize);
+            // 48px when the card has room. Floor at 32px when the card
+            // can hold it; never larger than the card. On a short tile
+            // the name sits beside the star when both the star and the
+            // badge leave room; otherwise the name stays on the top row
+            // and the star sits below it.
+            const minStarExtent = 32.0;
+            const minNameWidth = 24.0;
+            const minTapExtent = 32.0;
+            var starExtent = 48.0;
+            final maxStarExtent = constraints.maxHeight - pad;
+            if (maxStarExtent < minStarExtent) {
+              starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
+            } else {
+              if (starExtent > maxStarExtent) starExtent = maxStarExtent;
+              if (starExtent < minStarExtent) starExtent = minStarExtent;
+            }
+            final nameBand = scaledFont * 1.5;
+            final sidePad = pad + 4;
+            final starTop = constraints.maxHeight - pad - starExtent;
+            // Keep the name band inside the card so a bottom Positioned
+            // never gets top below bottom at large text scales.
+            final nameBottom = (pad + nameBand).clamp(
+              pad,
+              pad > constraints.maxHeight - pad
+                  ? pad
+                  : constraints.maxHeight - pad,
+            );
+            // Reliability pill is a second line under the badge. Prefer
+            // keeping price/RS (≥14px). If the full column would starve
+            // that band, scale the column into the room above a 14px meta
+            // strip; only drop the pill when even that room is gone.
+            final reliabilityRow = reliability;
+            var showReliabilityPill =
+                item.badgeComponent.isNotEmpty &&
+                reliabilityRow != null &&
+                reliabilityTone(reliabilityRow) != null;
+            final unscaledBadgeColumnHeight = _badgeColumnHeight(
+              item,
+              fontSize: fontSize,
+              columns: columns,
+              textScaler: textScaler,
+              includePill: showReliabilityPill,
+            );
+            var badgeColumnHeight = unscaledBadgeColumnHeight;
+            var badgeColumnMaxHeight = badgeColumnHeight;
+            var badgeColumnBottom = pad + badgeColumnHeight;
+            var metaGap = 0.0;
+            var reservedMetaStrip = false;
+            final hangsPastName =
+                showReliabilityPill && badgeColumnBottom > nameBottom;
+            // Gap is applied whenever the column hangs past the name band,
+            // so include it when deciding whether the meta strip stays ≥14px.
+            const columnMetaGap = 2.0;
+            final bandUnderColumn =
+                (constraints.maxHeight -
+                        badgeColumnBottom -
+                        pad -
+                        (hangsPastName ? columnMetaGap : 0.0))
+                    .clamp(0.0, double.infinity);
+            if (showReliabilityPill && bandUnderColumn < 14) {
+              // Leave a full 14px meta strip; scale the badge column above it.
+              // No gap on this path — the strip is reserved exactly.
+              final maxCol = (constraints.maxHeight - 2 * pad - 14).clamp(
+                0.0,
+                double.infinity,
+              );
+              if (maxCol >= 10) {
+                badgeColumnMaxHeight = maxCol;
+                badgeColumnHeight = maxCol;
+                badgeColumnBottom = pad + maxCol;
+                reservedMetaStrip = true;
+              } else {
+                // Not enough room to keep both — drop the pill and put
+                // meta back under the name band.
+                showReliabilityPill = false;
+                badgeColumnHeight = _badgeColumnHeight(
+                  item,
+                  fontSize: fontSize,
+                  columns: columns,
+                  textScaler: textScaler,
+                  includePill: false,
+                );
+                badgeColumnMaxHeight = badgeColumnHeight;
+                badgeColumnBottom = pad + badgeColumnHeight;
+              }
+            } else if (hangsPastName) {
+              metaGap = columnMetaGap;
+            }
+            // After scaling, keep meta at the reserved strip even when the
+            // name band sits lower — the name ellipsizes above that line.
+            final metaTopBound = reservedMetaStrip
+                ? badgeColumnBottom
+                : (badgeColumnBottom > nameBottom
+                          ? badgeColumnBottom
+                          : nameBottom) +
+                      metaGap;
+            // FittedBox scales the column uniformly; match the name inset to
+            // the painted width so a tall scale-2 pill cannot zero the slot.
+            var badgeReserve = _badgeReserveWidth(
+              item,
+              fontSize: fontSize,
+              columns: columns,
+              textScaler: textScaler,
+              reliability: showReliabilityPill ? reliabilityRow : null,
+            );
+            if (reservedMetaStrip &&
+                unscaledBadgeColumnHeight > 0 &&
+                badgeColumnMaxHeight < unscaledBadgeColumnHeight) {
+              badgeReserve *= badgeColumnMaxHeight / unscaledBadgeColumnHeight;
+            }
+            final wantBesideStar = starTop < nameBottom;
+            var starIndent = 0.0;
+            // Name on the top row; bottom row is clipped to the leftover
+            // band under the name.
+            var nameAboveStar = false;
+            // Star stays in the bottom row unless that band is too short
+            // for a usable tap target.
+            var starInBottomRow = true;
+            var showBottomMeta = true;
+
+            void adoptBelowNameBand() {
+              nameAboveStar = true;
+              final maxBelow = constraints.maxHeight - nameBottom - pad;
+              if (maxBelow >= minTapExtent) {
+                starExtent = maxBelow < starExtent ? maxBelow : starExtent;
+                starInBottomRow = true;
+                showBottomMeta = true;
+              } else {
+                // Band is only a few pixels — move the control to the
+                // top-left so it stays tappable and clear of the name.
+                starInBottomRow = false;
+                starExtent = minTapExtent;
+                if (starExtent > constraints.maxHeight - 2 * pad) {
+                  starExtent = constraints.maxHeight - 2 * pad;
+                }
+                if (starExtent < 8) starExtent = 8;
+                starIndent = starExtent;
+                showBottomMeta = maxBelow >= 14;
+              }
+            }
+
+            if (wantBesideStar) {
+              final besideWidth =
+                  constraints.maxWidth -
+                  2 * sidePad -
+                  starExtent -
+                  badgeReserve;
+              if (besideWidth >= minNameWidth) {
+                // Star on the top-left beside the name — not in the
+                // bottom row, so percent/RS cannot inherit its height.
+                starIndent = starExtent;
+                starInBottomRow = false;
+              } else {
+                adoptBelowNameBand();
+              }
+            }
+            var nameLeft = sidePad + starIndent;
+            // Keep the measured badge inset so the name never sits under
+            // the badge. If the beside-star band is still too narrow,
+            // drop the star indent and use the below-name layout.
+            var nameRight = sidePad + badgeReserve;
+            if (constraints.maxWidth - nameLeft - nameRight < minNameWidth &&
+                starIndent > 0 &&
+                !nameAboveStar) {
+              starIndent = 0;
+              nameLeft = sidePad;
+              adoptBelowNameBand();
+              nameLeft = sidePad + starIndent;
+            }
+            if (constraints.maxWidth - nameLeft - nameRight < 8) {
+              if (starInBottomRow) {
+                starIndent = 0;
+                nameLeft = sidePad;
+              }
+            }
+            // Leftover band under the name / badge column — used whenever
+            // the meta row is height-bounded (beside-star or below-name).
+            final lockMetaBelowName = !starInBottomRow || nameAboveStar;
+            final metaBand = (constraints.maxHeight - metaTopBound - pad).clamp(
+              0.0,
+              double.infinity,
+            );
+            if (lockMetaBelowName) {
+              showBottomMeta = metaBand >= 14;
+            }
+            var starIconSize = starExtent * 0.5;
+            if (starIconSize < 14) starIconSize = 14;
+            if (starIconSize > 22) starIconSize = 22;
+            if (starIconSize > starExtent) starIconSize = starExtent;
+            final pctFontSize = lockMetaBelowName && showBottomMeta
+                ? (metaBand * 0.4).clamp(
+                    6.0,
+                    (fontSize * 0.55).clamp(7.0, 11.0),
+                  )
+                : (fontSize * 0.55).clamp(7.0, 11.0);
+            final showRsInBand =
+                showRsChip &&
+                showBottomMeta &&
+                (!lockMetaBelowName || metaBand >= 14);
+            // When the star is pinned top-left, keep percent/RS to its right
+            // so they never cover the button's lower half.
+            final metaLeft = !starInBottomRow ? pad + starExtent : pad + 4;
+            final metaWidth = (constraints.maxWidth - metaLeft - (pad + 4))
+                .clamp(0.0, double.infinity);
+            final showMetaRow =
+                (starInBottomRow || showBottomMeta) &&
+                (!lockMetaBelowName || metaBand > 0) &&
+                metaWidth > 0;
+
+            Widget starButton() {
+              return IconButton(
+                tooltip: isFavourite
+                    ? 'Remove from watchlist'
+                    : 'Add to watchlist',
+                onPressed: onToggleWatchlist,
+                style: IconButton.styleFrom(
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size(starExtent, starExtent),
+                  maximumSize: Size(starExtent, starExtent),
+                  fixedSize: Size(starExtent, starExtent),
+                ),
+                constraints: BoxConstraints.tightFor(
+                  width: starExtent,
+                  height: starExtent,
+                ),
+                icon: Icon(
+                  isFavourite ? Icons.star : Icons.star_border,
+                  color: isFavourite
+                      ? Colors.amber.withAlpha((0.8 * 255).round())
+                      : Colors.white.withAlpha((0.5 * 255).round()),
+                  size: starIconSize,
+                ),
+              );
+            }
+
             return Stack(
+              clipBehavior: Clip.hardEdge,
               children: [
                 Padding(
                   padding: EdgeInsets.all(pad),
@@ -2037,105 +2380,150 @@ class _OverviewGridItem extends StatelessWidget {
                   ),
                 ),
                 Positioned(
-                  left: pad + 4,
+                  left: nameLeft,
                   top: pad,
-                  child: Text(
-                    item.symbol.replaceAll('USDT', ''),
-                    style: TextStyle(
-                      fontSize: fontSize,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white.withAlpha(
-                        ((columns == 1
-                                    ? 0.9
-                                    : columns == 2
-                                    ? 0.8
-                                    : 0.7) *
-                                255)
-                            .round(),
-                      ),
-                      backgroundColor: Colors.black.withAlpha(
-                        (0.25 * 255).round(),
+                  right: nameRight,
+                  // When a 14px meta strip is reserved under a scaled badge
+                  // column, keep the name inside the space above that strip.
+                  bottom: reservedMetaStrip
+                      ? constraints.maxHeight - metaTopBound
+                      : null,
+                  child: ClipRect(
+                    child: Text(
+                      key: Key('overview-name-${item.symbol}'),
+                      item.symbol.replaceAll('USDT', ''),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: fontSize,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withAlpha(
+                          ((columns == 1
+                                      ? 0.9
+                                      : columns == 2
+                                      ? 0.8
+                                      : 0.7) *
+                                  255)
+                              .round(),
+                        ),
+                        backgroundColor: Colors.black.withAlpha(
+                          (0.25 * 255).round(),
+                        ),
                       ),
                     ),
                   ),
                 ),
+                // Bottom row: price (and favourite star) left, RS chip right.
+                // Height-bounded under the name / badge column whenever the
+                // star is beside or below the name; inset past a top-left
+                // star so taps still hit the button.
+                if (showMetaRow)
+                  Positioned(
+                    left: metaLeft,
+                    right: pad + 4,
+                    top: lockMetaBelowName ? metaTopBound : null,
+                    bottom: pad,
+                    child: Builder(
+                      builder: (_) {
+                        final pct = _sparklinePriceChange(item.sparkline);
+                        final rounded = pct.toStringAsFixed(1);
+                        // Treat ±0.0 as zero — grey, no sign.
+                        final isZero = rounded == '0.0' || rounded == '-0.0';
+                        final label = isZero
+                            ? '0.0%'
+                            : '${pct >= 0 ? '+' : ''}$rounded%';
+                        final color = isZero
+                            ? Colors.grey
+                            : (pct >= 0 ? Colors.green : Colors.red);
+                        final narrow = columns == 3 || lockMetaBelowName;
+                        final row = Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            if (starInBottomRow) starButton(),
+                            if (showBottomMeta) ...[
+                              Expanded(
+                                child: Text(
+                                  key: Key('overview-pct-${item.symbol}'),
+                                  label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: pctFontSize,
+                                    color: color,
+                                    fontWeight: FontWeight.w600,
+                                    shadows: const [
+                                      Shadow(
+                                        color: Colors.black,
+                                        blurRadius: 3,
+                                      ),
+                                      Shadow(
+                                        color: Colors.black,
+                                        blurRadius: 3,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (showRsInBand)
+                                Flexible(
+                                  child: RelativeStrengthChip(
+                                    rsAvailable: rsAvailable,
+                                    rs: item.rs,
+                                    beta: item.beta,
+                                    dense: true,
+                                    compactLabel: narrow,
+                                  ),
+                                ),
+                            ],
+                          ],
+                        );
+                        if (!lockMetaBelowName) return row;
+                        // Scale or clip percent/RS into the leftover band.
+                        return ClipRect(
+                          child: Align(
+                            alignment: Alignment.bottomLeft,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.bottomLeft,
+                              child: SizedBox(
+                                height: metaBand > 0 ? metaBand : null,
+                                width: metaWidth,
+                                child: row,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                // Badge column after the meta row so the reliability pill
+                // keeps its taps when heights are tight.
                 if (item.badgeComponent.isNotEmpty)
                   Positioned(
                     right: pad + 4,
                     top: pad,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _buildBadge(item, fontSize),
-                        ReliabilityChip(item: reliability, dense: true),
-                      ],
-                    ),
-                  ),
-                // Bottom row: price (and favourite star) left, RS chip right.
-                // Shared row reserves space so long % labels don't overlap the
-                // chip on narrow 3-column tiles.
-                Positioned(
-                  left: pad + 4,
-                  right: pad + 4,
-                  bottom: pad,
-                  child: Builder(
-                    builder: (_) {
-                      final pct = _sparklinePriceChange(item.sparkline);
-                      final rounded = pct.toStringAsFixed(1);
-                      // Treat ±0.0 as zero — grey, no sign.
-                      final isZero = rounded == '0.0' || rounded == '-0.0';
-                      final label = isZero
-                          ? '0.0%'
-                          : '${pct >= 0 ? '+' : ''}$rounded%';
-                      final color = isZero
-                          ? Colors.grey
-                          : (pct >= 0 ? Colors.green : Colors.red);
-                      final narrow = columns == 3;
-                      return Row(
+                    height: badgeColumnMaxHeight,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.topRight,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          if (isFavourite)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 2),
-                              child: Icon(
-                                Icons.star,
-                                color: Colors.amber
-                                    .withAlpha((0.8 * 255).round()),
-                                size: (fontSize * 0.8).clamp(10.0, 16.0),
-                              ),
-                            ),
-                          Expanded(
-                            child: Text(
-                              label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize:
-                                    (fontSize * 0.55).clamp(7.0, 11.0),
-                                color: color,
-                                fontWeight: FontWeight.w600,
-                                shadows: const [
-                                  Shadow(
-                                      color: Colors.black, blurRadius: 3),
-                                  Shadow(
-                                      color: Colors.black, blurRadius: 3),
-                                ],
-                              ),
-                            ),
+                          KeyedSubtree(
+                            key: Key('overview-badge-${item.symbol}'),
+                            child: _buildBadge(item, fontSize),
                           ),
-                          if (showRsChip)
-                            RelativeStrengthChip(
-                              rsAvailable: rsAvailable,
-                              rs: item.rs,
-                              beta: item.beta,
-                              dense: true,
-                              compactLabel: narrow,
-                            ),
+                          if (showReliabilityPill)
+                            ReliabilityChip(item: reliabilityRow, dense: true),
                         ],
-                      );
-                    },
+                      ),
+                    ),
                   ),
-                ),
+                // Paint the top-left star after the meta row so hit tests
+                // prefer the button over any residual overlap.
+                if (!starInBottomRow)
+                  Positioned(left: pad, top: pad, child: starButton()),
               ],
             );
           },
@@ -2229,15 +2617,8 @@ class _OverviewGridItem extends StatelessWidget {
 
   Widget _buildBadge(OverviewItem item, double fontSize) {
     final signal = _parseSignalType(item.badgeComponent);
-    final trendFalling =
-        badgeScorecardLabel('trend', item.sparkline) == 'trend_down';
-    final trendDirection = trendFalling ? -1.0 : 1.0;
-    final scale = columns == 1
-        ? 1.0
-        : columns == 2
-        ? 0.9
-        : 0.8;
-    final badgeFontSize = (fontSize * 0.7 * scale).clamp(7.0, 12.0);
+    final trendDirection = _badgeTrendDirection(item);
+    final badgeFontSize = _badgeFontSize(fontSize, columns);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
@@ -2260,6 +2641,115 @@ class _OverviewGridItem extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Vertical space the top-right badge column needs (badge ± reliability).
+  double _badgeColumnHeight(
+    OverviewItem item, {
+    required double fontSize,
+    required int columns,
+    required TextScaler textScaler,
+    required bool includePill,
+  }) {
+    if (item.badgeComponent.isEmpty) return 0;
+    final signal = _parseSignalType(item.badgeComponent);
+    final label = _signalLabel(
+      signal,
+      abbreviate: columns > 1,
+      trendScore: _badgeTrendDirection(item),
+    );
+    final badgePainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: _badgeFontSize(fontSize, columns),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    // Container vertical padding is 2 on each side.
+    var height = badgePainter.height + 4;
+    if (includePill) {
+      final chipPainter = TextPainter(
+        text: const TextSpan(
+          text: '88%',
+          style: TextStyle(fontSize: 8, fontWeight: FontWeight.w600),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      // Dense ReliabilityChip outer vertical pad is 1px on each side.
+      height += chipPainter.height + 2;
+    }
+    return height;
+  }
+
+  /// Horizontal space the top-right badge column needs, including padding.
+  /// Uses the wider of the signal badge and the reliability pill.
+  double _badgeReserveWidth(
+    OverviewItem item, {
+    required double fontSize,
+    required int columns,
+    required TextScaler textScaler,
+    ScorecardSummaryItem? reliability,
+  }) {
+    if (item.badgeComponent.isEmpty) return 0;
+    final signal = _parseSignalType(item.badgeComponent);
+    final label = _signalLabel(
+      signal,
+      abbreviate: columns > 1,
+      trendScore: _badgeTrendDirection(item),
+    );
+    final badgePainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: _badgeFontSize(fontSize, columns),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    // Container horizontal padding is 4 on each side. A small gap keeps
+    // the name clear of the badge once both are laid out.
+    var reserve = badgePainter.width + 8 + 2;
+    if (reliability != null && reliabilityTone(reliability) != null) {
+      final chipPainter = TextPainter(
+        text: TextSpan(
+          text: reliabilityChipLabel(reliability, dense: true),
+          style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      // Dense chip horizontal padding is 3 on each side. Extra gap covers
+      // layout rounding so the name stays clear of the painted pill.
+      final chipReserve = chipPainter.width + 6 + 4;
+      if (chipReserve > reserve) reserve = chipReserve;
+    }
+    return reserve;
+  }
+
+  double _badgeTrendDirection(OverviewItem item) {
+    final trendFalling =
+        badgeScorecardLabel('trend', item.sparkline) == 'trend_down';
+    return trendFalling ? -1.0 : 1.0;
+  }
+
+  double _badgeFontSize(double fontSize, int columns) {
+    final scale = columns == 1
+        ? 1.0
+        : columns == 2
+        ? 0.9
+        : 0.8;
+    return (fontSize * 0.7 * scale).clamp(7.0, 12.0);
   }
 }
 
