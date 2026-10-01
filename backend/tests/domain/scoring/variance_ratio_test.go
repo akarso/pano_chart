@@ -131,14 +131,32 @@ func TestSidewaysV5_NegativeMeanReversionWeightTreatedAsZero(t *testing.T) {
 	assertFourTermScore(t, cfg, res)
 }
 
-func TestNewSidewaysV5Config_ClampsNegativeMeanReversionWeight(t *testing.T) {
+func TestSidewaysV5_InfinityMeanReversionWeightTreatedAsZero(t *testing.T) {
+	series := fixtures.Load(t, "tight_range")
+	cfg := scoring.NewSidewaysV5ConfigForTimeframe("1h")
+	for _, w := range []float64{math.Inf(1), math.Inf(-1), math.NaN()} {
+		cfg.MeanReversionWeight = w
+		res := scoring.DetectSidewaysV5(series.All(), cfg)
+		if _, ok := res.Components["MRS"]; ok {
+			t.Fatalf("non-finite weight %v must not populate MRS", w)
+		}
+		if math.IsNaN(res.Score) || math.IsInf(res.Score, 0) || res.Score < 0 || res.Score > 1 {
+			t.Fatalf("non-finite weight %v: score=%g want finite in [0,1]", w, res.Score)
+		}
+		assertFourTermScore(t, cfg, res)
+	}
+}
+
+func TestNewSidewaysV5Config_ClampsNonFiniteMeanReversionWeight(t *testing.T) {
 	t.Cleanup(scoring.ResetConfig)
-	cfg := scoring.DefaultAppConfig()
-	cfg.Sideways.Weights.MeanReversionWeight = -3
-	scoring.ReplaceConfigForTest(cfg)
-	got := scoring.NewSidewaysV5ConfigForTimeframe("1h")
-	if got.MeanReversionWeight != 0 {
-		t.Fatalf("MeanReversionWeight=%g want 0 after clamp", got.MeanReversionWeight)
+	for _, w := range []float64{math.Inf(1), math.Inf(-1), math.NaN(), -3} {
+		cfg := scoring.DefaultAppConfig()
+		cfg.Sideways.Weights.MeanReversionWeight = w
+		scoring.ReplaceConfigForTest(cfg)
+		got := scoring.NewSidewaysV5ConfigForTimeframe("1h")
+		if got.MeanReversionWeight != 0 {
+			t.Fatalf("MeanReversionWeight=%g want 0 for input %v", got.MeanReversionWeight, w)
+		}
 	}
 }
 

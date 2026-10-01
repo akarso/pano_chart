@@ -183,7 +183,7 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	if err != nil {
 		return fmt.Errorf("read signals_old: %w", err)
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	for oldRows.Next() {
 		var (
 			s                      domainsignal.Signal
@@ -220,7 +220,7 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	if err != nil {
 		return fmt.Errorf("read outcomes_old: %w", err)
 	}
-	defer outRows.Close()
+	defer func() { _ = outRows.Close() }()
 	for outRows.Next() {
 		var (
 			id, resolved, rule string
@@ -310,7 +310,7 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -345,7 +345,7 @@ func (r *SQLiteRepository) UnresolvedReady(ctx context.Context, now time.Time, l
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved ready: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -366,7 +366,7 @@ func (r *SQLiteRepository) UnresolvedInvalidTF(ctx context.Context, limit int) (
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved invalid tf: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -462,8 +462,7 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	if err != nil {
 		return nil, fmt.Errorf("query signals: %w", err)
 	}
-	defer rows.Close()
-
+	defer func() { _ = rows.Close() }()
 	var out []domainsignal.SignalWithOutcome
 	for rows.Next() {
 		var (

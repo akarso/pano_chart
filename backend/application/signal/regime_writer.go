@@ -105,11 +105,12 @@ func (w *RegimeWriter) Update(timeframe string, regime mkt.Regime, bias string, 
 		at = time.Time{}
 	}
 	ctx := map[string]float64{}
-	if bias == "up" {
+	switch bias {
+	case "up":
 		ctx["bias"] = 1
-	} else if bias == "down" {
+	case "down":
 		ctx["bias"] = -1
-	} else {
+	default:
 		ctx["bias"] = 0
 	}
 	ok := w.emitter.Emit(context.Background(), domainsignal.Signal{

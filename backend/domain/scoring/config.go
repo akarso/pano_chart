@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -343,10 +344,7 @@ func NewSidewaysV5ConfigForTimeframe(tf string) SidewaysV5Config {
 		}
 	}
 
-	mrWeight := s.Weights.MeanReversionWeight
-	if mrWeight < 0 {
-		mrWeight = 0
-	}
+	mrWeight := normalizeMeanReversionWeight(s.Weights.MeanReversionWeight)
 
 	return SidewaysV5Config{
 		N:                   s.ExtremaWindow,
@@ -362,6 +360,16 @@ func NewSidewaysV5ConfigForTimeframe(tf string) SidewaysV5Config {
 		MeanReversionWeight: mrWeight,
 		ExtremaCount:        s.ExtremaMinCount,
 	}
+}
+
+// normalizeMeanReversionWeight maps NaN, ±Inf, and negative weights to 0 so
+// Sideways composition stays in [0, 1]. yaml.v3 can load `.inf` as +Inf;
+// a negative-only clamp would still let infinity poison the weighted average.
+func normalizeMeanReversionWeight(w float64) float64 {
+	if math.IsNaN(w) || math.IsInf(w, 0) || w < 0 {
+		return 0
+	}
+	return w
 }
 
 // NewCompressionConfig builds a CompressionConfig from the loaded config.yaml.

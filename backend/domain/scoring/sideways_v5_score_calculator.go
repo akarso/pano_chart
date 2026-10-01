@@ -259,10 +259,7 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	}
 
 	// --- 9. Final composition (Weighted Average) ---
-	mrWeight := cfg.MeanReversionWeight
-	if mrWeight < 0 {
-		mrWeight = 0
-	}
+	mrWeight := normalizeMeanReversionWeight(cfg.MeanReversionWeight)
 	components := map[string]float64{
 		"CCS": CCS,
 		"OQS": OQS,

@@ -158,7 +158,7 @@ func TestLoopbackListenerBindsLoopbackOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	tcp, ok := ln.Addr().(*net.TCPAddr)
 	if !ok || tcp.IP == nil || !tcp.IP.IsLoopback() {
 		t.Fatalf("listener=%v", ln.Addr())

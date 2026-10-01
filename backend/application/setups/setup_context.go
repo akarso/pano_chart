@@ -21,6 +21,7 @@ type SetupContext struct {
 	// (last CandleCount closes, PR-104). 0 = no mean reversion (also the Go
 	// zero value — fail-closed for PR-110 RangeQuality). This is return
 	// autocorrelation, not channel quality: smooth ranges like tight_range
-	// typically score ~0. buildContext always sets it; leave 0 when unused.
+	// typically score ~0. Not filled by buildContext until a consumer needs
+	// it; use meanReversionFromSeries to populate.
 	MeanReversionScore float64
 }

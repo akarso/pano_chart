@@ -215,7 +215,7 @@ func TestSQLiteSampleSink_SkipsBadRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSQLiteSampleSink_TransactionRollbackDropsBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func countSamples(t *testing.T, path string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +385,7 @@ func indexExists(t *testing.T, path, name string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var got string
 	err = db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&got)
 	return err == nil && got == name

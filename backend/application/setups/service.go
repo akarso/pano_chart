@@ -357,18 +357,20 @@ func trailingWindow(series domain.CandleSeries, n int) (domain.CandleSeries, err
 }
 
 // buildContext converts raw scoring output and candle data into a SetupContext.
+// MeanReversionScore is left at 0: no setup evaluator reads it today, and
+// production Sideways MRS weight is 0. Call meanReversionFromSeries when a
+// consumer (PR-110) needs it — avoid per-symbol allocations on notify scans.
 func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats) SetupContext {
 	regime, trendHealth := computeRegimeAndHealth(series, stats)
 	return SetupContext{
-		Symbol:             symbol,
-		CompressionScore:   stats.Scores["Compression"],
-		TrendScore:         stats.Scores["Trend Predictability"],
-		RangeScore:         rangeFromSideways(stats.Scores),
-		VolumeScore:        volumeScore(series),
-		Volatility:         volatilityFromSeries(series),
-		TrendHealth:        trendHealth,
-		Regime:             regime,
-		MeanReversionScore: meanReversionFromSeries(series),
+		Symbol:           symbol,
+		CompressionScore: stats.Scores["Compression"],
+		TrendScore:       stats.Scores["Trend Predictability"],
+		RangeScore:       rangeFromSideways(stats.Scores),
+		VolumeScore:      volumeScore(series),
+		Volatility:       volatilityFromSeries(series),
+		TrendHealth:      trendHealth,
+		Regime:           regime,
 	}
 }
 

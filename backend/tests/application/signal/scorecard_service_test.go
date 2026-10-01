@@ -221,7 +221,7 @@ func TestSQLite_SummaryBaselinesTwoLabels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	ctx := context.Background()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	emitted := now.Add(-time.Hour)
@@ -279,7 +279,7 @@ func TestSQLite_ScorecardIgnoresUnresolvedAndAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	ctx := context.Background()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	emitted := now.Add(-time.Hour)
@@ -342,7 +342,7 @@ func TestSQLite_ScorecardDecileBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	ctx := context.Background()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	emitted := now.Add(-time.Hour)
@@ -400,7 +400,7 @@ func TestSQLite_AbsoluteSinceWindowsDoNotShareTotals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	ctx := context.Background()
 
 	mid := time.Date(2026, 9, 21, 0, 5, 0, 0, time.UTC)
@@ -440,7 +440,7 @@ func TestRedis_AbsoluteSinceKeysDoNotShareCard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	ctx := context.Background()
 	mid := time.Date(2026, 9, 21, 0, 5, 0, 0, time.UTC)
 	resolved := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)

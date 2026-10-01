@@ -23,7 +23,7 @@ func TestSQLiteRepository_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +94,7 @@ func TestSQLiteRepository_ChronologicalOrderAcrossSubsecond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestSQLiteRepository_MigratesLegacyTextTimestampsWithOutcomes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestEmitter_DedupWithinCandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +289,7 @@ func TestEmitter_ConcurrentSameKeySingleRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +325,7 @@ func TestEmitter_CanceledContextStillPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +347,7 @@ func TestEmitter_SkipsZeroPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +366,7 @@ func TestEmitter_AllowsZeroATR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +396,7 @@ func TestRegimeWriter_EmitsOnlyOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -431,7 +431,7 @@ func TestRegimeWriter_SameTFSerialized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +478,7 @@ func TestRegimeWriter_AppendFailureDoesNotAdvanceLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +499,7 @@ func TestRegimeWriter_SeedPreventsColdStartReemit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -526,7 +526,7 @@ func TestRegimeWriter_LazyLookupPreventsColdStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)

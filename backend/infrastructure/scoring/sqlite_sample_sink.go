@@ -402,7 +402,7 @@ func (s *SQLiteSampleSink) loadNames(ctx context.Context) (map[string]struct{}, 
 	if err != nil {
 		return nil, fmt.Errorf("listing score calculators: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var found []string
 	for rows.Next() {
 		var name string
@@ -493,7 +493,7 @@ func (s *SQLiteSampleSink) writeBatch(batch []sampleWrite) error {
 		log.Printf("[score-samples] prepare: %v", err)
 		return fmt.Errorf("recording score samples: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 	wrote := 0
 	for _, row := range batch {
 		_, err := stmt.Exec(row.calculator, row.symbol, row.tf, row.score, row.at)
@@ -596,7 +596,7 @@ func (s *SQLiteSampleSink) migrate() error {
 }
 
 func scanScores(rows *sql.Rows) ([]float64, error) {
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []float64
 	for rows.Next() {
 		var score float64
