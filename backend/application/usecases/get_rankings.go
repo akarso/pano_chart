@@ -248,11 +248,7 @@ func trimSeriesTail(series domain.CandleSeries, n int) (domain.CandleSeries, err
 	}
 	all := series.All()
 	tail := all[len(all)-n:]
-	first, err := series.At(0)
-	if err != nil {
-		return domain.CandleSeries{}, err
-	}
-	return domain.NewCandleSeries(first.Symbol(), series.Timeframe(), tail)
+	return domain.NewCandleSeries(series.Symbol(), series.Timeframe(), tail)
 }
 
 // SetTapeProvider attaches an optional composite tape source for RS/Beta/RSRank.
@@ -350,18 +346,14 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 			if err != nil {
 				return nil
 			}
-			// Breakout boost stays calibrated on absolute compression + its own
-			// CandleCount trim — independent of compression_algo / fetch size.
+			// Breakout boost stays on absolute compression so percentile does not
+			// change boost calibration. Window = precision (historical GetRankings
+			// parity); BreakoutScoreCalculator.Score still trims to CandleCount.
 			absBoost, err := g.absCompCalc.Score(precisionSeries)
 			if err != nil {
 				return nil
 			}
-			breakCfg := scoring.DefaultBreakoutConfig()
-			breakSeries, err := trimSeriesTail(precisionSeries, breakCfg.CandleCount)
-			if err != nil {
-				return nil
-			}
-			breakResult := scoring.DetectBreakout(breakSeries.All(), breakCfg, absBoost)
+			breakResult := scoring.DetectBreakout(precisionSeries.All(), scoring.DefaultBreakoutConfig(), absBoost)
 			ranked[0].Scores["Compression"] = compScore
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
 			ranked[0].Scores["Breakout Down"] = breakResult.DownScore
