@@ -155,12 +155,15 @@ type GetRankings struct {
 	exchangeInfoURL string
 	tickerURL       string
 
-	snapshotLogger  ports.SnapshotLogger  // optional; nil = no logging
-	signalEmitter   ports.SignalEmitter   // optional; nil = no signal log (PR-090)
-	tape            CompositeTapeProvider // optional; nil → RS unavailable (PR-096)
-	rsFilter        symbolSkipper         // optional; composite.exclude names skip RS
-	trendAlgo       string                // stamped on evaluation log snapshots (PR-103)
-	compressionAlgo CompressionAlgoMode   // absolute (default) | percentile (PR-105)
+	snapshotLogger  ports.SnapshotLogger          // optional; nil = no logging
+	signalEmitter   ports.SignalEmitter           // optional; nil = no signal log (PR-090)
+	tape            CompositeTapeProvider         // optional; nil → RS unavailable (PR-096)
+	rsFilter        symbolSkipper                 // optional; composite.exclude names skip RS
+	trendAlgo       string                        // stamped on evaluation log snapshots (PR-103)
+	compressionAlgo CompressionAlgoMode           // absolute (default) | percentile (PR-105)
+	compCalc        scoring.SymbolScoreCalculator // cached for Scores["Compression"]
+	absCompCalc     scoring.SymbolScoreCalculator // absolute — breakout boost only
+	candleFetchN    int                           // max(precision, WindowHint); cached
 }
 
 // NewGetRankings constructs the use case.
@@ -187,7 +190,7 @@ func NewGetRankings(
 	if wl <= 0 {
 		wl = 12
 	}
-	return &GetRankings{
+	g := &GetRankings{
 		universe:        universe,
 		ranker:          ranker,
 		volumes:         volumes,
@@ -202,6 +205,8 @@ func NewGetRankings(
 		trendAlgo:       domain.DefaultTrendAlgo,
 		compressionAlgo: CompressionAlgoAbsolute,
 	}
+	g.refreshCompressionCache()
+	return g
 }
 
 // SetSignalEmitter attaches an optional signal logger (PR-090).
@@ -219,16 +224,35 @@ func (g *GetRankings) SetTrendAlgo(algo string) {
 func (g *GetRankings) SetCompressionAlgo(algo string) {
 	mode, _ := ParseCompressionAlgo(algo)
 	g.compressionAlgo = mode
+	g.refreshCompressionCache()
 }
 
-// candleFetchWindow is max(precision, WindowHint across weight + compression calcs).
-func (g *GetRankings) candleFetchWindow() int {
+// refreshCompressionCache rebuilds the selected/absolute calculators and the
+// candle fetch window (PR-105). Percentile may request 500 bars; Rank /
+// sparkline / breakout still use precision-trimmed series.
+func (g *GetRankings) refreshCompressionCache() {
+	g.compCalc = CompressionCalcFor(g.compressionAlgo)
+	g.absCompCalc = CompressionCalcFor(CompressionAlgoAbsolute)
 	calcs := make([]scoring.SymbolScoreCalculator, 0, len(g.weights)+1)
 	for _, w := range g.weights {
 		calcs = append(calcs, w.Calculator)
 	}
-	calcs = append(calcs, CompressionCalcFor(g.compressionAlgo))
-	return scoring.MaxWindowHint(g.precision, calcs...)
+	calcs = append(calcs, g.compCalc)
+	g.candleFetchN = scoring.MaxWindowHint(g.precision, calcs...)
+}
+
+// trimSeriesTail returns the last n candles (or the whole series when shorter).
+func trimSeriesTail(series domain.CandleSeries, n int) (domain.CandleSeries, error) {
+	if n <= 0 || series.Len() <= n {
+		return series, nil
+	}
+	all := series.All()
+	tail := all[len(all)-n:]
+	first, err := series.At(0)
+	if err != nil {
+		return domain.CandleSeries{}, err
+	}
+	return domain.NewCandleSeries(first.Symbol(), series.Timeframe(), tail)
 }
 
 // SetTapeProvider attaches an optional composite tape source for RS/Beta/RSRank.
@@ -304,38 +328,53 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		grp.Go(func() error {
 			defer sem.Release(1)
 
-			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.candleFetchWindow())
+			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.candleFetchN)
 			if err != nil {
 				return nil // skip symbols with fetch errors
 			}
 
-			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
+			// Precision window for Rank / sparkline / breakout / absolute boost.
+			// Percentile compression alone may use the longer fetch (PR-105 CR).
+			precisionSeries, err := trimSeriesTail(cs, g.precision)
+			if err != nil {
+				return nil
+			}
+
+			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: precisionSeries}
 			ranked, err := ranker.Rank(gCtx, singleSeries)
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}
 
-			compCalc := CompressionCalcFor(g.compressionAlgo)
-			compScore, err := compCalc.Score(cs)
+			compScore, err := g.compCalc.Score(cs)
 			if err != nil {
 				return nil
 			}
-			// Breakout still needs the absolute detector's bias-free score input;
-			// percentile and absolute both report under Scores["Compression"].
-			breakResult := scoring.DetectBreakout(cs.All(), scoring.DefaultBreakoutConfig(), compScore)
+			// Breakout boost stays calibrated on absolute compression + its own
+			// CandleCount trim — independent of compression_algo / fetch size.
+			absBoost, err := g.absCompCalc.Score(precisionSeries)
+			if err != nil {
+				return nil
+			}
+			breakCfg := scoring.DefaultBreakoutConfig()
+			breakSeries, err := trimSeriesTail(precisionSeries, breakCfg.CandleCount)
+			if err != nil {
+				return nil
+			}
+			breakResult := scoring.DetectBreakout(breakSeries.All(), breakCfg, absBoost)
 			ranked[0].Scores["Compression"] = compScore
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
 			ranked[0].Scores["Breakout Down"] = breakResult.DownScore
 
 			slots[i] = slot{
 				symbol:    sym,
-				series:    cs,
+				series:    precisionSeries,
 				ranked:    ranked[0],
 				hasSeries: true,
 			}
 
 			if g.snapshotLogger != nil {
-				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
+				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
 				snap.TrendAlgo = g.trendAlgo
 				_ = g.snapshotLogger.Log(snap)
 			}

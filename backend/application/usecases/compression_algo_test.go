@@ -10,7 +10,10 @@ func TestParseCompressionAlgo(t *testing.T) {
 	}{
 		{"", CompressionAlgoAbsolute, true},
 		{"absolute", CompressionAlgoAbsolute, true},
+		{"Absolute", CompressionAlgoAbsolute, true},
 		{"percentile", CompressionAlgoPercentile, true},
+		{"Percentile", CompressionAlgoPercentile, true},
+		{" PERCENTILE ", CompressionAlgoPercentile, true},
 		{"bogus", CompressionAlgoAbsolute, false},
 	}
 	for _, tc := range cases {

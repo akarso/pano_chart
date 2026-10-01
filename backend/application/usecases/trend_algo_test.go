@@ -16,7 +16,8 @@ func TestParseTrendAlgo(t *testing.T) {
 		{"", usecases.TrendAlgoPredictability, true},
 		{"predictability", usecases.TrendAlgoPredictability, true},
 		{"strength", usecases.TrendAlgoStrength, true},
-		{"Strength", usecases.TrendAlgoPredictability, false},
+		{"Strength", usecases.TrendAlgoStrength, true},
+		{" STRENGTH ", usecases.TrendAlgoStrength, true},
 		{"strenght", usecases.TrendAlgoPredictability, false},
 		{"v2", usecases.TrendAlgoPredictability, false},
 	}
