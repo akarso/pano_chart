@@ -494,6 +494,42 @@ func TestRedisEvaluationStore_PredictabilityReadsLegacyKeys(t *testing.T) {
 	}
 }
 
+func TestRedisEvaluationStore_RemovedSymbolDoesNotResurrectLegacy(t *testing.T) {
+	fr := newFakeRedis()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	legacySnap := domain.EvaluationSnapshot{
+		Symbol: "OLDUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion,
+	}
+	legacyJSON, err := json.Marshal(legacySnap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.strings[legacyAtKey("1h")] = strconv.FormatInt(at.Unix(), 10)
+	fr.hashes[legacySymbolKey("1h")] = map[string]string{"OLDUSDT": string(legacyJSON)}
+
+	store := NewRedisEvaluationStore(fr)
+	// Current predictability batch exists but does not include OLDUSDT.
+	current := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.5, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	if err := store.Put(context.Background(), "1h", current, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.GetSymbol(context.Background(), "1h", "OLDUSDT")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("removed symbol must stay a miss, got %v", err)
+	}
+	// Empty current batch: still a generation — must not resurrect legacy.
+	if err := store.Put(context.Background(), "1h", nil, at.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.GetSymbol(context.Background(), "1h", "OLDUSDT")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("empty batch must not resurrect legacy, got %v", err)
+	}
+}
+
 func TestRedisRefreshLock_AcquireRelease(t *testing.T) {
 	fr := newFakeRedis()
 	lock := NewRedisRefreshLock(fr)

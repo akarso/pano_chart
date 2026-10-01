@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 )
@@ -268,18 +270,38 @@ func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey stri
 
 // GetSymbol implements ports.EvaluationStore. Symbol hash field and at are
 // read atomically via Lua so the returned time matches the snapshot.
-// Predictability also falls back to pre-namespaced eval:{tf}:sym keys.
+// Predictability falls back to pre-namespaced eval:{tf}:sym keys only when
+// the namespaced generation is absent — a missing symbol in an existing
+// current batch must stay a miss (do not resurrect legacy entries).
 func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	snap, at, err := s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
-	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) || !s.readLegacyFallback() {
-		return snap, at, err
+	if !s.readLegacyFallback() {
+		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
+	}
+	present, err := s.generationPresent(ctx, s.atKey(tfStr))
+	if err != nil {
+		return domain.EvaluationSnapshot{}, time.Time{}, err
+	}
+	if present {
+		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
 	}
 	return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+}
+
+// generationPresent reports whether a Put generation exists for atKey.
+func (s *RedisEvaluationStore) generationPresent(ctx context.Context, atKey string) (bool, error) {
+	_, err := s.redis.Get(ctx, atKey)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	return false, fmt.Errorf("get at: %w", err)
 }
 
 func (s *RedisEvaluationStore) getSymbolPair(ctx context.Context, symKey, atKey, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
