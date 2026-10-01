@@ -15,6 +15,7 @@ import '../features/events/macro_events_screen.dart';
 import '../features/market_state/market_pulse_screen.dart';
 import '../features/news/news_list_screen.dart';
 import '../features/notifications/notification_router.dart';
+import '../features/notifications/alert_context.dart';
 import '../features/overview/overview_widget.dart';
 import '../features/social/notification_service.dart';
 import '../features/social/social_feed_screen.dart';
@@ -325,14 +326,24 @@ void main() async {
     });
 
     // Foreground: show local notification + refresh social feed if applicable.
-    FirebaseMessaging.onMessage.listen((message) {
+    // Big-picture sparkline is Android + foreground only (system tray on
+    // background/killed has no local PNG path in this PR).
+    FirebaseMessaging.onMessage.listen((message) async {
       final notification = message.notification;
       if (notification != null) {
-        notificationService.show(
-          title: notification.title ?? '',
-          body: notification.body,
-          payload: message.data.cast<String, dynamic>(),
-        );
+        final data = message.data.cast<String, dynamic>();
+        final context = AlertContext.fromPayload(data);
+        try {
+          await notificationService.show(
+            title: notification.title ?? '',
+            body: notification.body,
+            payload: data,
+            sparkline: context.hasSparkline ? context.sparkline : null,
+          );
+        } catch (_) {
+          // Fail-open: never let a local-notification error become an
+          // unhandled async error. If show itself failed, nothing shipped.
+        }
       }
       final type = message.data['type'];
       if (type == 'twitter') {

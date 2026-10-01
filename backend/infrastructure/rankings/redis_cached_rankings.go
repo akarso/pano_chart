@@ -99,7 +99,9 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 	if algo == "" {
 		algo = "default"
 	}
-	return fmt.Sprintf("%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo)
+	// domain.AlgoVersion so a scoring-engine bump never serves pre-change
+	// TotalScore / RS from a still-TTL'd entry (alert context + API).
+	return fmt.Sprintf("%s:%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo, domain.AlgoVersion)
 }
 
 type cachedRankingsPayload struct {

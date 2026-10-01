@@ -735,6 +735,7 @@ func main() {
 			notifyScheduler.SetWatchlistProvider(watchlistStore)
 			notifyScheduler.SetRegimeStackProvider(mtfService)
 			notifyScheduler.SetWatchlistStateStore(watchlistStore)
+			notifyScheduler.SetEvaluationStore(evalStore)
 			log.Println("[main] Watchlist transition alerts wired into scheduler")
 			backgroundWG.Add(1)
 			go func() {

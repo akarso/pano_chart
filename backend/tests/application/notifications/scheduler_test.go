@@ -55,11 +55,12 @@ func (p *blockingMarketProvider) Calculate(ctx context.Context, _ string) (mkt.S
 
 type fakeSetupProvider struct {
 	scores setup.SetupScores
+	fields notifications.SymbolAlertFields
 	err    error
 }
 
-func (f *fakeSetupProvider) BestSetup(_ context.Context, _ string) (setup.SetupScores, error) {
-	return f.scores, f.err
+func (f *fakeSetupProvider) BestSetup(_ context.Context, _ string) (setup.SetupScores, notifications.SymbolAlertFields, error) {
+	return f.scores, f.fields, f.err
 }
 
 type fakeEventProvider struct {

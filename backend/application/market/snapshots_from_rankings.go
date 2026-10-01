@@ -33,6 +33,8 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 			BreakoutDownScore: r.Scores["Breakout Down"],
 			Volume:            r.Volume,
 			Sparkline:         spark,
+			TotalScore:        float64Ptr(r.TotalScore),
+			RelativeStrength:  cloneFloatPtr(r.RelativeStrength),
 			ComputedAt:        atUnix,
 			AlgoVersion:       domain.AlgoVersion,
 		}
@@ -48,4 +50,17 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 		out = append(out, bySym[sym])
 	}
 	return out
+}
+
+func float64Ptr(v float64) *float64 {
+	x := v
+	return &x
+}
+
+func cloneFloatPtr(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	x := *v
+	return &x
 }

@@ -259,6 +259,42 @@ void main() {
       expect(find.text('Detail: BTCUSDT 15m'), findsOneWidget);
     });
 
+    testWidgets('watchlist_transition still routes when context is present', (
+      tester,
+    ) async {
+      String? receivedSymbol;
+      String? receivedTimeframe;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          receivedSymbol = symbol;
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Detail: $symbol $timeframe'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({
+        'type': 'watchlist_transition',
+        'symbol': 'SOLUSDT',
+        'timeframe': '4h',
+        'context':
+            '{"tapeRegime":"trend","sparkline":[1,2,3],"symbolScore":0.7}',
+      });
+      await tester.pumpAndSettle();
+
+      expect(receivedSymbol, 'SOLUSDT');
+      expect(receivedTimeframe, '4h');
+      expect(find.text('Detail: SOLUSDT 4h'), findsOneWidget);
+    });
+
     testWidgets('disabled watchlist alerts do not navigate', (tester) async {
       var pushed = false;
       prefs.notifyWatchlistTransitions = false;

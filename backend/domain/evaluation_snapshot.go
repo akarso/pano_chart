@@ -43,6 +43,16 @@ type EvaluationSnapshot struct {
 	// Populated by the evaluation store writer (PR-089a); empty when absent.
 	Sparkline []float64 `json:"sparkline,omitempty"`
 
+	// TotalScore is the ranked composite score copied from rankings when
+	// the snapshot is written (PR-102). Nil when the store row predates
+	// this field or the snapshot was built without a rankings score —
+	// absent must not unmarshal as a false zero.
+	TotalScore *float64 `json:"totalScore,omitempty"`
+
+	// RelativeStrength is log excess return vs the tape when available
+	// (PR-096 / PR-102). Nil when RS was not scored for this row.
+	RelativeStrength *float64 `json:"rs,omitempty"`
+
 	// ComputedAt is unix seconds when this snapshot was written to the store.
 	// Zero when the snapshot was built on the fly (not from the store).
 	ComputedAt int64 `json:"computedAt,omitempty"`

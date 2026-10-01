@@ -578,3 +578,31 @@ func TestSnapshotsFromRankings_EnrichesAndDedupes(t *testing.T) {
 		t.Fatalf("dedupe: %+v", snaps)
 	}
 }
+
+func TestSnapshotsFromRankings_CopiesTotalScoreAndRS(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	rs := 0.032
+	results := []usecases.RankedResult{
+		{
+			Symbol:           domain.NewSymbolUnsafe("ETHUSDT"),
+			TotalScore:       0.81,
+			RelativeStrength: &rs,
+			Scores:           map[string]float64{"Trend Predictability": 0.5},
+			Sparkline:        []float64{10, 11, 12},
+		},
+	}
+	snaps := appeval.SnapshotsFromRankings(results, "4h", at)
+	if len(snaps) != 1 {
+		t.Fatalf("len=%d", len(snaps))
+	}
+	if snaps[0].TotalScore == nil || *snaps[0].TotalScore != 0.81 {
+		t.Fatalf("TotalScore=%v", snaps[0].TotalScore)
+	}
+	if snaps[0].RelativeStrength == nil || *snaps[0].RelativeStrength != 0.032 {
+		t.Fatalf("RS=%v", snaps[0].RelativeStrength)
+	}
+	*snaps[0].RelativeStrength = 1
+	if rs != 0.032 {
+		t.Fatal("RS pointer must be cloned")
+	}
+}
