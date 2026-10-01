@@ -11,10 +11,14 @@ import (
 // enriching each from its sparkline. Deduplicates by symbol (last wins).
 // When computedAt is zero, ComputedAt stays 0 and Timestamp is left zero —
 // used by on-demand providers that are not writing to the store.
-func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time) []domain.EvaluationSnapshot {
+// trendAlgo is stamped on each row (empty → predictability).
+func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time, trendAlgo string) []domain.EvaluationSnapshot {
 	var atUnix int64
 	if !computedAt.IsZero() {
 		atUnix = computedAt.Unix()
+	}
+	if trendAlgo == "" {
+		trendAlgo = domain.DefaultTrendAlgo
 	}
 
 	bySym := make(map[string]domain.EvaluationSnapshot, len(results))
@@ -37,6 +41,7 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 			RelativeStrength:  cloneFloatPtr(r.RelativeStrength),
 			ComputedAt:        atUnix,
 			AlgoVersion:       domain.AlgoVersion,
+			TrendAlgo:         trendAlgo,
 		}
 		EnrichFromSparkline(&snap, spark)
 		if _, seen := bySym[sym]; !seen {

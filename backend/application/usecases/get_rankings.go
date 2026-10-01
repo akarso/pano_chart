@@ -159,6 +159,7 @@ type GetRankings struct {
 	signalEmitter  ports.SignalEmitter   // optional; nil = no signal log (PR-090)
 	tape           CompositeTapeProvider // optional; nil → RS unavailable (PR-096)
 	rsFilter       symbolSkipper         // optional; composite.exclude names skip RS
+	trendAlgo      string                // stamped on evaluation log snapshots (PR-103)
 }
 
 // NewGetRankings constructs the use case.
@@ -197,12 +198,19 @@ func NewGetRankings(
 		exchangeInfoURL: exchangeInfoURL,
 		tickerURL:       tickerURL,
 		snapshotLogger:  snapshotLogger,
+		trendAlgo:       domain.DefaultTrendAlgo,
 	}
 }
 
 // SetSignalEmitter attaches an optional signal logger (PR-090).
 func (g *GetRankings) SetSignalEmitter(e ports.SignalEmitter) {
 	g.signalEmitter = e
+}
+
+// SetTrendAlgo stamps EvaluationSnapshot.TrendAlgo on optional snapshot logs.
+func (g *GetRankings) SetTrendAlgo(algo string) {
+	mode, _ := ParseTrendAlgo(algo)
+	g.trendAlgo = string(mode)
 }
 
 // SetTapeProvider attaches an optional composite tape source for RS/Beta/RSRank.
@@ -305,6 +313,7 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 
 			if g.snapshotLogger != nil {
 				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
+				snap.TrendAlgo = g.trendAlgo
 				_ = g.snapshotLogger.Log(snap)
 			}
 			return nil

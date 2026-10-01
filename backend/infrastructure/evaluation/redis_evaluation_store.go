@@ -3,9 +3,12 @@ package evaluation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
@@ -70,24 +73,57 @@ type RedisClient interface {
 // RedisEvaluationStore persists EvaluationSnapshots in Redis.
 //
 // Keys (tf must be a canonical timeframe — validated on every call):
-//   - eval:{tf}       → JSON array of snapshots
-//   - eval:{tf}:at    → unix seconds of Put
-//   - eval:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//   - eval:{trend}:{tf}       → JSON array of snapshots
+//   - eval:{trend}:{tf}:at    → unix seconds of Put
+//   - eval:{trend}:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//
+// trendAlgo is part of the key so replicas with different TREND_ALGO values
+// during a rolling deploy do not overwrite each other (PR-103).
+//
+// For the default predictability engine, Get/GetSymbol also fall back to the
+// pre-namespaced keys eval:{tf} / eval:{tf}:at / eval:{tf}:sym so existing
+// store data stays visible until the next Put migrates it.
 //
 // Empty Put writes "[]" with a fresh at (valid empty snapshot, not a miss).
 type RedisEvaluationStore struct {
-	redis RedisClient
+	redis     RedisClient
+	trendAlgo string
 }
 
 // NewRedisEvaluationStore constructs the store.
 func NewRedisEvaluationStore(redis RedisClient) *RedisEvaluationStore {
-	return &RedisEvaluationStore{redis: redis}
+	return &RedisEvaluationStore{redis: redis, trendAlgo: domain.DefaultTrendAlgo}
 }
 
-func arrayKey(tf string) string     { return fmt.Sprintf("eval:%s", tf) }
-func atKey(tf string) string        { return fmt.Sprintf("eval:%s:at", tf) }
-func symbolKey(tf string) string    { return fmt.Sprintf("eval:%s:sym", tf) }
-func symbolTmpKey(tf string) string { return fmt.Sprintf("eval:%s:sym:tmp", tf) }
+// SetTrendAlgo namespaces Redis keys by trend engine (predictability|strength).
+func (s *RedisEvaluationStore) SetTrendAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultTrendAlgo
+	}
+	s.trendAlgo = algo
+}
+
+func (s *RedisEvaluationStore) arrayKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) atKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:at", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolTmpKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym:tmp", s.trendAlgo, tf)
+}
+
+// legacy*Key are the pre-PR-103 key shapes (no trend segment).
+func legacyArrayKey(tf string) string  { return fmt.Sprintf("eval:%s", tf) }
+func legacyAtKey(tf string) string     { return fmt.Sprintf("eval:%s:at", tf) }
+func legacySymbolKey(tf string) string { return fmt.Sprintf("eval:%s:sym", tf) }
+
+func (s *RedisEvaluationStore) readLegacyFallback() bool {
+	return s.trendAlgo == domain.DefaultTrendAlgo
+}
 
 func parseTF(tf string) (domain.Timeframe, error) {
 	parsed, err := domain.NewTimeframe(tf)
@@ -189,7 +225,7 @@ func marshalPutArgs(stamped []domain.EvaluationSnapshot, atUnix int64, ttl time.
 
 func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []interface{}) error {
 	_, err := s.redis.Eval(ctx, putEvalScript, []string{
-		arrayKey(tf), atKey(tf), symbolKey(tf), symbolTmpKey(tf),
+		s.arrayKey(tf), s.atKey(tf), s.symbolKey(tf), s.symbolTmpKey(tf),
 	}, args...)
 	if err != nil {
 		return fmt.Errorf("atomic put: %w", err)
@@ -199,13 +235,22 @@ func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []in
 
 // Get implements ports.EvaluationStore. Array and at are read via MGET so
 // the returned timestamp matches the returned snapshot generation.
+// Predictability also falls back to pre-namespaced eval:{tf} keys.
 func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	vals, err := s.mget(ctx, arrayKey(tfStr), atKey(tfStr))
+	evals, at, err := s.getPair(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
+	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) || !s.readLegacyFallback() {
+		return evals, at, err
+	}
+	return s.getPair(ctx, legacyArrayKey(tfStr), legacyAtKey(tfStr))
+}
+
+func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey string) ([]domain.EvaluationSnapshot, time.Time, error) {
+	vals, err := s.mget(ctx, arrayKey, atKey)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("mget array+at: %w", err)
 	}
@@ -225,13 +270,42 @@ func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.Eva
 
 // GetSymbol implements ports.EvaluationStore. Symbol hash field and at are
 // read atomically via Lua so the returned time matches the snapshot.
+// Predictability falls back to pre-namespaced eval:{tf}:sym keys only when
+// the namespaced generation is absent — a missing symbol in an existing
+// current batch must stay a miss (do not resurrect legacy entries).
 func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symbolKey(tfStr), atKey(tfStr)}, symbol)
+	if !s.readLegacyFallback() {
+		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
+	}
+	present, err := s.generationPresent(ctx, s.atKey(tfStr))
+	if err != nil {
+		return domain.EvaluationSnapshot{}, time.Time{}, err
+	}
+	if present {
+		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
+	}
+	return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+}
+
+// generationPresent reports whether a Put generation exists for atKey.
+func (s *RedisEvaluationStore) generationPresent(ctx context.Context, atKey string) (bool, error) {
+	_, err := s.redis.Get(ctx, atKey)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	return false, fmt.Errorf("get at: %w", err)
+}
+
+func (s *RedisEvaluationStore) getSymbolPair(ctx context.Context, symKey, atKey, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
+	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symKey, atKey}, symbol)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, fmt.Errorf("get symbol: %w", err)
 	}
