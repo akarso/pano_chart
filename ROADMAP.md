@@ -949,10 +949,14 @@ Flip the default only after a scorecard comparison (`badge trend_up` hit rate) o
 2. `MeanReversionScore = clamp((1 − VR(4)) × 1.5, 0, 1)` averaged with `q = 8`.
 3. Sideways V5 gains a config-weighted component `mean_reversion_weight` (default 0.0 → no
    behavior change). Expose in `SidewaysV5Config`.
-4. Also expose `VR` in the setup context (`SetupContext.VarianceRatio`) for PR-110.
+4. Also expose `MeanReversionScore` on `SetupContext` (same Sideways V5
+   trailing window) for PR-110 — Lo–MacKinlay MRS, not channel quality.
 
-**Tests.** Seeded AR(1) with φ = −0.5 → VR(4) < 0.8; seeded random walk → 0.85–1.15; seeded
-trend + noise → > 1.2. Golden `tight_range` mean-reversion score ≥ 0.5.
+**Tests.** Seeded AR(1) with φ = −0.5 → VR(4) < 0.8 and MRS ≥ 0.5; seeded
+random walk → VR(4) ∈ [0.85, 1.15]; seeded momentum AR(1) φ = +0.5 → VR(4) > 1.2
+(constant drift+noise yields VR≈1 under this estimator). Golden `tight_range`
+is a smooth channel (VR ≫ 1) → MRS ≈ 0 — **not** an MRS golden; do not gate
+PR-110 RangeQuality on this metric without amending that PR.
 
 ---
 
@@ -1094,14 +1098,14 @@ model file is absent.
        LongEntry, LongStop, LongTarget    float64 // entry = Low + 0.25×ATR, stop = Low − 1.0×ATR, target = Mid (conservative) and High − 0.25×ATR (full)
        ShortEntry, ShortStop, ShortTarget float64 // mirror
        RiskReward        float64   // (target − entry)/(entry − stop) for the conservative target
-       RangeQuality      float64   // sideways score × mean-reversion score (PR-104)
+       RangeQuality      float64   // sideways × mean-reversion (PR-104) — see note below
        Position          float64   // (price − Low)/(High − Low): 0 = at support, 1 = at resistance
        Valid             bool      // RangeQuality ≥ 0.5 && RiskReward ≥ 1.2 && (High−Low)/ATR ≥ 3
        Reason            string    // why invalid, if !Valid
    }
    ```
-   Channel: `Low` = median of the 3 lowest swing lows, `High` = median of the 3 highest swing
-   highs (3-bar pivot rule); if < 3 swings on a side use min/max of that side.
+   **PR-104 caveat:** Lo–MacKinlay MRS ≠ channel quality (`tight_range` MRS≈0). Amend this
+   gate before enabling it, or use a channel-aligned quality signal instead of LM MRS.
 2. Position sizing helper (pure): `Size(accountRisk, entry, stop float64) float64 =
    accountRisk / |entry − stop|` — the client passes `accountRisk` in quote currency.
 3. Endpoint `GET /api/symbol/{symbol}/plan?timeframe=&risk=100` → plan + `size`.

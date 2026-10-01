@@ -16,4 +16,11 @@ type SetupContext struct {
 
 	TrendHealth float64 // 0–1 health of the underlying trend
 	Regime      string  // dominant regime label
+
+	// MeanReversionScore is Lo–MacKinlay MRS on the Sideways V5 window
+	// (last CandleCount closes, PR-104). 0 = no mean reversion (also the Go
+	// zero value — fail-closed for PR-110 RangeQuality). This is return
+	// autocorrelation, not channel quality: smooth ranges like tight_range
+	// typically score ~0. buildContext always sets it; leave 0 when unused.
+	MeanReversionScore float64
 }
