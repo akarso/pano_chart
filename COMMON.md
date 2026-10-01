@@ -393,6 +393,51 @@ symbol)` per 4 bars of `watchlist_timeframe`. Payload:
 }
 ```
 
+### Alert context (PR-102)
+
+Market, setup, and watchlist pushes also carry a stringified JSON
+`context` key in the FCM data map (values are strings only) when at least
+one field is available (an empty `{}` is not attached):
+
+```json
+{
+  "tapeRegime": "trend",
+  "tapeBias": "up",
+  "tapeConfidence": 0.62,
+  "symbolScore": 0.81,
+  "rs": 0.032,
+  "alignment": 0.75,
+  "sparkline": [/* ≤30 closes */]
+}
+```
+
+* `tapeRegime` / `tapeBias` / `tapeConfidence` come from the market
+  summary for the alert's timeframe.
+* `symbolScore`, `rs`, and `sparkline` appear only when the alert names a
+  symbol (setup / watchlist). Prefer a fresh matching evaluation snapshot
+  (`AlgoVersion` + `EvaluationStoreFresh`). Stale or wrong-algo snaps omit
+  those store fields; the push still sends. Setup alerts on `1m` / `5m`
+  (no store Put — refresher only writes `15m`/`1h`/`4h`/`1d`) fall back to
+  the rankings row already scanned to pick the setup, only when that row
+  is under the current `AlgoVersion` (rankings Redis keys include the
+  version so a scoring bump does not serve pre-change scores).
+* `alignment` is independent of the evaluation store — it comes from the
+  regime stack (`knownAlignment` on watchlist, or `RegimeStackProvider` on
+  setup) and is still attached when the snap is stale or wrong-algo.
+* Pointer / presence semantics: a real `0` for score/alignment/confidence
+  is encoded and must not be treated as “missing”. Omitted keys mean
+  unavailable.
+* Sparkline closes are downsampled from the 110-bar evaluation snapshot
+  (even spacing, first and last kept) and rounded to 4 decimal places.
+* A missing snapshot or empty sparkline does not suppress the push —
+  whatever fields are available are still attached.
+
+**Client display:** the sparkline big-picture chart is rendered only on
+Android when the app is in the foreground (`FirebaseMessaging.onMessage`
+→ local notification). Background / killed delivery uses the system tray
+with title/body only (the `context` JSON is still available to the app
+on open). iOS has no rich attachment in this PR.
+
 ### Rankings relative strength (PR-096)
 
 `GET /api/rankings` includes response-level and per-row fields:

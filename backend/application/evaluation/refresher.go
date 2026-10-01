@@ -76,6 +76,7 @@ type Refresher struct {
 	lock       RefreshLock // optional
 	holderID   string
 	timeframes []string
+	trendAlgo  string
 	now        func() time.Time
 
 	// lockTTLFor allows tests to shrink the lease below Execute duration.
@@ -100,6 +101,7 @@ func NewRefresher(rankings RankingsRunner, store ports.EvaluationStore, timefram
 		store:      store,
 		holderID:   "local",
 		timeframes: timeframes,
+		trendAlgo:  domain.DefaultTrendAlgo,
 		now:        time.Now,
 		lockTTLFor: DefaultLockTTL,
 		lastPut:    make(map[string]time.Time),
@@ -109,6 +111,13 @@ func NewRefresher(rankings RankingsRunner, store ports.EvaluationStore, timefram
 		putCount:   make(map[string]int),
 		skipCount:  make(map[string]int),
 	}
+}
+
+// SetTrendAlgo namespaces refresh locks and stamps snapshots so replicas
+// using a different TREND_ALGO do not share leases or overwrite each other.
+func (r *Refresher) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	r.trendAlgo = string(mode)
 }
 
 // SetLock attaches a distributed refresh lock (multi-instance).
@@ -274,7 +283,7 @@ func (r *Refresher) acquireRefreshLock(ctx context.Context, tf string) (release 
 	if r.lock == nil {
 		return nil, nil
 	}
-	lockKey := defaultLockKeyPx + tf
+	lockKey := defaultLockKeyPx + r.trendAlgo + ":" + tf
 	ok, lockErr := r.lock.TryAcquire(ctx, lockKey, r.lockTTLFor(tf), r.holderID)
 	if lockErr != nil {
 		return nil, lockErr
@@ -293,10 +302,12 @@ func (r *Refresher) acquireRefreshLock(ctx context.Context, tf string) (release 
 
 // skipIfStoreFresh returns errStoreFresh when Redis already has a Put within
 // the refresh interval (shared across replicas after the lock is released).
+// Snapshots from a different AlgoVersion or trend algorithm are not treated
+// as fresh — TREND_ALGO flips must force a recompute (PR-103).
 func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
-	_, at, getErr := r.store.Get(ctx, tf)
+	evals, at, getErr := r.store.Get(ctx, tf)
 	if getErr == nil {
-		if r.now().Sub(at) < RefreshInterval(tf) {
+		if r.now().Sub(at) < RefreshInterval(tf) && evaluationBatchIdentityOK(evals, r.trendAlgo) {
 			r.adoptStoreTime(tf, at)
 			return errStoreFresh
 		}
@@ -306,6 +317,18 @@ func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
 		return nil
 	}
 	return getErr
+}
+
+func evaluationBatchIdentityOK(evals []domain.EvaluationSnapshot, wantTrendAlgo string) bool {
+	if len(evals) == 0 {
+		return false
+	}
+	for _, e := range evals {
+		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo, wantTrendAlgo) {
+			return false
+		}
+	}
+	return true
 }
 
 // scoreAndPersist runs rankings and writes non-empty results to the store.
@@ -323,10 +346,10 @@ func (r *Refresher) scoreAndPersist(ctx context.Context, tf domain.Timeframe) er
 		return fmt.Errorf("rankings returned empty result for %s", tf)
 	}
 	completedAt := r.now()
-	evals := appmarket.SnapshotsFromRankings(results, tf.String(), completedAt)
+	evals := appmarket.SnapshotsFromRankings(results, tf.String(), completedAt, r.trendAlgo)
 	if err := r.store.Put(ctx, tf.String(), evals, completedAt); err != nil {
 		return err
 	}
-	log.Printf("[eval] put tf=%s n=%d", tf, len(evals))
+	log.Printf("[eval] put tf=%s n=%d trend=%s", tf, len(evals), r.trendAlgo)
 	return nil
 }

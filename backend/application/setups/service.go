@@ -56,7 +56,11 @@ type SetupService struct {
 	seasonalityProvider SeasonalityProvider   // optional; nil means SeasonalityFit = neutral 0.5
 	evalStore           ports.EvaluationStore // optional; nil → always re-score
 	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
-	now                 func() time.Time
+	// trendDir recovers trend magnitude+bias for overlay / dominantRegime.
+	// Must match the rankings / WeightedSymbolScorer trend engine (PR-103).
+	trendDir  scoring.DirectedScoreCalculator
+	trendAlgo string // expected EvaluationSnapshot.TrendAlgo for store hits
+	now       func() time.Time
 }
 
 const candleLimit = 200
@@ -73,8 +77,27 @@ func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScor
 		candleRepo: repo,
 		scorer:     scorer,
 		engine:     eng,
+		trendDir:   &scoring.TrendPredictabilityScoreCalculator{},
+		trendAlgo:  domain.DefaultTrendAlgo,
 		now:        time.Now,
 	}
+}
+
+// SetTrendDirectionCalc sets the engine used for store-trend overlay and
+// dominantRegime direction (PR-103). Must match the WeightedSymbolScorer
+// trend calculator; default is Trend Predictability.
+func (s *SetupService) SetTrendDirectionCalc(c scoring.DirectedScoreCalculator) {
+	if c == nil {
+		return
+	}
+	s.trendDir = c
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits
+// (PR-103). Independent of SetTrendDirectionCalc (live overlay engine).
+func (s *SetupService) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	s.trendAlgo = string(mode)
 }
 
 // SetMarketProvider injects the market state provider (optional).
@@ -141,7 +164,7 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 		return setup.SetupScores{}, err
 	}
 
-	setupCtx := buildContext(sym.String(), series, stats)
+	setupCtx := buildContext(sym.String(), series, stats, s.trendDir)
 	result := s.engine.Evaluate(setupCtx)
 	result.Timeframe = timeframe
 
@@ -255,7 +278,7 @@ func (s *SetupService) resolveScores(ctx context.Context, sym domain.Symbol, tf 
 	if stats, ok, err := s.scoresFromStore(ctx, sym, tf); err != nil {
 		return usecases.SymbolStats{}, err
 	} else if ok {
-		if overlaid, ok := overlayLiveTrend(stats, series); ok {
+		if overlaid, ok := s.overlayLiveTrend(stats, series); ok {
 			return overlaid, nil
 		}
 		log.Printf("[eval] setup reason=overlay symbol=%s tf=%s", sym.String(), tf.String())
@@ -288,8 +311,9 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		}
 		return usecases.SymbolStats{}, false, nil
 	}
-	if snap.AlgoVersion != domain.AlgoVersion {
-		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q want=%q", symbol, timeframe, snap.AlgoVersion, domain.AlgoVersion)
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo) {
+		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q want=%q/%q",
+			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, domain.AlgoVersion, s.trendAlgo)
 		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now
@@ -322,12 +346,16 @@ func statsFromSnapshot(snap domain.EvaluationSnapshot) usecases.SymbolStats {
 // (storeTrendOverlayBars), so warm-path dominance uses the same bar count as
 // the store scores. Full setup series still drives volume/volatility.
 // ok=false → miss.
-func overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (usecases.SymbolStats, bool) {
+func (s *SetupService) overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (usecases.SymbolStats, bool) {
 	window, err := trailingWindow(series, storeTrendOverlayBars)
 	if err != nil {
 		return usecases.SymbolStats{}, false
 	}
-	recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(window)
+	trendDir := s.trendDir
+	if trendDir == nil {
+		trendDir = &scoring.TrendPredictabilityScoreCalculator{}
+	}
+	recomputed, bias, err := trendDir.ScoreWithDirection(window)
 	if err != nil {
 		return usecases.SymbolStats{}, false
 	}
@@ -360,8 +388,8 @@ func trailingWindow(series domain.CandleSeries, n int) (domain.CandleSeries, err
 // MeanReversionScore is left at 0: no setup evaluator reads it today, and
 // production Sideways MRS weight is 0. Call meanReversionFromSeries when a
 // consumer (PR-110) needs it — avoid per-symbol allocations on notify scans.
-func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats) SetupContext {
-	regime, trendHealth := computeRegimeAndHealth(series, stats)
+func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats, trendDir scoring.DirectedScoreCalculator) SetupContext {
+	regime, trendHealth := computeRegimeAndHealth(series, stats, trendDir)
 	return SetupContext{
 		Symbol:           symbol,
 		CompressionScore: stats.Scores["Compression"],
@@ -406,13 +434,13 @@ func sidewaysCandleCount() int {
 }
 
 // computeRegimeAndHealth determines the dominant regime and computes health.
-func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolStats) (string, float64) {
+func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolStats, trendDir scoring.DirectedScoreCalculator) (string, float64) {
 	n := series.Len()
 	if n < 2 {
 		return "sideways", 0
 	}
 
-	regime := dominantRegime(stats.Scores, series, stats.DirectionBias)
+	regime := dominantRegime(stats.Scores, series, stats.DirectionBias, trendDir)
 
 	if regime != "uptrend" && regime != "downtrend" {
 		return regime, 0
@@ -428,11 +456,6 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 	health := market.ComputeTrendHealth(regime, price, recentHigh, recentLow, atr, recentReturn)
 	return regime, health
 }
-
-// trendDirectionCalc is the single instance used to recover trend direction
-// in dominantRegime — package-level so it's an explicit, visible
-// dependency and not reallocated on every call.
-var trendDirectionCalc = &scoring.TrendPredictabilityScoreCalculator{}
 
 // scoresAgree reports whether two independently-obtained scores for what
 // should be the same computation are close enough to trust — see
@@ -459,9 +482,12 @@ func scoresAgree(a, b float64) bool {
 // ScoreWithDirection + scoresAgree — see that method's doc for why this is
 // the canonical direction source.
 //
+// trendDir must be the same engine that produced scores["Trend Predictability"]
+// (PR-103: predictability or strength).
+//
 // EvaluationSnapshot.Bias stays the sparkline first/last signal for Market
 // Pulse and is not used here.
-func dominantRegime(scores map[string]float64, series domain.CandleSeries, directionBias string) string {
+func dominantRegime(scores map[string]float64, series domain.CandleSeries, directionBias string, trendDir scoring.DirectedScoreCalculator) string {
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -483,7 +509,10 @@ func dominantRegime(scores map[string]float64, series domain.CandleSeries, direc
 		if directionBias != "" {
 			return regimeFromDirectionBias(directionBias)
 		}
-		recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
+		if trendDir == nil {
+			trendDir = &scoring.TrendPredictabilityScoreCalculator{}
+		}
+		recomputed, bias, err := trendDir.ScoreWithDirection(series)
 		switch {
 		case err != nil:
 			// Not expected to happen here — computeRegimeAndHealth already

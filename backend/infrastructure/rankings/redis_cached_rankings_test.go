@@ -105,7 +105,7 @@ func TestStoresInRedisAfterMiss(t *testing.T) {
 	}
 	_, _ = cache.Execute(context.Background(), req)
 
-	key := "rankings_v2:1h:total:default"
+	key := "rankings_v2:1h:total:default:predictability:v5.1.0"
 	if _, ok := fr.store[key]; !ok {
 		t.Errorf("expected value to be stored in redis at key %q", key)
 	}
@@ -152,7 +152,7 @@ func TestCacheKeyIncludesSortMode(t *testing.T) {
 	}
 	_, _ = cache.Execute(context.Background(), reqGain)
 
-	keyGain := "rankings_v2:4h:gain:default"
+	keyGain := "rankings_v2:4h:gain:default:predictability:v5.1.0"
 	if _, ok := fr.store[keyGain]; !ok {
 		t.Errorf("expected cache key %q, but not found", keyGain)
 	}
@@ -163,7 +163,7 @@ func TestCacheKeyIncludesSortMode(t *testing.T) {
 	}
 	_, _ = cache.Execute(context.Background(), reqVol)
 
-	keyVol := "rankings_v2:4h:volume:default"
+	keyVol := "rankings_v2:4h:volume:default:predictability:v5.1.0"
 	if _, ok := fr.store[keyVol]; !ok {
 		t.Errorf("expected cache key %q, but not found", keyVol)
 	}
@@ -181,7 +181,7 @@ func TestCacheKeyIncludesSidewaysAlgo(t *testing.T) {
 	}
 	_, _ = cache.Execute(context.Background(), reqV2)
 
-	keyV2 := "rankings_v2:1h:total:v2"
+	keyV2 := "rankings_v2:1h:total:v2:predictability:v5.1.0"
 	if _, ok := fr.store[keyV2]; !ok {
 		t.Errorf("expected cache key %q, but not found", keyV2)
 	}
@@ -193,7 +193,7 @@ func TestCacheKeyIncludesSidewaysAlgo(t *testing.T) {
 	}
 	_, _ = cache.Execute(context.Background(), reqDefault)
 
-	keyDefault := "rankings_v2:1h:total:default"
+	keyDefault := "rankings_v2:1h:total:default:predictability:v5.1.0"
 	if _, ok := fr.store[keyDefault]; !ok {
 		t.Errorf("expected cache key %q, but not found", keyDefault)
 	}
@@ -234,7 +234,7 @@ func TestNextErrorPropagated(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from next, got nil")
 	}
-	if _, ok := fr.store["rankings_v2:1h:total:default"]; ok {
+	if _, ok := fr.store["rankings_v2:1h:total:default:predictability:v5.1.0"]; ok {
 		t.Error("should not cache when next returns an error")
 	}
 }
@@ -260,7 +260,7 @@ func TestEmptyResultsCached(t *testing.T) {
 	if len(results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(results))
 	}
-	key := "rankings_v2:1d:total:default"
+	key := "rankings_v2:1d:total:default:predictability:v5.1.0"
 	if _, ok := fr.store[key]; !ok {
 		t.Errorf("empty results should still be cached")
 	}
@@ -303,7 +303,7 @@ func TestScoresPreservedThroughCache(t *testing.T) {
 		t.Errorf("expected volume 1000000, got %f", r0.Volume)
 	}
 
-	key := "rankings_v2:1h:total:default"
+	key := "rankings_v2:1h:total:default:predictability:v5.1.0"
 	raw := fr.store[key]
 	var payload cachedRankingsPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
@@ -401,7 +401,7 @@ func TestLeadersCacheKey(t *testing.T) {
 		Sort:      usecases.SortByLeaders,
 	}
 	_, _ = cache.Execute(context.Background(), req)
-	key := "rankings_v2:1h:leaders:default"
+	key := "rankings_v2:1h:leaders:default:predictability:v5.1.0"
 	raw, ok := fr.store[key]
 	if !ok {
 		t.Fatalf("expected leaders key, store=%v", fr.store)
@@ -452,7 +452,7 @@ func TestLeadersTapeMissDoesNotPoisonCache(t *testing.T) {
 			if out.RSAvailable || out.Sort != usecases.SortByTotal {
 				t.Fatalf("fallback out=%+v", out)
 			}
-			key := "rankings_v2:1h:" + string(mode) + ":default"
+			key := "rankings_v2:1h:" + string(mode) + ":default:predictability:" + domain.AlgoVersion
 			if _, ok := fr.store[key]; ok {
 				t.Fatalf("must not SET %s on RSUnavailable fallback", key)
 			}
@@ -513,7 +513,7 @@ func TestTotalTapeMissDoesNotPoisonCache(t *testing.T) {
 			if out.RSAvailable {
 				t.Fatalf("expected rsAvailable=false, got %+v", out)
 			}
-			key := "rankings_v2:1h:" + string(mode) + ":default"
+			key := "rankings_v2:1h:" + string(mode) + ":default:predictability:" + domain.AlgoVersion
 			if _, ok := fr.store[key]; ok {
 				t.Fatalf("must not SET %s when tape miss leaves RS unavailable", key)
 			}
@@ -566,7 +566,7 @@ func TestEmptyLeadersDoesNotPoisonCache(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			key := "rankings_v2:1h:" + string(mode) + ":default"
+			key := "rankings_v2:1h:" + string(mode) + ":default:predictability:" + domain.AlgoVersion
 			if _, ok := fr.store[key]; ok {
 				t.Fatalf("must not SET empty %s board", key)
 			}
@@ -597,9 +597,38 @@ func TestStableUnscoredNonRSStillCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "rankings_v2:1h:total:default"
+	key := "rankings_v2:1h:total:default:predictability:v5.1.0"
 	if _, ok := fr.store[key]; !ok {
 		t.Fatalf("stable unscored total must SET %s", key)
+	}
+}
+
+func TestCacheKeyIncludesTrendAlgo(t *testing.T) {
+	fr := &fakeRedis{store: map[string]string{}}
+	uc := &fakeRankingsUC{result: sampleResults()}
+	req := usecases.GetRankingsRequest{
+		Timeframe: domain.NewTimeframeUnsafe("1h"),
+		Sort:      usecases.SortByTotal,
+	}
+
+	pred := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
+	pred.SetTrendAlgo("predictability")
+	_, _ = pred.Execute(context.Background(), req)
+
+	strength := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
+	strength.SetTrendAlgo("strength")
+	_, _ = strength.Execute(context.Background(), req)
+
+	predKey := "rankings_v2:1h:total:default:predictability:" + domain.AlgoVersion
+	strengthKey := "rankings_v2:1h:total:default:strength:" + domain.AlgoVersion
+	if _, ok := fr.store[predKey]; !ok {
+		t.Fatalf("missing predictability key %q", predKey)
+	}
+	if _, ok := fr.store[strengthKey]; !ok {
+		t.Fatalf("missing strength key %q", strengthKey)
+	}
+	if predKey == strengthKey {
+		t.Fatal("trend algo must change cache key")
 	}
 }
 
@@ -624,7 +653,7 @@ func TestRSDisabledStillCaches(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "rankings_v2:1h:total:default"
+	key := "rankings_v2:1h:total:default:predictability:v5.1.0"
 	if _, ok := fr.store[key]; !ok {
 		t.Fatalf("RSDisabled must still SET %s", key)
 	}

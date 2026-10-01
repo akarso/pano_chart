@@ -28,6 +28,7 @@ type RedisCachedRankings struct {
 	redis         RedisClient
 	ttl           time.Duration
 	keyPrefix     string
+	trendAlgo     string // process-wide; empty → predictability (PR-103)
 	signalEmitter ports.SignalEmitter // optional — PR-090
 }
 
@@ -39,6 +40,14 @@ func NewRedisCachedRankings(next usecases.RankingsUseCase, redis RedisClient, tt
 		ttl:       ttl,
 		keyPrefix: keyPrefix,
 	}
+}
+
+// SetTrendAlgo stamps the process-wide trend engine into cache keys so
+// toggling TREND_ALGO / scoring.trend_algo cannot serve stale TotalScore
+// (PR-103). Empty or "predictability" both key as "predictability".
+func (r *RedisCachedRankings) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	r.trendAlgo = string(mode)
 }
 
 // SetSignalEmitter attaches an optional signal logger for cache-hit badge emits.
@@ -99,7 +108,14 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 	if algo == "" {
 		algo = "default"
 	}
-	return fmt.Sprintf("%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo)
+	trend := r.trendAlgo
+	if trend == "" {
+		trend = string(usecases.TrendAlgoPredictability)
+	}
+	// domain.AlgoVersion so a scoring-engine bump never serves pre-change
+	// TotalScore / RS from a still-TTL'd entry (alert context + API).
+	// trend_algo mirrors sideways so TREND_ALGO flips do not poison the key.
+	return fmt.Sprintf("%s:%s:%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo, trend, domain.AlgoVersion)
 }
 
 type cachedRankingsPayload struct {

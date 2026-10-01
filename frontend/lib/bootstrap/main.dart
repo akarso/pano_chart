@@ -15,6 +15,7 @@ import '../features/events/macro_events_screen.dart';
 import '../features/market_state/market_pulse_screen.dart';
 import '../features/news/news_list_screen.dart';
 import '../features/notifications/notification_router.dart';
+import '../features/notifications/alert_context.dart';
 import '../features/overview/overview_widget.dart';
 import '../features/social/notification_service.dart';
 import '../features/social/social_feed_screen.dart';
@@ -59,6 +60,9 @@ Widget bootstrapApp({
   final volatilityApi = root.createVolatilityApi();
   final mtfRegimesApi = root.createMtfRegimesApi();
   final notificationConfigApi = root.createNotificationConfigApi();
+  final watchlist = prefs == null
+      ? null
+      : root.createWatchlistController(prefs);
   final socialVm = socialFeedViewModel;
   final component = AppComponent(
     config,
@@ -87,6 +91,7 @@ Widget bootstrapApp({
       socialFeedViewModel: socialVm,
       notificationConfigApi: notificationConfigApi,
       scorecardApi: scorecardApi,
+      watchlist: watchlist,
     ),
   );
 
@@ -98,34 +103,40 @@ Widget bootstrapApp({
       socialScreen: socialVm != null
           ? () => SocialFeedScreen(viewModel: socialVm)
           : null,
-      macroScreen: () => MacroEventsScreen(viewModel: eventsViewModel, isProUser: billingManager?.hasFullAccess ?? false),
+      macroScreen: () => MacroEventsScreen(
+        viewModel: eventsViewModel,
+        isProUser: billingManager?.hasFullAccess ?? false,
+      ),
       newsScreen: () => NewsListScreen(viewModel: newsViewModel),
-      setupScreen: (symbol) => SetupDetailLoader(
-            symbol: symbol,
-            getCandleSeries: getCandleSeries,
-            setupApi: setupApi,
-            fragilityApi: fragilityApi,
-            behaviorApi: behaviorApi,
-            volatilityApi: volatilityApi,
-            // Gated like the overview/Bubble Map routes: a free user can
-            // reach a setup notification's detail screen too, so this
-            // pro-tier field must not ride along ungated (PR-100 CR).
-            mtfRegimesApi:
-                (billingManager?.hasFullAccess ?? false) ? mtfRegimesApi : null,
-            scorecardApi: scorecardApi,
-            isProUser: billingManager?.hasFullAccess ?? false,
-          ),
+      setupScreen: (symbol, [timeframe]) => SetupDetailLoader(
+        symbol: symbol,
+        timeframe: timeframe ?? '4h',
+        getCandleSeries: getCandleSeries,
+        setupApi: setupApi,
+        fragilityApi: fragilityApi,
+        behaviorApi: behaviorApi,
+        volatilityApi: volatilityApi,
+        // Gated like the overview/Bubble Map routes: a free user can
+        // reach a setup notification's detail screen too, so this
+        // pro-tier field must not ride along ungated (PR-100 CR).
+        mtfRegimesApi: (billingManager?.hasFullAccess ?? false)
+            ? mtfRegimesApi
+            : null,
+        scorecardApi: scorecardApi,
+        isProUser: billingManager?.hasFullAccess ?? false,
+        watchlist: watchlist,
+      ),
       marketScreen: (timeframe) => MarketPulseScreen(
-            marketStateApi: marketStateApi,
-            compositeIndexApi: compositeIndexApi,
-            regimeApi: regimeApi,
-            transitionApi: transitionApi,
-            regimeHistoryApi: regimeHistoryApi,
-            sectorRotationApi: sectorRotationApi,
-            scorecardApi: scorecardApi,
-            initialTimeframe: timeframe,
-            isProUser: billingManager?.hasFullAccess ?? false,
-          ),
+        marketStateApi: marketStateApi,
+        compositeIndexApi: compositeIndexApi,
+        regimeApi: regimeApi,
+        transitionApi: transitionApi,
+        regimeHistoryApi: regimeHistoryApi,
+        sectorRotationApi: sectorRotationApi,
+        scorecardApi: scorecardApi,
+        initialTimeframe: timeframe,
+        isProUser: billingManager?.hasFullAccess ?? false,
+      ),
     );
     onRouterReady?.call(router);
   }
@@ -144,14 +155,17 @@ void main() async {
   final prefs = await PreferencesService.create();
   final stablecoins = await loadStablecoinConfig();
 
-  const config =
-      AppConfig(apiBaseUrl: 'https://api.panocharts.com', flavor: 'dev');
+  const config = AppConfig(
+    apiBaseUrl: 'https://api.panocharts.com',
+    flavor: 'dev',
+  );
 
   // One long-lived client/root for device-identity calls — reused for both
   // the initial claim below and any later re-claim on 401, rather than
   // spinning up (and leaking) a fresh http.Client per call.
-  final authApi = CompositionRoot(apiBaseUrl: config.apiBaseUrl)
-      .createDeviceAuthApi();
+  final authApi = CompositionRoot(
+    apiBaseUrl: config.apiBaseUrl,
+  ).createDeviceAuthApi();
 
   // Wired as `onUnauthorized` into every API client below, so a burst of
   // requests all getting 401 around the same time (e.g. several calls
@@ -218,8 +232,9 @@ void main() async {
     authSecretProvider: authSecretProvider,
     onUnauthorized: reclaimDeviceSecret,
   );
-  final socialFeedViewModel =
-      socialRoot.createSocialFeedViewModel(userId: prefs.userId);
+  final socialFeedViewModel = socialRoot.createSocialFeedViewModel(
+    userId: prefs.userId,
+  );
   socialFeedViewModel.attachPrefs(prefs);
 
   // ── Firebase + device registration + local notifications ──
@@ -238,8 +253,9 @@ void main() async {
     final fcmToken = await FirebaseMessaging.instance.getToken();
     if (fcmToken != null) {
       final deviceApi = socialRoot.createDeviceRegistrationApi();
-      final platform =
-          defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+      final platform = defaultTargetPlatform == TargetPlatform.iOS
+          ? 'ios'
+          : 'android';
       try {
         await deviceApi.register(
           userId: prefs.userId,
@@ -280,17 +296,19 @@ void main() async {
   // Route to the right screen when the user taps a local notification.
   notificationService.onTap = (data) => notificationRouter?.handle(data);
 
-  runApp(bootstrapApp(
-    config: config,
-    prefs: prefs,
-    stablecoins: stablecoins,
-    billingManager: billingManager,
-    socialFeedViewModel: socialFeedViewModel,
-    lifecycleManager: lifecycleManager,
-    navigatorKey: navigatorKey,
-    onRouterReady: (router) => notificationRouter = router,
-    onUnauthorized: reclaimDeviceSecret,
-  ));
+  runApp(
+    bootstrapApp(
+      config: config,
+      prefs: prefs,
+      stablecoins: stablecoins,
+      billingManager: billingManager,
+      socialFeedViewModel: socialFeedViewModel,
+      lifecycleManager: lifecycleManager,
+      navigatorKey: navigatorKey,
+      onRouterReady: (router) => notificationRouter = router,
+      onUnauthorized: reclaimDeviceSecret,
+    ),
+  );
 
   // ── Deep link handling for push notifications ──
 
@@ -308,14 +326,24 @@ void main() async {
     });
 
     // Foreground: show local notification + refresh social feed if applicable.
-    FirebaseMessaging.onMessage.listen((message) {
+    // Big-picture sparkline is Android + foreground only (system tray on
+    // background/killed has no local PNG path in this PR).
+    FirebaseMessaging.onMessage.listen((message) async {
       final notification = message.notification;
       if (notification != null) {
-        notificationService.show(
-          title: notification.title ?? '',
-          body: notification.body,
-          payload: message.data.cast<String, dynamic>(),
-        );
+        final data = message.data.cast<String, dynamic>();
+        final context = AlertContext.fromPayload(data);
+        try {
+          await notificationService.show(
+            title: notification.title ?? '',
+            body: notification.body,
+            payload: data,
+            sparkline: context.hasSparkline ? context.sparkline : null,
+          );
+        } catch (_) {
+          // Fail-open: never let a local-notification error become an
+          // unhandled async error. If show itself failed, nothing shipped.
+        }
       }
       final type = message.data['type'];
       if (type == 'twitter') {

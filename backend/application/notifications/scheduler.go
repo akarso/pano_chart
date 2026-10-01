@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/setup"
@@ -23,9 +24,24 @@ type MarketProvider interface {
 	Calculate(ctx context.Context, timeframe string) (mkt.Summary, error)
 }
 
-// SetupProvider returns the best setup for a timeframe.
+// SetupProvider returns the best setup for a timeframe, plus optional
+// symbol alert fields from the rankings row already scanned to pick it.
+// Those fields fill PR-102 context when EvaluationStore has no Put for the
+// timeframe (1m/5m — refresher only writes DefaultTimeframes).
 type SetupProvider interface {
-	BestSetup(ctx context.Context, timeframe string) (setup.SetupScores, error)
+	BestSetup(ctx context.Context, timeframe string) (setup.SetupScores, SymbolAlertFields, error)
+}
+
+// SymbolAlertFields are optional score / RS / sparkline values used when
+// building alert context. Zero value means "no fallback available".
+// AlgoVersion must match domain.AlgoVersion or fields are ignored — same
+// gate as evaluation snapshots — so a post-deploy rankings cache hit from
+// a prior scoring engine cannot ship as live context.
+type SymbolAlertFields struct {
+	AlgoVersion string
+	TotalScore  *float64
+	RS          *float64
+	Sparkline   []float64
 }
 
 // EventProvider returns events within a date range.
@@ -116,6 +132,11 @@ type Scheduler struct {
 	watchlists     WatchlistProvider
 	regimes        RegimeStackProvider
 	watchlistState WatchlistStateStore
+
+	// evalStore — optional, enables PR-102 alert context (sparkline /
+	// symbolScore / rs from the shared evaluation snapshot).
+	evalStore ports.EvaluationStore
+	trendAlgo string
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -134,6 +155,7 @@ func NewScheduler(
 		cfg:        cfg,
 		now:        time.Now,
 		marketHold: newMarketRegimeHold(cfg.MarketRegimeHoldDuration),
+		trendAlgo:  domain.DefaultTrendAlgo,
 	}
 }
 
@@ -400,8 +422,11 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  msg,
-		Data:  map[string]string{"type": string(TypeMarket)},
-		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
+		Data: AttachContext(
+			map[string]string{"type": string(TypeMarket)},
+			s.buildAlertContext(ctx, summary.Timeframe, "", &summary, nil, nil, nil),
+		),
+		Key: fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
 	})
 }
 
@@ -525,11 +550,19 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
 	dateKey := now.Format("2006-01-02")
 
+	var tape *mkt.Summary
+	if sum, ok := summaries[best.timeframe]; ok {
+		tape = &sum
+	}
 	err := s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
-		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
+		Data: AttachContext(
+			map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
+			// Tape already paid for in checkMarketState; nil cache is fine.
+			s.buildAlertContext(ctx, best.timeframe, "", tape, nil, nil, nil),
+		),
 		// best.label (Uptrend/Downtrend/Sideways/Silent) is included, not
 		// just the date — PR-075. Without it, one notification per
 		// (timeframe, day) meant a genuine intraday regime flip (e.g.
@@ -581,8 +614,9 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		}
 
 		setups := make(map[string]setup.SetupScores, len(tfs))
+		setupFields := make(map[string]SymbolAlertFields, len(tfs))
 		for tf := range tfs {
-			best, err := s.setups.BestSetup(ctx, tf)
+			best, fields, err := s.setups.BestSetup(ctx, tf)
 			if err != nil {
 				log.Printf("[notify-scheduler] best setup %s error: %v", tf, err)
 				continue
@@ -590,9 +624,11 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 			log.Printf("[notify-scheduler] setup %s: best=%s score=%.2f confidence=%.2f",
 				tf, best.Symbol, best.Score, best.Confidence)
 			setups[tf] = best
+			setupFields[tf] = fields
 		}
 
 		dateKey := s.now().Format("2006-01-02")
+		ctxCache := newAlertBuildCache()
 		for _, cfg := range configs {
 			if !cfg.SetupOfDay {
 				continue
@@ -611,20 +647,28 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 			if best.Confidence < 0.6 {
 				continue
 			}
+			fields := setupFields[cfg.SetupTimeframe]
 			body := fmt.Sprintf("%s (%0.f%%, %s)", best.Symbol, best.Score*100, cfg.SetupTimeframe)
 			_ = s.engine.SendToUser(ctx, cfg.UserID, Notification{
 				Type:  TypeSetup,
 				Title: "Setup of the Day",
 				Body:  body,
-				Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol, "timeframe": cfg.SetupTimeframe},
-				Key:   fmt.Sprintf("setup_%s_%s_%s", best.Symbol, cfg.SetupTimeframe, dateKey),
+				Data: AttachContext(
+					map[string]string{
+						"type":      string(TypeSetup),
+						"symbol":    best.Symbol,
+						"timeframe": cfg.SetupTimeframe,
+					},
+					s.buildAlertContext(ctx, cfg.SetupTimeframe, best.Symbol, nil, nil, ctxCache, &fields),
+				),
+				Key: fmt.Sprintf("setup_%s_%s_%s", best.Symbol, cfg.SetupTimeframe, dateKey),
 			})
 		}
 		return
 	}
 
 	// Legacy broadcast path.
-	best, err := s.setups.BestSetup(ctx, s.cfg.Timeframe)
+	best, fields, err := s.setups.BestSetup(ctx, s.cfg.Timeframe)
 	if err != nil {
 		log.Printf("[notify-scheduler] best setup error: %v", err)
 		return
@@ -646,8 +690,15 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		Type:  TypeSetup,
 		Title: "Setup of the Day",
 		Body:  body,
-		Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
-		Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
+		Data: AttachContext(
+			map[string]string{
+				"type":      string(TypeSetup),
+				"symbol":    best.Symbol,
+				"timeframe": s.cfg.Timeframe,
+			},
+			s.buildAlertContext(ctx, s.cfg.Timeframe, best.Symbol, nil, nil, nil, &fields),
+		),
+		Key: fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
 	})
 }
 

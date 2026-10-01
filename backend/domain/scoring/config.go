@@ -16,10 +16,16 @@ import (
 
 // AppConfig is the top-level configuration read from config.yaml.
 type AppConfig struct {
+	Scoring     ScoringYAML     `yaml:"scoring"`
 	Sideways    SidewaysYAML    `yaml:"sideways"`
 	Compression CompressionYAML `yaml:"compression"`
 	Breakout    BreakoutYAML    `yaml:"breakout"`
 	Composite   CompositeYAML   `yaml:"composite"`
+}
+
+// ScoringYAML selects optional scoring engine variants (PR-103).
+type ScoringYAML struct {
+	TrendAlgo string `yaml:"trend_algo"` // predictability (default) | strength
 }
 
 // CompositeYAML configures CompositeIndexService exclusions (PR-095).
@@ -235,6 +241,7 @@ func ReplaceConfigForTest(cfg *AppConfig) {
 // defaults that mirror the canonical config.yaml values.
 func DefaultAppConfig() *AppConfig {
 	return &AppConfig{
+		Scoring: ScoringYAML{TrendAlgo: "predictability"},
 		Sideways: SidewaysYAML{
 			ExtremaWindow:   3,
 			CandleCount:     110,

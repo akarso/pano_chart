@@ -6,6 +6,27 @@ import "time"
 // It must be updated whenever scoring logic changes materially.
 const AlgoVersion = "v5.1.0"
 
+// DefaultTrendAlgo is the legacy / unspecified trend engine identity.
+const DefaultTrendAlgo = "predictability"
+
+// EvaluationIdentityOK reports whether a stored snapshot was produced by the
+// expected scoring engine and trend algorithm. Empty trendAlgo / wantTrendAlgo
+// are treated as DefaultTrendAlgo (pre-PR-103 rows and callers).
+func EvaluationIdentityOK(algoVersion, trendAlgo, wantTrendAlgo string) bool {
+	if algoVersion != AlgoVersion {
+		return false
+	}
+	got := trendAlgo
+	if got == "" {
+		got = DefaultTrendAlgo
+	}
+	want := wantTrendAlgo
+	if want == "" {
+		want = DefaultTrendAlgo
+	}
+	return got == want
+}
+
 // EvaluationSnapshot captures all regime scores and market state
 // at the time of evaluation for a single symbol/timeframe cycle.
 // Treat as a value object: construct via helpers (e.g. SnapshotsFromRankings),
@@ -43,10 +64,24 @@ type EvaluationSnapshot struct {
 	// Populated by the evaluation store writer (PR-089a); empty when absent.
 	Sparkline []float64 `json:"sparkline,omitempty"`
 
+	// TotalScore is the ranked composite score copied from rankings when
+	// the snapshot is written (PR-102). Nil when the store row predates
+	// this field or the snapshot was built without a rankings score —
+	// absent must not unmarshal as a false zero.
+	TotalScore *float64 `json:"totalScore,omitempty"`
+
+	// RelativeStrength is log excess return vs the tape when available
+	// (PR-096 / PR-102). Nil when RS was not scored for this row.
+	RelativeStrength *float64 `json:"rs,omitempty"`
+
 	// ComputedAt is unix seconds when this snapshot was written to the store.
 	// Zero when the snapshot was built on the fly (not from the store).
 	ComputedAt int64 `json:"computedAt,omitempty"`
 
 	// Meta
 	AlgoVersion string `json:"algoVersion,omitempty"`
+
+	// TrendAlgo records which trend engine produced TrendScore / TotalScore
+	// (predictability | strength). Empty on pre-PR-103 store rows.
+	TrendAlgo string `json:"trendAlgo,omitempty"`
 }

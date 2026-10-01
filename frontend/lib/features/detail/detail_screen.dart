@@ -42,6 +42,7 @@ import 'trade/trade_action_buttons.dart';
 import '../volatility/volatility_alignment.dart';
 import '../volatility/volatility_model.dart';
 import '../volatility/http_volatility_api.dart';
+import '../watchlist/watchlist_controller.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -84,6 +85,11 @@ class DetailScreen extends StatefulWidget {
   /// Reliability summary for the setup chip. Null hides the chip.
   final ScorecardApi? scorecardApi;
 
+  /// Shared watchlist. When set, the star reads and writes here instead of
+  /// a screen-local flag, so other screens stay in sync. Null leaves the
+  /// toggle local-only (persisted, not synced).
+  final WatchlistController? watchlist;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -103,6 +109,7 @@ class DetailScreen extends StatefulWidget {
     this.isProUser = false,
     this.volatilityApi,
     this.scorecardApi,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -179,7 +186,9 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   void initState() {
     super.initState();
-    isFavourite = widget.isFavourite;
+    isFavourite =
+        widget.watchlist?.contains(widget.symbol.value) ?? widget.isFavourite;
+    widget.watchlist?.addListener(_onWatchlistChanged);
     _timeframe = widget.timeframe.value;
     _series = widget.series;
     _warmupCount = widget.warmupCount;
@@ -222,6 +231,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    widget.watchlist?.removeListener(_onWatchlistChanged);
     if (_pausable != null) _lifecycle?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
@@ -332,6 +342,45 @@ class _DetailScreenState extends State<DetailScreen> {
       onTick: () async => _loadEvents(),
     );
     _eventsRefreshTimer!.start();
+  }
+
+  void _onWatchlistChanged() {
+    final watchlist = widget.watchlist;
+    if (!mounted || watchlist == null) return;
+    setState(() {
+      isFavourite = watchlist.contains(widget.symbol.value);
+    });
+  }
+
+  /// Toggles the star. With a [WatchlistController], membership and the
+  /// server sync live there (every other screen listens to the same
+  /// instance). Without one, the star is local-only and still persisted.
+  void _toggleWatchlist() {
+    final watchlist = widget.watchlist;
+    if (watchlist != null) {
+      watchlist.toggle(widget.symbol.value).then((_) {
+        if (!mounted) return;
+        final message = watchlist.takeStatus();
+        if (message == null) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      });
+      return;
+    }
+    final adding = !isFavourite;
+    setState(() => isFavourite = adding);
+    _persistLocalFavourite(adding);
+  }
+
+  Future<void> _persistLocalFavourite(bool adding) async {
+    final prefsRaw = await SharedPreferences.getInstance();
+    final prefs = PreferencesService(prefsRaw);
+    if (adding) {
+      prefs.addFavourite(widget.symbol.value);
+    } else {
+      prefs.removeFavourite(widget.symbol.value);
+    }
   }
 
   Future<void> _loadChartConfig() async {
@@ -850,8 +899,8 @@ class _DetailScreenState extends State<DetailScreen> {
               isFavourite ? Icons.star : Icons.star_border,
               color: isFavourite ? Colors.amber : Colors.white54,
             ),
-            onPressed: () => setState(() => isFavourite = !isFavourite),
-            tooltip: isFavourite ? 'Unfavourite' : 'Favourite',
+            onPressed: _toggleWatchlist,
+            tooltip: isFavourite ? 'Remove from watchlist' : 'Add to watchlist',
           ),
           title: Row(
             children: [
