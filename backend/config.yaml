@@ -1,6 +1,7 @@
-# PR-103: trend score engine for rankings and setups (default unchanged).
+# PR-103 / PR-105: optional scoring engine variants (defaults unchanged).
 scoring:
-  trend_algo: predictability  # or strength
+  trend_algo: predictability       # or strength
+  compression_algo: absolute       # or percentile (PR-105; needs 500-bar fetch)
 
 sideways:
   extrema_window: 3

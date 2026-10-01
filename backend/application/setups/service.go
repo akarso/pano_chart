@@ -58,9 +58,10 @@ type SetupService struct {
 	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
 	// trendDir recovers trend magnitude+bias for overlay / dominantRegime.
 	// Must match the rankings / WeightedSymbolScorer trend engine (PR-103).
-	trendDir  scoring.DirectedScoreCalculator
-	trendAlgo string // expected EvaluationSnapshot.TrendAlgo for store hits
-	now       func() time.Time
+	trendDir        scoring.DirectedScoreCalculator
+	trendAlgo       string // expected EvaluationSnapshot.TrendAlgo for store hits
+	compressionAlgo string // expected EvaluationSnapshot.CompressionAlgo for store hits
+	now             func() time.Time
 }
 
 const candleLimit = 200
@@ -74,12 +75,13 @@ const storeTrendOverlayBars = 110
 // NewSetupService constructs the service.
 func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScorer, eng *Engine) *SetupService {
 	return &SetupService{
-		candleRepo: repo,
-		scorer:     scorer,
-		engine:     eng,
-		trendDir:   &scoring.TrendPredictabilityScoreCalculator{},
-		trendAlgo:  domain.DefaultTrendAlgo,
-		now:        time.Now,
+		candleRepo:      repo,
+		scorer:          scorer,
+		engine:          eng,
+		trendDir:        &scoring.TrendPredictabilityScoreCalculator{},
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: domain.DefaultCompressionAlgo,
+		now:             time.Now,
 	}
 }
 
@@ -98,6 +100,13 @@ func (s *SetupService) SetTrendDirectionCalc(c scoring.DirectedScoreCalculator) 
 func (s *SetupService) SetTrendAlgo(algo string) {
 	mode, _ := usecases.ParseTrendAlgo(algo)
 	s.trendAlgo = string(mode)
+}
+
+// SetCompressionAlgo sets the expected EvaluationSnapshot.CompressionAlgo for
+// store hits (PR-105).
+func (s *SetupService) SetCompressionAlgo(algo string) {
+	mode, _ := usecases.ParseCompressionAlgo(algo)
+	s.compressionAlgo = string(mode)
 }
 
 // SetMarketProvider injects the market state provider (optional).
@@ -311,9 +320,10 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		}
 		return usecases.SymbolStats{}, false, nil
 	}
-	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo) {
-		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q want=%q/%q",
-			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, domain.AlgoVersion, s.trendAlgo)
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo, snap.CompressionAlgo, s.compressionAlgo) {
+		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q/%q want=%q/%q/%q",
+			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, snap.CompressionAlgo,
+			domain.AlgoVersion, s.trendAlgo, s.compressionAlgo)
 		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now

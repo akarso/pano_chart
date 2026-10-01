@@ -1,6 +1,8 @@
 package usecases
 
 import (
+	"strings"
+
 	"pano_chart/backend/domain/scoring"
 )
 
@@ -16,8 +18,9 @@ const (
 // ok is false for unrecognized non-empty values (caller should warn and
 // treat the returned predictability fallback as a misconfiguration).
 // Empty string is a valid default → predictability, ok=true.
+// Matching is case-insensitive ("Strength" → strength).
 func ParseTrendAlgo(s string) (TrendAlgoMode, bool) {
-	switch TrendAlgoMode(s) {
+	switch TrendAlgoMode(strings.ToLower(strings.TrimSpace(s))) {
 	case "", TrendAlgoPredictability:
 		return TrendAlgoPredictability, true
 	case TrendAlgoStrength:

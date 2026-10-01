@@ -23,9 +23,10 @@ type AppConfig struct {
 	Composite   CompositeYAML   `yaml:"composite"`
 }
 
-// ScoringYAML selects optional scoring engine variants (PR-103).
+// ScoringYAML selects optional scoring engine variants (PR-103 / PR-105).
 type ScoringYAML struct {
-	TrendAlgo string `yaml:"trend_algo"` // predictability (default) | strength
+	TrendAlgo       string `yaml:"trend_algo"`       // predictability (default) | strength
+	CompressionAlgo string `yaml:"compression_algo"` // absolute (default) | percentile
 }
 
 // CompositeYAML configures CompositeIndexService exclusions (PR-095).
@@ -241,7 +242,10 @@ func ReplaceConfigForTest(cfg *AppConfig) {
 // defaults that mirror the canonical config.yaml values.
 func DefaultAppConfig() *AppConfig {
 	return &AppConfig{
-		Scoring: ScoringYAML{TrendAlgo: "predictability"},
+		Scoring: ScoringYAML{
+			TrendAlgo:       "predictability",
+			CompressionAlgo: "absolute",
+		},
 		Sideways: SidewaysYAML{
 			ExtremaWindow:   3,
 			CandleCount:     110,
