@@ -2129,6 +2129,69 @@ class _OverviewTileLayout {
   });
 }
 
+/// Badge column height/width and the meta strip it reserves.
+class _BadgeColumnSlots {
+  final bool showReliabilityPill;
+  final ScorecardSummaryItem? reliabilityRow;
+  final double badgeColumnMaxHeight;
+  final double badgeReserve;
+  final bool reservedMetaStrip;
+  final double metaTopBound;
+
+  const _BadgeColumnSlots({
+    required this.showReliabilityPill,
+    required this.reliabilityRow,
+    required this.badgeColumnMaxHeight,
+    required this.badgeReserve,
+    required this.reservedMetaStrip,
+    required this.metaTopBound,
+  });
+}
+
+/// Star placement and the horizontal name band beside/above it.
+class _StarNameSlots {
+  final double starExtent;
+  final double starIconSize;
+  final bool starInBottomRow;
+  final double nameLeft;
+  final double nameRight;
+  final bool nameAboveStar;
+  final bool showBottomMeta;
+
+  const _StarNameSlots({
+    required this.starExtent,
+    required this.starIconSize,
+    required this.starInBottomRow,
+    required this.nameLeft,
+    required this.nameRight,
+    required this.nameAboveStar,
+    required this.showBottomMeta,
+  });
+}
+
+/// Price/RS band under the name and badge column.
+class _MetaRowSlots {
+  final bool lockMetaBelowName;
+  final double metaBand;
+  final double metaLeft;
+  final double metaWidth;
+  final bool showMetaRow;
+  final bool showBottomMeta;
+  final double pctFontSize;
+  final bool showRsInBand;
+
+  const _MetaRowSlots({
+    required this.lockMetaBelowName,
+    required this.metaBand,
+    required this.metaLeft,
+    required this.metaWidth,
+    required this.showMetaRow,
+    required this.showBottomMeta,
+    required this.pctFontSize,
+    required this.showRsInBand,
+  });
+}
+
 class _OverviewGridItem extends StatelessWidget {
   final OverviewItem item;
   final int columns;
@@ -2199,35 +2262,82 @@ class _OverviewGridItem extends StatelessWidget {
   ) {
     final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
     final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
-    final scaledFont = textScaler.scale(fontSize);
-    // 48px when the card has room. Floor at 32px when the card can hold
-    // it; never larger than the card. On a short tile the name sits
-    // beside the star when both the star and the badge leave room;
-    // otherwise the name stays on the top row and the star sits below.
-    const minStarExtent = 32.0;
-    const minNameWidth = 24.0;
-    const minTapExtent = 32.0;
-    var starExtent = 48.0;
-    final maxStarExtent = constraints.maxHeight - pad;
-    if (maxStarExtent < minStarExtent) {
-      starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
-    } else {
-      if (starExtent > maxStarExtent) starExtent = maxStarExtent;
-      if (starExtent < minStarExtent) starExtent = minStarExtent;
-    }
+    final nameBottom = _nameBottomBound(
+      constraints: constraints,
+      pad: pad,
+      scaledFont: textScaler.scale(fontSize),
+    );
+    final badge = _resolveBadgeColumnSlots(
+      constraints: constraints,
+      fontSize: fontSize,
+      pad: pad,
+      nameBottom: nameBottom,
+      textScaler: textScaler,
+    );
+    final starName = _resolveStarNameSlots(
+      constraints: constraints,
+      pad: pad,
+      nameBottom: nameBottom,
+      badgeReserve: badge.badgeReserve,
+    );
+    final meta = _resolveMetaRowSlots(
+      constraints: constraints,
+      pad: pad,
+      fontSize: fontSize,
+      starExtent: starName.starExtent,
+      starInBottomRow: starName.starInBottomRow,
+      nameAboveStar: starName.nameAboveStar,
+      showBottomMeta: starName.showBottomMeta,
+      metaTopBound: badge.metaTopBound,
+    );
+    return _OverviewTileLayout(
+      constraints: constraints,
+      fontSize: fontSize,
+      pad: pad,
+      starExtent: starName.starExtent,
+      starIconSize: starName.starIconSize,
+      starInBottomRow: starName.starInBottomRow,
+      nameLeft: starName.nameLeft,
+      nameRight: starName.nameRight,
+      reservedMetaStrip: badge.reservedMetaStrip,
+      metaTopBound: badge.metaTopBound,
+      lockMetaBelowName: meta.lockMetaBelowName,
+      metaBand: meta.metaBand,
+      metaLeft: meta.metaLeft,
+      metaWidth: meta.metaWidth,
+      showMetaRow: meta.showMetaRow,
+      showBottomMeta: meta.showBottomMeta,
+      pctFontSize: meta.pctFontSize,
+      showRsInBand: meta.showRsInBand,
+      badgeColumnMaxHeight: badge.badgeColumnMaxHeight,
+      showReliabilityPill: badge.showReliabilityPill,
+      reliabilityRow: badge.reliabilityRow,
+    );
+  }
+
+  double _nameBottomBound({
+    required BoxConstraints constraints,
+    required double pad,
+    required double scaledFont,
+  }) {
     final nameBand = scaledFont * 1.5;
-    final sidePad = pad + 4;
-    final starTop = constraints.maxHeight - pad - starExtent;
     // Keep the name band inside the card so a bottom Positioned never
     // gets top below bottom at large text scales.
-    final nameBottom = (pad + nameBand).clamp(
+    return (pad + nameBand).clamp(
       pad,
       pad > constraints.maxHeight - pad ? pad : constraints.maxHeight - pad,
     );
-    // Reliability pill is a second line under the badge. Prefer keeping
-    // price/RS (≥14px). If the full column would starve that band, scale
-    // the column into the room above a 14px meta strip; only drop the
-    // pill when even that room is gone.
+  }
+
+  /// Reliability pill under the badge: scale into a 14px meta strip when
+  /// the full column would starve price/RS, otherwise drop the pill.
+  _BadgeColumnSlots _resolveBadgeColumnSlots({
+    required BoxConstraints constraints,
+    required double fontSize,
+    required double pad,
+    required double nameBottom,
+    required TextScaler textScaler,
+  }) {
     final reliabilityRow = reliability;
     var showReliabilityPill =
         item.badgeComponent.isNotEmpty &&
@@ -2304,6 +2414,41 @@ class _OverviewGridItem extends StatelessWidget {
         badgeColumnMaxHeight < unscaledBadgeColumnHeight) {
       badgeReserve *= badgeColumnMaxHeight / unscaledBadgeColumnHeight;
     }
+    return _BadgeColumnSlots(
+      showReliabilityPill: showReliabilityPill,
+      reliabilityRow: showReliabilityPill ? reliabilityRow : null,
+      badgeColumnMaxHeight: badgeColumnMaxHeight,
+      badgeReserve: badgeReserve,
+      reservedMetaStrip: reservedMetaStrip,
+      metaTopBound: metaTopBound,
+    );
+  }
+
+  /// Places the star beside or below the name, and insets the name past
+  /// the badge reserve.
+  _StarNameSlots _resolveStarNameSlots({
+    required BoxConstraints constraints,
+    required double pad,
+    required double nameBottom,
+    required double badgeReserve,
+  }) {
+    // 48px when the card has room. Floor at 32px when the card can hold
+    // it; never larger than the card. On a short tile the name sits
+    // beside the star when both the star and the badge leave room;
+    // otherwise the name stays on the top row and the star sits below.
+    const minStarExtent = 32.0;
+    const minNameWidth = 24.0;
+    const minTapExtent = 32.0;
+    var starExtent = 48.0;
+    final maxStarExtent = constraints.maxHeight - pad;
+    if (maxStarExtent < minStarExtent) {
+      starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
+    } else {
+      if (starExtent > maxStarExtent) starExtent = maxStarExtent;
+      if (starExtent < minStarExtent) starExtent = minStarExtent;
+    }
+    final sidePad = pad + 4;
+    final starTop = constraints.maxHeight - pad - starExtent;
     final wantBesideStar = starTop < nameBottom;
     var starIndent = 0.0;
     // Name on the top row; bottom row is clipped to the leftover band
@@ -2366,6 +2511,32 @@ class _OverviewGridItem extends StatelessWidget {
         nameLeft = sidePad;
       }
     }
+    var starIconSize = starExtent * 0.5;
+    if (starIconSize < 14) starIconSize = 14;
+    if (starIconSize > 22) starIconSize = 22;
+    if (starIconSize > starExtent) starIconSize = starExtent;
+    return _StarNameSlots(
+      starExtent: starExtent,
+      starIconSize: starIconSize,
+      starInBottomRow: starInBottomRow,
+      nameLeft: nameLeft,
+      nameRight: nameRight,
+      nameAboveStar: nameAboveStar,
+      showBottomMeta: showBottomMeta,
+    );
+  }
+
+  /// Price/RS strip under the name and badge column.
+  _MetaRowSlots _resolveMetaRowSlots({
+    required BoxConstraints constraints,
+    required double pad,
+    required double fontSize,
+    required double starExtent,
+    required bool starInBottomRow,
+    required bool nameAboveStar,
+    required bool showBottomMeta,
+    required double metaTopBound,
+  }) {
     // Leftover band under the name / badge column — used whenever the
     // meta row is height-bounded (beside-star or below-name).
     final lockMetaBelowName = !starInBottomRow || nameAboveStar;
@@ -2373,18 +2544,15 @@ class _OverviewGridItem extends StatelessWidget {
       0.0,
       double.infinity,
     );
+    var bottomMeta = showBottomMeta;
     if (lockMetaBelowName) {
-      showBottomMeta = metaBand >= 14;
+      bottomMeta = metaBand >= 14;
     }
-    var starIconSize = starExtent * 0.5;
-    if (starIconSize < 14) starIconSize = 14;
-    if (starIconSize > 22) starIconSize = 22;
-    if (starIconSize > starExtent) starIconSize = starExtent;
-    final pctFontSize = lockMetaBelowName && showBottomMeta
+    final pctFontSize = lockMetaBelowName && bottomMeta
         ? (metaBand * 0.4).clamp(6.0, (fontSize * 0.55).clamp(7.0, 11.0))
         : (fontSize * 0.55).clamp(7.0, 11.0);
     final showRsInBand =
-        showRsChip && showBottomMeta && (!lockMetaBelowName || metaBand >= 14);
+        showRsChip && bottomMeta && (!lockMetaBelowName || metaBand >= 14);
     // When the star is pinned top-left, keep percent/RS to its right so
     // they never cover the button's lower half.
     final metaLeft = !starInBottomRow ? pad + starExtent : pad + 4;
@@ -2393,32 +2561,18 @@ class _OverviewGridItem extends StatelessWidget {
       double.infinity,
     );
     final showMetaRow =
-        (starInBottomRow || showBottomMeta) &&
+        (starInBottomRow || bottomMeta) &&
         (!lockMetaBelowName || metaBand > 0) &&
         metaWidth > 0;
-
-    return _OverviewTileLayout(
-      constraints: constraints,
-      fontSize: fontSize,
-      pad: pad,
-      starExtent: starExtent,
-      starIconSize: starIconSize,
-      starInBottomRow: starInBottomRow,
-      nameLeft: nameLeft,
-      nameRight: nameRight,
-      reservedMetaStrip: reservedMetaStrip,
-      metaTopBound: metaTopBound,
+    return _MetaRowSlots(
       lockMetaBelowName: lockMetaBelowName,
       metaBand: metaBand,
       metaLeft: metaLeft,
       metaWidth: metaWidth,
       showMetaRow: showMetaRow,
-      showBottomMeta: showBottomMeta,
+      showBottomMeta: bottomMeta,
       pctFontSize: pctFontSize,
       showRsInBand: showRsInBand,
-      badgeColumnMaxHeight: badgeColumnMaxHeight,
-      showReliabilityPill: showReliabilityPill,
-      reliabilityRow: showReliabilityPill ? reliabilityRow : null,
     );
   }
 
