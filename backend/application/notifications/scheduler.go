@@ -34,10 +34,14 @@ type SetupProvider interface {
 
 // SymbolAlertFields are optional score / RS / sparkline values used when
 // building alert context. Zero value means "no fallback available".
+// AlgoVersion must match domain.AlgoVersion or fields are ignored — same
+// gate as evaluation snapshots — so a post-deploy rankings cache hit from
+// a prior scoring engine cannot ship as live context.
 type SymbolAlertFields struct {
-	TotalScore *float64
-	RS         *float64
-	Sparkline  []float64
+	AlgoVersion string
+	TotalScore  *float64
+	RS          *float64
+	Sparkline   []float64
 }
 
 // EventProvider returns events within a date range.

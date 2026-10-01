@@ -418,7 +418,9 @@ one field is available (an empty `{}` is not attached):
   (`AlgoVersion` + `EvaluationStoreFresh`). Stale or wrong-algo snaps omit
   those store fields; the push still sends. Setup alerts on `1m` / `5m`
   (no store Put — refresher only writes `15m`/`1h`/`4h`/`1d`) fall back to
-  the rankings row already scanned to pick the setup.
+  the rankings row already scanned to pick the setup, only when that row
+  is under the current `AlgoVersion` (rankings Redis keys include the
+  version so a scoring bump does not serve pre-change scores).
 * `alignment` is independent of the evaluation store — it comes from the
   regime stack (`knownAlignment` on watchlist, or `RegimeStackProvider` on
   setup) and is still attached when the snap is stale or wrong-algo.

@@ -153,9 +153,10 @@ func applySnapshotToContext(
 }
 
 // applySymbolFields fills score/RS/sparkline only where still unset, so a
-// rankings fallback never overrides a fresh store hit.
+// rankings fallback never overrides a fresh store hit. Wrong or empty
+// AlgoVersion is ignored (true fail-open) — same contract as snapshots.
 func applySymbolFields(out *AlertContext, fields *SymbolAlertFields) {
-	if fields == nil {
+	if fields == nil || fields.AlgoVersion != domain.AlgoVersion {
 		return
 	}
 	if out.SymbolScore == nil && fields.TotalScore != nil {

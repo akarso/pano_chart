@@ -87,8 +87,11 @@ func symbolFieldsFromRanked(r *usecases.RankedResult) appnotify.SymbolAlertField
 	}
 	score := r.TotalScore
 	fields := appnotify.SymbolAlertFields{
-		TotalScore: &score,
-		Sparkline:  append([]float64(nil), r.Sparkline...),
+		// Rankings cache keys include domain.AlgoVersion, so a hit here was
+		// produced (or revalidated) under the current scoring engine.
+		AlgoVersion: domain.AlgoVersion,
+		TotalScore:  &score,
+		Sparkline:   append([]float64(nil), r.Sparkline...),
 	}
 	if r.RelativeStrength != nil {
 		rs := *r.RelativeStrength
