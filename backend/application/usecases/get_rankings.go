@@ -341,9 +341,13 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 				return nil
 			}
 			// Breakout boost stays on absolute compression over the full
-			// precision window (pre-PR-105 DetectCompression parity — do not
-			// use CompressionScoreCalculator.Score, which trims to CandleCount).
-			absBoost := scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score
+			// precision window (pre-PR-105 DetectCompression parity). Absolute
+			// mode already computed that via scoreCompression; percentile must
+			// recompute DetectCompression (do not reuse the percentile score).
+			absBoost := compScore
+			if g.compressionAlgo == CompressionAlgoPercentile {
+				absBoost = scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score
+			}
 			breakResult := scoring.DetectBreakout(precisionSeries.All(), scoring.DefaultBreakoutConfig(), absBoost)
 			ranked[0].Scores["Compression"] = compScore
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
