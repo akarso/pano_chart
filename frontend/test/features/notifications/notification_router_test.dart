@@ -28,10 +28,12 @@ void main() {
       // Enable social notifications.
       prefs.notificationsEnabled = true;
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'twitter'});
       await tester.pumpAndSettle();
@@ -53,10 +55,12 @@ void main() {
       // Social notifications disabled (default is false).
       prefs.notificationsEnabled = false;
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'twitter'});
       await tester.pumpAndSettle();
@@ -76,10 +80,12 @@ void main() {
         },
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'macro'});
       await tester.pumpAndSettle();
@@ -99,10 +105,12 @@ void main() {
         },
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'news'});
       await tester.pumpAndSettle();
@@ -122,10 +130,12 @@ void main() {
         },
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'market'});
       await tester.pumpAndSettle();
@@ -145,10 +155,12 @@ void main() {
         },
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'market', 'timeframe': '15m'});
       await tester.pumpAndSettle();
@@ -162,22 +174,140 @@ void main() {
       final router = NotificationRouter(
         navigatorKey: navKey,
         prefs: prefs,
-        setupScreen: (symbol) {
+        setupScreen: (symbol, [timeframe]) {
           receivedSymbol = symbol;
           return Scaffold(body: Text('Setup: $symbol'));
         },
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'setup', 'symbol': 'BTCUSDT'});
       await tester.pumpAndSettle();
 
       expect(receivedSymbol, 'BTCUSDT');
       expect(find.text('Setup: BTCUSDT'), findsOneWidget);
+    });
+
+    testWidgets('watchlist_transition pushes the symbol detail screen', (
+      tester,
+    ) async {
+      String? receivedSymbol;
+      String? receivedTimeframe;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          receivedSymbol = symbol;
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Detail: $symbol $timeframe'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({
+        'type': 'watchlist_transition',
+        'symbol': 'ETHUSDT',
+        'timeframe': '1h',
+      });
+      await tester.pumpAndSettle();
+
+      expect(receivedSymbol, 'ETHUSDT');
+      expect(receivedTimeframe, '1h');
+      expect(find.text('Detail: ETHUSDT 1h'), findsOneWidget);
+    });
+
+    testWidgets('watchlist_transition forwards a non-default timeframe', (
+      tester,
+    ) async {
+      String? receivedTimeframe;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          receivedTimeframe = timeframe;
+          return Scaffold(body: Text('Detail: $symbol $timeframe'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({
+        'type': 'watchlist_transition',
+        'symbol': 'BTCUSDT',
+        'timeframe': '15m',
+      });
+      await tester.pumpAndSettle();
+
+      expect(receivedTimeframe, '15m');
+      expect(find.text('Detail: BTCUSDT 15m'), findsOneWidget);
+    });
+
+    testWidgets('disabled watchlist alerts do not navigate', (tester) async {
+      var pushed = false;
+      prefs.notifyWatchlistTransitions = false;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          pushed = true;
+          return Scaffold(body: Text('Detail: $symbol'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({'type': 'watchlist_transition', 'symbol': 'ETHUSDT'});
+      await tester.pumpAndSettle();
+
+      expect(pushed, isFalse);
+      expect(find.text('Home'), findsOneWidget);
+    });
+
+    testWidgets('watchlist_transition ignores an empty symbol', (tester) async {
+      var pushed = false;
+      final router = NotificationRouter(
+        navigatorKey: navKey,
+        prefs: prefs,
+        setupScreen: (symbol, [timeframe]) {
+          pushed = true;
+          return Scaffold(body: Text('Detail: $symbol'));
+        },
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
+
+      router.handle({'type': 'watchlist_transition', 'symbol': ''});
+      await tester.pumpAndSettle();
+
+      expect(pushed, isFalse);
+      expect(find.text('Home'), findsOneWidget);
     });
 
     testWidgets('unknown type does not navigate', (tester) async {
@@ -187,10 +317,12 @@ void main() {
         socialScreen: () => const Scaffold(body: Text('Social')),
       );
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: navKey,
-        home: const Scaffold(body: Text('Home')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Text('Home')),
+        ),
+      );
 
       router.handle({'type': 'unknown'});
       await tester.pumpAndSettle();
@@ -198,7 +330,9 @@ void main() {
       expect(find.text('Home'), findsOneWidget);
     });
 
-    testWidgets('null navigator key state is handled gracefully', (tester) async {
+    testWidgets('null navigator key state is handled gracefully', (
+      tester,
+    ) async {
       // Router with a key that has no navigator attached yet.
       final detachedKey = GlobalKey<NavigatorState>();
       final router = NotificationRouter(

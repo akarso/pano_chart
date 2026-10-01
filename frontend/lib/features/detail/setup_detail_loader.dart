@@ -11,11 +11,13 @@ import 'http_fragility_api.dart';
 import 'http_mtf_regimes_api.dart';
 import 'http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
+import '../watchlist/watchlist_controller.dart';
 
 /// Loads candle data for [symbol] then pushes [DetailScreen].
 ///
-/// Used by [NotificationRouter] for setup-of-the-day notifications where
-/// only the symbol string is available.
+/// Used by [NotificationRouter] for setup-of-the-day and watchlist
+/// transition notifications. [timeframe] comes from the payload when
+/// present; otherwise defaults to `4h`.
 class SetupDetailLoader extends StatefulWidget {
   final String symbol;
   final String timeframe;
@@ -27,6 +29,7 @@ class SetupDetailLoader extends StatefulWidget {
   final MtfRegimesApi? mtfRegimesApi;
   final ScorecardApi? scorecardApi;
   final bool isProUser;
+  final WatchlistController? watchlist;
 
   const SetupDetailLoader({
     Key? key,
@@ -40,6 +43,7 @@ class SetupDetailLoader extends StatefulWidget {
     this.mtfRegimesApi,
     this.scorecardApi,
     this.isProUser = false,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -80,6 +84,8 @@ class _SetupDetailLoaderState extends State<SetupDetailLoader> {
             mtfRegimesApi: widget.mtfRegimesApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
+            isFavourite: widget.watchlist?.contains(widget.symbol) ?? false,
+            watchlist: widget.watchlist,
           ),
         ),
       );

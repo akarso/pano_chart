@@ -39,6 +39,10 @@ import '../../features/social/api/social_api.dart';
 import '../../features/social/infrastructure/http_device_registration_api.dart';
 import '../../features/social/infrastructure/http_social_api.dart';
 import '../../features/social/social_feed_view_model.dart';
+import '../../features/watchlist/http_watchlist_api.dart';
+import '../../features/watchlist/watchlist_api.dart';
+import '../../features/watchlist/watchlist_controller.dart';
+import '../../infrastructure/preferences_service.dart';
 
 /// Composition root responsible for explicitly wiring dependencies.
 class CompositionRoot {
@@ -224,5 +228,24 @@ class CompositionRoot {
       getAuthSecret: authSecretProvider,
       onUnauthorized: onUnauthorized,
     );
+  }
+
+  /// Creates a wired [WatchlistApi]. Not pro-gated (unlike e.g.
+  /// [createNotificationConfigApi]'s MTF-style siblings) — every user can
+  /// star symbols, only the transition *alert* is pro-only (ROADMAP
+  /// PR-101), so this is wired unconditionally wherever it's needed.
+  WatchlistApi createWatchlistApi() {
+    return HttpWatchlistApi(
+      baseUrl: apiBaseUrl,
+      getAuthSecret: authSecretProvider,
+      onUnauthorized: onUnauthorized,
+    );
+  }
+
+  /// One watchlist for the whole app. Screens share this instance so a
+  /// star toggled on the detail screen, the grid, or a notification deep
+  /// link is the same set.
+  WatchlistController createWatchlistController(PreferencesService prefs) {
+    return WatchlistController(prefs: prefs, api: createWatchlistApi());
   }
 }

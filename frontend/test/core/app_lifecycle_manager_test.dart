@@ -17,14 +17,12 @@ void main() {
 
     test('fires onPause for all registered pausables on paused', () {
       var pauseCount = 0;
-      manager.addPausable(Pausable(
-        onPause: () => pauseCount++,
-        onResume: () {},
-      ));
-      manager.addPausable(Pausable(
-        onPause: () => pauseCount++,
-        onResume: () {},
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => pauseCount++, onResume: () {}),
+      );
+      manager.addPausable(
+        Pausable(onPause: () => pauseCount++, onResume: () {}),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.paused);
 
@@ -34,10 +32,9 @@ void main() {
 
     test('fires onResume for all registered pausables on resumed', () {
       var resumeCount = 0;
-      manager.addPausable(Pausable(
-        onPause: () {},
-        onResume: () => resumeCount++,
-      ));
+      manager.addPausable(
+        Pausable(onPause: () {}, onResume: () => resumeCount++),
+      );
 
       // Pause first, then resume.
       manager.didChangeAppLifecycleState(AppLifecycleState.paused);
@@ -49,10 +46,9 @@ void main() {
 
     test('does not double-fire onPause on consecutive paused states', () {
       var pauseCount = 0;
-      manager.addPausable(Pausable(
-        onPause: () => pauseCount++,
-        onResume: () {},
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => pauseCount++, onResume: () {}),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.paused);
       manager.didChangeAppLifecycleState(AppLifecycleState.inactive);
@@ -62,10 +58,9 @@ void main() {
 
     test('does not fire onResume when already in foreground', () {
       var resumeCount = 0;
-      manager.addPausable(Pausable(
-        onPause: () {},
-        onResume: () => resumeCount++,
-      ));
+      manager.addPausable(
+        Pausable(onPause: () {}, onResume: () => resumeCount++),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
 
@@ -74,10 +69,9 @@ void main() {
 
     test('inactive triggers pause', () {
       var paused = false;
-      manager.addPausable(Pausable(
-        onPause: () => paused = true,
-        onResume: () {},
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => paused = true, onResume: () {}),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.inactive);
 
@@ -86,10 +80,9 @@ void main() {
 
     test('detached triggers pause', () {
       var paused = false;
-      manager.addPausable(Pausable(
-        onPause: () => paused = true,
-        onResume: () {},
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => paused = true, onResume: () {}),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.detached);
 
@@ -98,10 +91,7 @@ void main() {
 
     test('removePausable stops receiving callbacks', () {
       var pauseCount = 0;
-      final p = Pausable(
-        onPause: () => pauseCount++,
-        onResume: () {},
-      );
+      final p = Pausable(onPause: () => pauseCount++, onResume: () {});
       manager.addPausable(p);
       manager.removePausable(p);
 
@@ -114,10 +104,9 @@ void main() {
       manager.didChangeAppLifecycleState(AppLifecycleState.paused);
 
       var paused = false;
-      manager.addPausable(Pausable(
-        onPause: () => paused = true,
-        onResume: () {},
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => paused = true, onResume: () {}),
+      );
 
       expect(paused, isTrue);
     });
@@ -125,10 +114,9 @@ void main() {
     test('hidden state does not trigger pause or resume', () {
       var pauseCount = 0;
       var resumeCount = 0;
-      manager.addPausable(Pausable(
-        onPause: () => pauseCount++,
-        onResume: () => resumeCount++,
-      ));
+      manager.addPausable(
+        Pausable(onPause: () => pauseCount++, onResume: () => resumeCount++),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.hidden);
 
@@ -136,12 +124,45 @@ void main() {
       expect(resumeCount, 0);
     });
 
+    test('inactive then resumed is not a return from background', () {
+      bool? followed;
+      manager.addPausable(
+        Pausable(
+          onPause: () {},
+          onResume: () => followed = manager.resumeFollowsBackground,
+        ),
+      );
+
+      manager.didChangeAppLifecycleState(AppLifecycleState.inactive);
+      manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      expect(followed, isFalse);
+      expect(manager.isPaused, isFalse);
+    });
+
+    test('paused then resumed is a return from background', () {
+      bool? followed;
+      manager.addPausable(
+        Pausable(
+          onPause: () {},
+          onResume: () => followed = manager.resumeFollowsBackground,
+        ),
+      );
+
+      manager.didChangeAppLifecycleState(AppLifecycleState.paused);
+      manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      expect(followed, isTrue);
+    });
+
     test('full cycle: pause → resume → pause', () {
       final log = <String>[];
-      manager.addPausable(Pausable(
-        onPause: () => log.add('pause'),
-        onResume: () => log.add('resume'),
-      ));
+      manager.addPausable(
+        Pausable(
+          onPause: () => log.add('pause'),
+          onResume: () => log.add('resume'),
+        ),
+      );
 
       manager.didChangeAppLifecycleState(AppLifecycleState.paused);
       manager.didChangeAppLifecycleState(AppLifecycleState.resumed);
