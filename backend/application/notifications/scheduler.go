@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 	"pano_chart/backend/domain/setup"
@@ -116,6 +117,10 @@ type Scheduler struct {
 	watchlists     WatchlistProvider
 	regimes        RegimeStackProvider
 	watchlistState WatchlistStateStore
+
+	// evalStore — optional, enables PR-102 alert context (sparkline /
+	// symbolScore / rs from the shared evaluation snapshot).
+	evalStore ports.EvaluationStore
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -400,8 +405,11 @@ func (s *Scheduler) checkMarketState(ctx context.Context) {
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  msg,
-		Data:  map[string]string{"type": string(TypeMarket)},
-		Key:   fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
+		Data: AttachContext(
+			map[string]string{"type": string(TypeMarket)},
+			s.buildAlertContext(ctx, summary.Timeframe, "", &summary, nil, nil),
+		),
+		Key: fmt.Sprintf("market_%s_%s", summary.Timeframe, summary.State),
 	})
 }
 
@@ -525,11 +533,19 @@ func (s *Scheduler) checkMarketForUser(ctx context.Context, cfg NotificationConf
 	body := fmt.Sprintf("Market is %s (%.0f%%, %s)", best.label, best.prevalence*100, best.timeframe)
 	dateKey := now.Format("2006-01-02")
 
+	var tape *mkt.Summary
+	if sum, ok := summaries[best.timeframe]; ok {
+		tape = &sum
+	}
 	err := s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeMarket,
 		Title: "Market Update",
 		Body:  body,
-		Data:  map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
+		Data: AttachContext(
+			map[string]string{"type": string(TypeMarket), "timeframe": best.timeframe},
+			// Tape already paid for in checkMarketState; nil cache is fine.
+			s.buildAlertContext(ctx, best.timeframe, "", tape, nil, nil),
+		),
 		// best.label (Uptrend/Downtrend/Sideways/Silent) is included, not
 		// just the date — PR-075. Without it, one notification per
 		// (timeframe, day) meant a genuine intraday regime flip (e.g.
@@ -593,6 +609,7 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		}
 
 		dateKey := s.now().Format("2006-01-02")
+		ctxCache := newAlertBuildCache()
 		for _, cfg := range configs {
 			if !cfg.SetupOfDay {
 				continue
@@ -616,8 +633,15 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 				Type:  TypeSetup,
 				Title: "Setup of the Day",
 				Body:  body,
-				Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol, "timeframe": cfg.SetupTimeframe},
-				Key:   fmt.Sprintf("setup_%s_%s_%s", best.Symbol, cfg.SetupTimeframe, dateKey),
+				Data: AttachContext(
+					map[string]string{
+						"type":      string(TypeSetup),
+						"symbol":    best.Symbol,
+						"timeframe": cfg.SetupTimeframe,
+					},
+					s.buildAlertContext(ctx, cfg.SetupTimeframe, best.Symbol, nil, nil, ctxCache),
+				),
+				Key: fmt.Sprintf("setup_%s_%s_%s", best.Symbol, cfg.SetupTimeframe, dateKey),
 			})
 		}
 		return
@@ -646,8 +670,15 @@ func (s *Scheduler) checkSetupOfDay(ctx context.Context) {
 		Type:  TypeSetup,
 		Title: "Setup of the Day",
 		Body:  body,
-		Data:  map[string]string{"type": string(TypeSetup), "symbol": best.Symbol},
-		Key:   fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
+		Data: AttachContext(
+			map[string]string{
+				"type":      string(TypeSetup),
+				"symbol":    best.Symbol,
+				"timeframe": s.cfg.Timeframe,
+			},
+			s.buildAlertContext(ctx, s.cfg.Timeframe, best.Symbol, nil, nil, nil),
+		),
+		Key: fmt.Sprintf("setup_%s_%s", best.Symbol, dateKey),
 	})
 }
 

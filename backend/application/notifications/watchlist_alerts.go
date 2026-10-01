@@ -114,6 +114,7 @@ func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 
 	now := s.now()
 	stacks := make(map[string]watchlistStack)
+	ctxCache := newAlertBuildCache()
 	for _, userID := range userIDs {
 		if ctx.Err() != nil {
 			return
@@ -141,7 +142,7 @@ func (s *Scheduler) checkWatchlistTransitions(ctx context.Context) {
 				continue
 			}
 
-			s.checkWatchlistSymbol(ctx, cfg, symbol, stack, now)
+			s.checkWatchlistSymbol(ctx, cfg, symbol, stack, now, ctxCache)
 		}
 	}
 }
@@ -188,7 +189,14 @@ func (s *Scheduler) regimeStackFor(ctx context.Context, stacks map[string]watchl
 // deciding, per return path, whether next (the state to persist) advances
 // to frame.Dominant — see the sendWatchlistNotification failure branch for
 // the one case where it deliberately doesn't.
-func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationConfig, symbol string, stack mtf.Stack, now time.Time) {
+func (s *Scheduler) checkWatchlistSymbol(
+	ctx context.Context,
+	cfg NotificationConfig,
+	symbol string,
+	stack mtf.Stack,
+	now time.Time,
+	ctxCache *alertBuildCache,
+) {
 	timeframe := cfg.WatchlistTimeframe
 
 	frame := frameFor(stack, timeframe)
@@ -242,7 +250,7 @@ func (s *Scheduler) checkWatchlistSymbol(ctx context.Context, cfg NotificationCo
 		return
 	}
 
-	sendErr := s.sendWatchlistNotification(ctx, cfg, symbol, timeframe, title, prev, frame, now)
+	sendErr := s.sendWatchlistNotification(ctx, cfg, symbol, timeframe, title, prev, frame, stack.Alignment, now, ctxCache)
 	if sendErr != nil {
 		// Deliberately leave next == prev: the notification never reached
 		// the user, so this transition is still "owed". The next tick
@@ -321,21 +329,28 @@ func (s *Scheduler) sendWatchlistNotification(
 	symbol, timeframe, title string,
 	prev WatchlistTransitionState,
 	frame *mtf.TFRegime,
+	alignment float64,
 	now time.Time,
+	ctxCache *alertBuildCache,
 ) error {
 	return s.engine.SendToUser(ctx, cfg.UserID, Notification{
 		Type:  TypeWatchlist,
 		Title: title,
 		Body:  fmt.Sprintf("%s (%s): %s → %s", symbol, timeframe, prev.State, frame.Dominant),
-		Data: map[string]string{
-			"type":      string(TypeWatchlist),
-			"symbol":    symbol,
-			"timeframe": timeframe,
-			"from":      string(prev.State),
-			"to":        string(frame.Dominant),
-			"bias":      frame.Bias,
-			"score":     fmt.Sprintf("%.4f", frame.Score),
-		},
+		Data: AttachContext(
+			map[string]string{
+				"type":      string(TypeWatchlist),
+				"symbol":    symbol,
+				"timeframe": timeframe,
+				"from":      string(prev.State),
+				"to":        string(frame.Dominant),
+				"bias":      frame.Bias,
+				"score":     fmt.Sprintf("%.4f", frame.Score),
+			},
+			// Tape is resolved once per timeframe via ctxCache (not re-run
+			// per subscriber). Alignment comes from the already-paid stack.
+			s.buildAlertContext(ctx, timeframe, symbol, nil, &alignment, ctxCache),
+		),
 		// Key includes now's Unix timestamp — unlike the other checks'
 		// keys (e.g. market's, which deliberately embeds only a calendar
 		// date so the *engine's own* 24h dedup collapses same-day
