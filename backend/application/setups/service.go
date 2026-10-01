@@ -385,6 +385,9 @@ func trailingWindow(series domain.CandleSeries, n int) (domain.CandleSeries, err
 }
 
 // buildContext converts raw scoring output and candle data into a SetupContext.
+// MeanReversionScore is left at 0: no setup evaluator reads it today, and
+// production Sideways MRS weight is 0. Call meanReversionFromSeries when a
+// consumer (PR-110) needs it — avoid per-symbol allocations on notify scans.
 func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats, trendDir scoring.DirectedScoreCalculator) SetupContext {
 	regime, trendHealth := computeRegimeAndHealth(series, stats, trendDir)
 	return SetupContext{
@@ -397,6 +400,37 @@ func buildContext(symbol string, series domain.CandleSeries, stats usecases.Symb
 		TrendHealth:      trendHealth,
 		Regime:           regime,
 	}
+}
+
+// meanReversionFromSeries returns Lo–MacKinlay MRS on the same trailing
+// window Sideways V5 uses (sideways candle_count, default 110).
+func meanReversionFromSeries(series domain.CandleSeries) float64 {
+	window, err := trailingWindow(series, sidewaysCandleCount())
+	if err != nil || window.Len() < 2 {
+		return 0
+	}
+	closes := make([]float64, window.Len())
+	for i := 0; i < window.Len(); i++ {
+		c, err := window.At(i)
+		if err != nil {
+			return 0
+		}
+		closes[i] = c.Close()
+	}
+	return scoring.MeanReversionScore(closes)
+}
+
+// sidewaysCandleCount is Sideways V5's CandleCount without building a full
+// SidewaysV5Config (MRS window must match DetectSidewaysV5).
+func sidewaysCandleCount() int {
+	app := scoring.GetConfig()
+	if app == nil {
+		app = scoring.DefaultAppConfig()
+	}
+	if app.Sideways.CandleCount > 0 {
+		return app.Sideways.CandleCount
+	}
+	return 110
 }
 
 // computeRegimeAndHealth determines the dominant regime and computes health.

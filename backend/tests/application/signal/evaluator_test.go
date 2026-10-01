@@ -525,7 +525,7 @@ func TestEvaluator_sqliteRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 
 	tf := domain.Timeframe15m
 	emitted := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
@@ -574,7 +574,7 @@ func TestSQLite_UnresolvedReadySkipsNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 5; i++ {
 		_ = repo.Append(context.Background(), domainsignal.Signal{
@@ -603,7 +603,7 @@ func TestSQLite_UnresolvedInvalidTF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 30; i++ {
 		_ = repo.Append(context.Background(), domainsignal.Signal{
@@ -631,7 +631,7 @@ func TestSQLite_timeframeNormalization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer repo.Close()
+	defer func() { _ = repo.Close() }()
 	emitted := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	// Domain-valid but non-canonical spellings must not be treated as invalid.
 	for _, tc := range []struct {

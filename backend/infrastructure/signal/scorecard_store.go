@@ -63,7 +63,7 @@ func (r *SQLiteRepository) ScorecardAggregate(
 	if err != nil {
 		return out, fmt.Errorf("scorecard aggregate: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var bucket, n, hits int
 		var sumRet float64
@@ -115,7 +115,7 @@ func (r *SQLiteRepository) ScorecardSummary(
 	if err != nil {
 		return nil, fmt.Errorf("scorecard summary: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ports.ScorecardGroup
 	for rows.Next() {
 		var g ports.ScorecardGroup

@@ -27,6 +27,7 @@ sideways:
     oscillation_quality: 2.0   # OQS
     drift_control: 1.0         # DCS
     volatility_score: 1.0      # VOS
+    mean_reversion_weight: 0.0 # MRS (PR-104); 0 keeps Sideways V5 unchanged
 
 
 compression:

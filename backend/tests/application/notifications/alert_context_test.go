@@ -33,7 +33,7 @@ func TestDownsampleSparkline_110To30KeepsFirstLast(t *testing.T) {
 }
 
 func TestDownsampleSparkline_EmptyAndShort(t *testing.T) {
-	if got := notifications.DownsampleSparkline(nil, 30); got != nil && len(got) != 0 {
+	if got := notifications.DownsampleSparkline(nil, 30); len(got) != 0 {
 		t.Fatalf("nil input → %v", got)
 	}
 	short := []float64{1, 2, 3}
@@ -52,7 +52,7 @@ func TestDownsampleSparkline_TargetOneOrLess(t *testing.T) {
 	if got := notifications.DownsampleSparkline(in, 1); len(got) != 1 || got[0] != 10 {
 		t.Fatalf("target 1 = %v", got)
 	}
-	if got := notifications.DownsampleSparkline(in, 0); got != nil && len(got) != 0 {
+	if got := notifications.DownsampleSparkline(in, 0); len(got) != 0 {
 		t.Fatalf("target 0 = %v", got)
 	}
 }

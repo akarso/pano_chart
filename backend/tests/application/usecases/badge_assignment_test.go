@@ -510,9 +510,7 @@ func TestGetRankings_EmitsBadgeLabelsAndRangeContext(t *testing.T) {
 	if s, ok := bySym["SYMCUSDT"]; !ok || s.Label != "sideways" {
 		t.Fatalf("SYMCUSDT want sideways, got %#v", s)
 	} else {
-		if s.Context["range_low"] == 0 && s.Context["range_high"] == 0 {
-			// flat series at 50 — both equal is fine, but keys must exist
-		}
+		// flat series at 50 — range_low == range_high == 0 is fine; keys must exist.
 		if _, ok := s.Context["range_low"]; !ok {
 			t.Fatal("sideways missing range_low")
 		}

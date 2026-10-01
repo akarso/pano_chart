@@ -205,6 +205,7 @@ sectors:
 	}
 	if youngSec == nil {
 		t.Fatalf("missing young: %+v", result.Sectors)
+		return
 	}
 	if !youngSec.RSAvailable {
 		t.Fatal("young RS should be available on shared bars")

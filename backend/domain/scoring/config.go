@@ -2,6 +2,7 @@ package scoring
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -72,10 +73,11 @@ type SidewaysATRYAML struct {
 }
 
 type SidewaysWeights struct {
-	ChannelStructure   float64 `yaml:"channel_structure"`
-	OscillationQuality float64 `yaml:"oscillation_quality"`
-	DriftControl       float64 `yaml:"drift_control"`
-	VolatilityScore    float64 `yaml:"volatility_score"`
+	ChannelStructure    float64 `yaml:"channel_structure"`
+	OscillationQuality  float64 `yaml:"oscillation_quality"`
+	DriftControl        float64 `yaml:"drift_control"`
+	VolatilityScore     float64 `yaml:"volatility_score"`
+	MeanReversionWeight float64 `yaml:"mean_reversion_weight"` // PR-104; default 0
 }
 
 // --- Compression ---
@@ -222,6 +224,14 @@ func ResetConfig() {
 	globalConfigOnce = sync.Once{}
 }
 
+// ReplaceConfigForTest sets the process-wide config singleton (tests only —
+// not for production). Not safe with t.Parallel() against other config tests;
+// always pair with t.Cleanup(ResetConfig).
+func ReplaceConfigForTest(cfg *AppConfig) {
+	globalConfig = cfg
+	globalConfigErr = nil
+}
+
 // ---------------------------------------------------------------------------
 // Default / hardcoded fallback config — used when config.yaml is absent
 // (e.g. in unit tests that construct configs explicitly).
@@ -246,10 +256,11 @@ func DefaultAppConfig() *AppConfig {
 			},
 			RangeTolerance: 1.5,
 			Weights: SidewaysWeights{
-				ChannelStructure:   1.0,
-				OscillationQuality: 2.0,
-				DriftControl:       1.0,
-				VolatilityScore:    1.0,
+				ChannelStructure:    1.0,
+				OscillationQuality:  2.0,
+				DriftControl:        1.0,
+				VolatilityScore:     1.0,
+				MeanReversionWeight: 0.0,
 			},
 		},
 		Compression: CompressionYAML{
@@ -340,19 +351,32 @@ func NewSidewaysV5ConfigForTimeframe(tf string) SidewaysV5Config {
 		}
 	}
 
+	mrWeight := normalizeMeanReversionWeight(s.Weights.MeanReversionWeight)
+
 	return SidewaysV5Config{
-		N:                s.ExtremaWindow,
-		CandleCount:      s.CandleCount,
-		IdealATRRange:    ideal,
-		IdealATRRangeMap: s.IdealATRRange,
-		RangeTolerance:   s.RangeTolerance,
-		ATRMultiplier:    s.ATR.SpikeMultiplier,
-		W1:               s.Weights.ChannelStructure,
-		W2:               s.Weights.OscillationQuality,
-		W3:               s.Weights.DriftControl,
-		W4:               s.Weights.VolatilityScore,
-		ExtremaCount:     s.ExtremaMinCount,
+		N:                   s.ExtremaWindow,
+		CandleCount:         s.CandleCount,
+		IdealATRRange:       ideal,
+		IdealATRRangeMap:    s.IdealATRRange,
+		RangeTolerance:      s.RangeTolerance,
+		ATRMultiplier:       s.ATR.SpikeMultiplier,
+		W1:                  s.Weights.ChannelStructure,
+		W2:                  s.Weights.OscillationQuality,
+		W3:                  s.Weights.DriftControl,
+		W4:                  s.Weights.VolatilityScore,
+		MeanReversionWeight: mrWeight,
+		ExtremaCount:        s.ExtremaMinCount,
 	}
+}
+
+// normalizeMeanReversionWeight maps NaN, ±Inf, and negative weights to 0 so
+// Sideways composition stays in [0, 1]. yaml.v3 can load `.inf` as +Inf;
+// a negative-only clamp would still let infinity poison the weighted average.
+func normalizeMeanReversionWeight(w float64) float64 {
+	if math.IsNaN(w) || math.IsInf(w, 0) || w < 0 {
+		return 0
+	}
+	return w
 }
 
 // NewCompressionConfig builds a CompressionConfig from the loaded config.yaml.
