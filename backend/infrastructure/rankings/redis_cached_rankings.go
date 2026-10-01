@@ -24,12 +24,13 @@ type RedisClient interface {
 // On cache hits, badge signals are re-emitted so a multi-candle TTL does not
 // skip Track B logging (dedupe suppresses same-candle duplicates).
 type RedisCachedRankings struct {
-	next          usecases.RankingsUseCase
-	redis         RedisClient
-	ttl           time.Duration
-	keyPrefix     string
-	trendAlgo     string // process-wide; empty → predictability (PR-103)
-	signalEmitter ports.SignalEmitter // optional — PR-090
+	next            usecases.RankingsUseCase
+	redis           RedisClient
+	ttl             time.Duration
+	keyPrefix       string
+	trendAlgo       string              // process-wide; empty → predictability (PR-103)
+	compressionAlgo string              // process-wide; empty → absolute (PR-105)
+	signalEmitter   ports.SignalEmitter // optional — PR-090
 }
 
 // NewRedisCachedRankings constructs the decorator.
@@ -48,6 +49,12 @@ func NewRedisCachedRankings(next usecases.RankingsUseCase, redis RedisClient, tt
 func (r *RedisCachedRankings) SetTrendAlgo(algo string) {
 	mode, _ := usecases.ParseTrendAlgo(algo)
 	r.trendAlgo = string(mode)
+}
+
+// SetCompressionAlgo stamps absolute|percentile into cache keys (PR-105).
+func (r *RedisCachedRankings) SetCompressionAlgo(algo string) {
+	mode, _ := usecases.ParseCompressionAlgo(algo)
+	r.compressionAlgo = string(mode)
 }
 
 // SetSignalEmitter attaches an optional signal logger for cache-hit badge emits.
@@ -112,10 +119,14 @@ func (r *RedisCachedRankings) buildKey(req usecases.GetRankingsRequest) string {
 	if trend == "" {
 		trend = string(usecases.TrendAlgoPredictability)
 	}
+	comp := r.compressionAlgo
+	if comp == "" {
+		comp = string(usecases.CompressionAlgoAbsolute)
+	}
 	// domain.AlgoVersion so a scoring-engine bump never serves pre-change
 	// TotalScore / RS from a still-TTL'd entry (alert context + API).
-	// trend_algo mirrors sideways so TREND_ALGO flips do not poison the key.
-	return fmt.Sprintf("%s:%s:%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo, trend, domain.AlgoVersion)
+	// trend_algo / compression_algo mirror sideways so env flips do not poison keys.
+	return fmt.Sprintf("%s:%s:%s:%s:%s:%s:%s", r.keyPrefix, req.Timeframe.String(), string(req.Sort), algo, trend, comp, domain.AlgoVersion)
 }
 
 type cachedRankingsPayload struct {

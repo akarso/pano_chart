@@ -167,7 +167,7 @@ func main() {
 		}
 	}
 
-	// --- Trend algorithm selection (PR-103) ---
+	// --- Trend / compression algorithm selection (PR-103 / PR-105) ---
 	trendAlgoStr := os.Getenv("TREND_ALGO")
 	if trendAlgoStr == "" {
 		if cfg := scoring.GetConfig(); cfg != nil {
@@ -180,6 +180,18 @@ func main() {
 	}
 	trendCalc := usecases.TrendCalcFor(trendAlgo)
 	log.Printf("[main] trend algo=%s", trendAlgo)
+
+	compAlgoStr := os.Getenv("COMPRESSION_ALGO")
+	if compAlgoStr == "" {
+		if cfg := scoring.GetConfig(); cfg != nil {
+			compAlgoStr = cfg.Scoring.CompressionAlgo
+		}
+	}
+	compAlgo, compAlgoOK := usecases.ParseCompressionAlgo(compAlgoStr)
+	if !compAlgoOK {
+		log.Printf("[main] WARNING: invalid compression_algo %q, falling back to absolute", compAlgoStr)
+	}
+	log.Printf("[main] compression algo=%s", compAlgo)
 
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
@@ -279,6 +291,7 @@ func main() {
 	)
 	getRankingsUC.SetSignalEmitter(signalEmitter)
 	getRankingsUC.SetTrendAlgo(string(trendAlgo))
+	getRankingsUC.SetCompressionAlgo(string(compAlgo))
 
 	// --- Rankings cache TTL ---
 	rankingsCacheTTL := 3 * time.Minute // default
@@ -297,6 +310,7 @@ func main() {
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings_v2")
 	rankingsUC.SetTrendAlgo(string(trendAlgo))
+	rankingsUC.SetCompressionAlgo(string(compAlgo))
 	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
