@@ -3,6 +3,7 @@ package evaluation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -77,6 +78,10 @@ type RedisClient interface {
 // trendAlgo is part of the key so replicas with different TREND_ALGO values
 // during a rolling deploy do not overwrite each other (PR-103).
 //
+// For the default predictability engine, Get/GetSymbol also fall back to the
+// pre-namespaced keys eval:{tf} / eval:{tf}:at / eval:{tf}:sym so existing
+// store data stays visible until the next Put migrates it.
+//
 // Empty Put writes "[]" with a fresh at (valid empty snapshot, not a miss).
 type RedisEvaluationStore struct {
 	redis     RedisClient
@@ -107,6 +112,15 @@ func (s *RedisEvaluationStore) symbolKey(tf string) string {
 }
 func (s *RedisEvaluationStore) symbolTmpKey(tf string) string {
 	return fmt.Sprintf("eval:%s:%s:sym:tmp", s.trendAlgo, tf)
+}
+
+// legacy*Key are the pre-PR-103 key shapes (no trend segment).
+func legacyArrayKey(tf string) string  { return fmt.Sprintf("eval:%s", tf) }
+func legacyAtKey(tf string) string     { return fmt.Sprintf("eval:%s:at", tf) }
+func legacySymbolKey(tf string) string { return fmt.Sprintf("eval:%s:sym", tf) }
+
+func (s *RedisEvaluationStore) readLegacyFallback() bool {
+	return s.trendAlgo == domain.DefaultTrendAlgo
 }
 
 func parseTF(tf string) (domain.Timeframe, error) {
@@ -219,13 +233,22 @@ func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []in
 
 // Get implements ports.EvaluationStore. Array and at are read via MGET so
 // the returned timestamp matches the returned snapshot generation.
+// Predictability also falls back to pre-namespaced eval:{tf} keys.
 func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	vals, err := s.mget(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
+	evals, at, err := s.getPair(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
+	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) || !s.readLegacyFallback() {
+		return evals, at, err
+	}
+	return s.getPair(ctx, legacyArrayKey(tfStr), legacyAtKey(tfStr))
+}
+
+func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey string) ([]domain.EvaluationSnapshot, time.Time, error) {
+	vals, err := s.mget(ctx, arrayKey, atKey)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("mget array+at: %w", err)
 	}
@@ -245,13 +268,22 @@ func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.Eva
 
 // GetSymbol implements ports.EvaluationStore. Symbol hash field and at are
 // read atomically via Lua so the returned time matches the snapshot.
+// Predictability also falls back to pre-namespaced eval:{tf}:sym keys.
 func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{s.symbolKey(tfStr), s.atKey(tfStr)}, symbol)
+	snap, at, err := s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
+	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) || !s.readLegacyFallback() {
+		return snap, at, err
+	}
+	return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+}
+
+func (s *RedisEvaluationStore) getSymbolPair(ctx context.Context, symKey, atKey, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
+	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symKey, atKey}, symbol)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, fmt.Errorf("get symbol: %w", err)
 	}

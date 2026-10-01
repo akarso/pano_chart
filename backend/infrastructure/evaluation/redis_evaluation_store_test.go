@@ -441,6 +441,59 @@ func TestRedisEvaluationStore_TrendAlgoNamespacesKeys(t *testing.T) {
 	}
 }
 
+func TestRedisEvaluationStore_PredictabilityReadsLegacyKeys(t *testing.T) {
+	fr := newFakeRedis()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	legacy := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.42, SidewaysScore: 0.1,
+		AlgoVersion: domain.AlgoVersion,
+	}}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.strings[legacyArrayKey("1h")] = string(raw)
+	fr.strings[legacyAtKey("1h")] = strconv.FormatInt(at.Unix(), 10)
+	symJSON, err := json.Marshal(legacy[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.hashes[legacySymbolKey("1h")] = map[string]string{"BTCUSDT": string(symJSON)}
+
+	store := NewRedisEvaluationStore(fr) // default predictability
+	got, gotAt, err := store.Get(context.Background(), "1h")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if !gotAt.Equal(at) || len(got) != 1 || got[0].TrendScore != 0.42 {
+		t.Fatalf("Get legacy: at=%v got=%+v", gotAt, got)
+	}
+	sym, symAt, err := store.GetSymbol(context.Background(), "1h", "BTCUSDT")
+	if err != nil || !symAt.Equal(at) || sym.TrendScore != 0.42 {
+		t.Fatalf("GetSymbol legacy: %+v at=%v err=%v", sym, symAt, err)
+	}
+
+	// Namespaced Put must win over legacy on subsequent reads.
+	migrated := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.77, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	if err := store.Put(context.Background(), "1h", migrated, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = store.Get(context.Background(), "1h")
+	if err != nil || len(got) != 1 || got[0].TrendScore != 0.77 {
+		t.Fatalf("namespaced must prefer over legacy: %+v err=%v", got, err)
+	}
+
+	// Strength must not read predictability legacy keys.
+	strength := NewRedisEvaluationStore(fr)
+	strength.SetTrendAlgo("strength")
+	_, _, err = strength.Get(context.Background(), "1h")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("strength must not fall back to legacy, got %v", err)
+	}
+}
+
 func TestRedisRefreshLock_AcquireRelease(t *testing.T) {
 	fr := newFakeRedis()
 	lock := NewRedisRefreshLock(fr)
