@@ -441,6 +441,39 @@ func TestRedisEvaluationStore_TrendAlgoNamespacesKeys(t *testing.T) {
 	}
 }
 
+func TestRedisEvaluationStore_CompressionAlgoNamespacesKeys(t *testing.T) {
+	fr := newFakeRedis()
+	abs := NewRedisEvaluationStore(fr)
+	abs.SetCompressionAlgo("absolute")
+	pct := NewRedisEvaluationStore(fr)
+	pct.SetCompressionAlgo("percentile")
+	at := time.Now().UTC()
+
+	absEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", CompressionScore: 0.1, AlgoVersion: domain.AlgoVersion, CompressionAlgo: "absolute",
+	}}
+	pctEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", CompressionScore: 0.9, AlgoVersion: domain.AlgoVersion, CompressionAlgo: "percentile",
+	}}
+	if err := abs.Put(context.Background(), "1h", absEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := pct.Put(context.Background(), "1h", pctEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if abs.arrayKey("1h") == pct.arrayKey("1h") {
+		t.Fatal("compression algos must use distinct Redis keys")
+	}
+	gotAbs, _, err := abs.Get(context.Background(), "1h")
+	if err != nil || len(gotAbs) != 1 || gotAbs[0].CompressionScore != 0.1 {
+		t.Fatalf("absolute store polluted: %+v err=%v", gotAbs, err)
+	}
+	gotPct, _, err := pct.Get(context.Background(), "1h")
+	if err != nil || len(gotPct) != 1 || gotPct[0].CompressionScore != 0.9 {
+		t.Fatalf("percentile store polluted: %+v err=%v", gotPct, err)
+	}
+}
+
 func TestRedisEvaluationStore_PredictabilityReadsLegacyKeys(t *testing.T) {
 	fr := newFakeRedis()
 	at := time.Unix(1_700_000_000, 0).UTC()

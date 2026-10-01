@@ -23,6 +23,14 @@ func (s *Scheduler) SetTrendAlgo(algo string) {
 	s.trendAlgo = algo
 }
 
+// SetCompressionAlgo sets the expected EvaluationSnapshot.CompressionAlgo for store hits.
+func (s *Scheduler) SetCompressionAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultCompressionAlgo
+	}
+	s.compressionAlgo = algo
+}
+
 // alertBuildCache is tick-local: one MarketProvider / EvaluationStore /
 // RegimeStackProvider hit per distinct key, not per subscriber.
 type alertBuildCache struct {
@@ -82,7 +90,7 @@ func (s *Scheduler) buildAlertContext(
 	if s.evalStore != nil && timeframe != "" {
 		snap, at, err := s.evalStore.GetSymbol(ctx, timeframe, symbol)
 		if err == nil {
-			applySnapshotToContext(&out, snap, at, s.now(), timeframe, s.trendAlgo)
+			applySnapshotToContext(&out, snap, at, s.now(), timeframe, s.trendAlgo, s.compressionAlgo)
 		}
 	}
 	applySymbolFields(&out, knownSymbol)
@@ -139,8 +147,9 @@ func applySnapshotToContext(
 	now time.Time,
 	timeframe string,
 	wantTrendAlgo string,
+	wantCompressionAlgo string,
 ) {
-	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, wantTrendAlgo) {
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, wantTrendAlgo, snap.CompressionAlgo, wantCompressionAlgo) {
 		return
 	}
 	tf, err := domain.NewTimeframe(timeframe)

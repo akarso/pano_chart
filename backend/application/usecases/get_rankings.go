@@ -161,8 +161,7 @@ type GetRankings struct {
 	rsFilter        symbolSkipper                 // optional; composite.exclude names skip RS
 	trendAlgo       string                        // stamped on evaluation log snapshots (PR-103)
 	compressionAlgo CompressionAlgoMode           // absolute (default) | percentile (PR-105)
-	compCalc        scoring.SymbolScoreCalculator // cached for Scores["Compression"]
-	absCompCalc     scoring.SymbolScoreCalculator // absolute — breakout boost only
+	compCalc        scoring.SymbolScoreCalculator // cached for Scores["Compression"] (percentile)
 	candleFetchN    int                           // max(precision, WindowHint); cached
 }
 
@@ -228,17 +227,12 @@ func (g *GetRankings) SetCompressionAlgo(algo string) {
 }
 
 // refreshCompressionCache rebuilds the selected/absolute calculators and the
-// candle fetch window (PR-105). Percentile may request 500 bars; Rank /
-// sparkline / breakout still use precision-trimmed series.
+// candle fetch window (PR-105). Only compression receives a longer fetch
+// (percentile WindowHint); Rank always scores the precision-trimmed series,
+// so weighted calculators are not consulted for WindowHint.
 func (g *GetRankings) refreshCompressionCache() {
 	g.compCalc = CompressionCalcFor(g.compressionAlgo)
-	g.absCompCalc = CompressionCalcFor(CompressionAlgoAbsolute)
-	calcs := make([]scoring.SymbolScoreCalculator, 0, len(g.weights)+1)
-	for _, w := range g.weights {
-		calcs = append(calcs, w.Calculator)
-	}
-	calcs = append(calcs, g.compCalc)
-	g.candleFetchN = scoring.MaxWindowHint(g.precision, calcs...)
+	g.candleFetchN = scoring.MaxWindowHint(g.precision, g.compCalc)
 }
 
 // trimSeriesTail returns the last n candles (or the whole series when shorter).
@@ -342,17 +336,14 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 				return nil // skip on scoring error
 			}
 
-			compScore, err := g.compCalc.Score(cs)
+			compScore, err := g.scoreCompression(cs, precisionSeries)
 			if err != nil {
 				return nil
 			}
-			// Breakout boost stays on absolute compression so percentile does not
-			// change boost calibration. Window = precision (historical GetRankings
-			// parity); BreakoutScoreCalculator.Score still trims to CandleCount.
-			absBoost, err := g.absCompCalc.Score(precisionSeries)
-			if err != nil {
-				return nil
-			}
+			// Breakout boost stays on absolute compression over the full
+			// precision window (pre-PR-105 DetectCompression parity — do not
+			// use CompressionScoreCalculator.Score, which trims to CandleCount).
+			absBoost := scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score
 			breakResult := scoring.DetectBreakout(precisionSeries.All(), scoring.DefaultBreakoutConfig(), absBoost)
 			ranked[0].Scores["Compression"] = compScore
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
@@ -368,6 +359,7 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 			if g.snapshotLogger != nil {
 				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
 				snap.TrendAlgo = g.trendAlgo
+				snap.CompressionAlgo = string(g.compressionAlgo)
 				_ = g.snapshotLogger.Log(snap)
 			}
 			return nil
@@ -386,6 +378,16 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		out = append(out, scoredSymbol{symbol: s.symbol, series: s.series, ranked: s.ranked})
 	}
 	return out, nil
+}
+
+// scoreCompression returns Scores["Compression"]. Absolute mode runs
+// DetectCompression on the full precision series (historical GetRankings
+// window). Percentile scores the longer fetch via WindowHint.
+func (g *GetRankings) scoreCompression(fetched, precisionSeries domain.CandleSeries) (float64, error) {
+	if g.compressionAlgo == CompressionAlgoPercentile {
+		return g.compCalc.Score(fetched)
+	}
+	return scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score, nil
 }
 
 // buildRankedRows annotates scored symbols with volume, sparkline, and signal fields.

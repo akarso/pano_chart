@@ -73,26 +73,32 @@ type RedisClient interface {
 // RedisEvaluationStore persists EvaluationSnapshots in Redis.
 //
 // Keys (tf must be a canonical timeframe — validated on every call):
-//   - eval:{trend}:{tf}       → JSON array of snapshots
-//   - eval:{trend}:{tf}:at    → unix seconds of Put
-//   - eval:{trend}:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//   - eval:{trend}:{comp}:{tf}       → JSON array of snapshots
+//   - eval:{trend}:{comp}:{tf}:at    → unix seconds of Put
+//   - eval:{trend}:{comp}:{tf}:sym   → Redis hash field=symbol → JSON snapshot
 //
-// trendAlgo is part of the key so replicas with different TREND_ALGO values
-// during a rolling deploy do not overwrite each other (PR-103).
+// trendAlgo and compressionAlgo are part of the key so replicas with different
+// TREND_ALGO / COMPRESSION_ALGO values during a rolling deploy do not overwrite
+// each other (PR-103 / PR-105).
 //
-// For the default predictability engine, Get/GetSymbol also fall back to the
-// pre-namespaced keys eval:{tf} / eval:{tf}:at / eval:{tf}:sym so existing
-// store data stays visible until the next Put migrates it.
+// Absolute compression also falls back to pre-PR-105 trend-only keys
+// eval:{trend}:{tf}; predictability + absolute further falls back to bare
+// eval:{tf} / eval:{tf}:at / eval:{tf}:sym until the next Put migrates data.
 //
 // Empty Put writes "[]" with a fresh at (valid empty snapshot, not a miss).
 type RedisEvaluationStore struct {
-	redis     RedisClient
-	trendAlgo string
+	redis           RedisClient
+	trendAlgo       string
+	compressionAlgo string
 }
 
 // NewRedisEvaluationStore constructs the store.
 func NewRedisEvaluationStore(redis RedisClient) *RedisEvaluationStore {
-	return &RedisEvaluationStore{redis: redis, trendAlgo: domain.DefaultTrendAlgo}
+	return &RedisEvaluationStore{
+		redis:           redis,
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: domain.DefaultCompressionAlgo,
+	}
 }
 
 // SetTrendAlgo namespaces Redis keys by trend engine (predictability|strength).
@@ -103,17 +109,36 @@ func (s *RedisEvaluationStore) SetTrendAlgo(algo string) {
 	s.trendAlgo = algo
 }
 
+// SetCompressionAlgo namespaces Redis keys by compression engine (absolute|percentile).
+func (s *RedisEvaluationStore) SetCompressionAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultCompressionAlgo
+	}
+	s.compressionAlgo = algo
+}
+
 func (s *RedisEvaluationStore) arrayKey(tf string) string {
-	return fmt.Sprintf("eval:%s:%s", s.trendAlgo, tf)
+	return fmt.Sprintf("eval:%s:%s:%s", s.trendAlgo, s.compressionAlgo, tf)
 }
 func (s *RedisEvaluationStore) atKey(tf string) string {
-	return fmt.Sprintf("eval:%s:%s:at", s.trendAlgo, tf)
+	return fmt.Sprintf("eval:%s:%s:%s:at", s.trendAlgo, s.compressionAlgo, tf)
 }
 func (s *RedisEvaluationStore) symbolKey(tf string) string {
-	return fmt.Sprintf("eval:%s:%s:sym", s.trendAlgo, tf)
+	return fmt.Sprintf("eval:%s:%s:%s:sym", s.trendAlgo, s.compressionAlgo, tf)
 }
 func (s *RedisEvaluationStore) symbolTmpKey(tf string) string {
-	return fmt.Sprintf("eval:%s:%s:sym:tmp", s.trendAlgo, tf)
+	return fmt.Sprintf("eval:%s:%s:%s:sym:tmp", s.trendAlgo, s.compressionAlgo, tf)
+}
+
+// trendOnly*Key are the pre-PR-105 shapes (trend segment, no compression).
+func (s *RedisEvaluationStore) trendOnlyArrayKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) trendOnlyAtKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:at", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) trendOnlySymbolKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym", s.trendAlgo, tf)
 }
 
 // legacy*Key are the pre-PR-103 key shapes (no trend segment).
@@ -122,7 +147,11 @@ func legacyAtKey(tf string) string     { return fmt.Sprintf("eval:%s:at", tf) }
 func legacySymbolKey(tf string) string { return fmt.Sprintf("eval:%s:sym", tf) }
 
 func (s *RedisEvaluationStore) readLegacyFallback() bool {
-	return s.trendAlgo == domain.DefaultTrendAlgo
+	return s.trendAlgo == domain.DefaultTrendAlgo && s.compressionAlgo == domain.DefaultCompressionAlgo
+}
+
+func (s *RedisEvaluationStore) readTrendOnlyFallback() bool {
+	return s.compressionAlgo == domain.DefaultCompressionAlgo
 }
 
 func parseTF(tf string) (domain.Timeframe, error) {
@@ -235,7 +264,8 @@ func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []in
 
 // Get implements ports.EvaluationStore. Array and at are read via MGET so
 // the returned timestamp matches the returned snapshot generation.
-// Predictability also falls back to pre-namespaced eval:{tf} keys.
+// Absolute compression falls back to pre-PR-105 trend-only keys; predictability
+// + absolute also falls back to pre-namespaced eval:{tf} keys.
 func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
@@ -243,10 +273,19 @@ func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.Eva
 	}
 	tfStr := parsed.String()
 	evals, at, err := s.getPair(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
-	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) || !s.readLegacyFallback() {
+	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) {
 		return evals, at, err
 	}
-	return s.getPair(ctx, legacyArrayKey(tfStr), legacyAtKey(tfStr))
+	if s.readTrendOnlyFallback() {
+		evals, at, err = s.getPair(ctx, s.trendOnlyArrayKey(tfStr), s.trendOnlyAtKey(tfStr))
+		if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) {
+			return evals, at, err
+		}
+	}
+	if s.readLegacyFallback() {
+		return s.getPair(ctx, legacyArrayKey(tfStr), legacyAtKey(tfStr))
+	}
+	return nil, time.Time{}, ports.ErrEvaluationNotFound
 }
 
 func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey string) ([]domain.EvaluationSnapshot, time.Time, error) {
@@ -270,18 +309,15 @@ func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey stri
 
 // GetSymbol implements ports.EvaluationStore. Symbol hash field and at are
 // read atomically via Lua so the returned time matches the snapshot.
-// Predictability falls back to pre-namespaced eval:{tf}:sym keys only when
-// the namespaced generation is absent — a missing symbol in an existing
-// current batch must stay a miss (do not resurrect legacy entries).
+// Absolute compression falls back to trend-only / bare legacy keys only when
+// the current namespaced generation is absent — a missing symbol in an
+// existing current batch must stay a miss.
 func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	if !s.readLegacyFallback() {
-		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
-	}
 	present, err := s.generationPresent(ctx, s.atKey(tfStr))
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
@@ -289,7 +325,19 @@ func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string)
 	if present {
 		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
 	}
-	return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+	if s.readTrendOnlyFallback() {
+		present, err = s.generationPresent(ctx, s.trendOnlyAtKey(tfStr))
+		if err != nil {
+			return domain.EvaluationSnapshot{}, time.Time{}, err
+		}
+		if present {
+			return s.getSymbolPair(ctx, s.trendOnlySymbolKey(tfStr), s.trendOnlyAtKey(tfStr), symbol)
+		}
+	}
+	if s.readLegacyFallback() {
+		return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+	}
+	return domain.EvaluationSnapshot{}, time.Time{}, ports.ErrEvaluationNotFound
 }
 
 // generationPresent reports whether a Put generation exists for atKey.

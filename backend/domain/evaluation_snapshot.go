@@ -9,22 +9,37 @@ const AlgoVersion = "v5.1.0"
 // DefaultTrendAlgo is the legacy / unspecified trend engine identity.
 const DefaultTrendAlgo = "predictability"
 
+// DefaultCompressionAlgo is the legacy / unspecified compression engine identity.
+const DefaultCompressionAlgo = "absolute"
+
 // EvaluationIdentityOK reports whether a stored snapshot was produced by the
-// expected scoring engine and trend algorithm. Empty trendAlgo / wantTrendAlgo
-// are treated as DefaultTrendAlgo (pre-PR-103 rows and callers).
-func EvaluationIdentityOK(algoVersion, trendAlgo, wantTrendAlgo string) bool {
+// expected scoring engine, trend algorithm, and compression algorithm.
+// Empty trend / compression fields (got or want) default to
+// DefaultTrendAlgo / DefaultCompressionAlgo (pre-PR-103 / pre-PR-105 rows).
+func EvaluationIdentityOK(algoVersion, trendAlgo, wantTrendAlgo, compressionAlgo, wantCompressionAlgo string) bool {
 	if algoVersion != AlgoVersion {
 		return false
 	}
-	got := trendAlgo
-	if got == "" {
-		got = DefaultTrendAlgo
+	gotTrend := trendAlgo
+	if gotTrend == "" {
+		gotTrend = DefaultTrendAlgo
 	}
-	want := wantTrendAlgo
-	if want == "" {
-		want = DefaultTrendAlgo
+	wantTrend := wantTrendAlgo
+	if wantTrend == "" {
+		wantTrend = DefaultTrendAlgo
 	}
-	return got == want
+	if gotTrend != wantTrend {
+		return false
+	}
+	gotComp := compressionAlgo
+	if gotComp == "" {
+		gotComp = DefaultCompressionAlgo
+	}
+	wantComp := wantCompressionAlgo
+	if wantComp == "" {
+		wantComp = DefaultCompressionAlgo
+	}
+	return gotComp == wantComp
 }
 
 // EvaluationSnapshot captures all regime scores and market state
@@ -84,4 +99,8 @@ type EvaluationSnapshot struct {
 	// TrendAlgo records which trend engine produced TrendScore / TotalScore
 	// (predictability | strength). Empty on pre-PR-103 store rows.
 	TrendAlgo string `json:"trendAlgo,omitempty"`
+
+	// CompressionAlgo records which compression engine produced CompressionScore
+	// (absolute | percentile). Empty on pre-PR-105 store rows.
+	CompressionAlgo string `json:"compressionAlgo,omitempty"`
 }

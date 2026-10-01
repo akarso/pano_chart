@@ -394,11 +394,13 @@ func main() {
 	// below populates it when PC_EVAL_REFRESH is enabled (default on).
 	evalStore := infraeval.NewRedisEvaluationStore(redisClient)
 	evalStore.SetTrendAlgo(string(trendAlgo))
+	evalStore.SetCompressionAlgo(string(compAlgo))
 
 	// --- Multi-timeframe regime stack (PR-099) — reads the same store, no
 	// candle fetch or rescoring ---
 	mtfService := mtf.NewService(evalStore)
 	mtfService.SetTrendAlgo(string(trendAlgo))
+	mtfService.SetCompressionAlgo(string(compAlgo))
 
 	// --- Market state service (canonical regime/breadth classification —
 	// see PR-073: this replaced a second, independently-evolved softmax
@@ -406,6 +408,7 @@ func main() {
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
 	evalProvider.SetStore(evalStore)
 	evalProvider.SetTrendAlgo(string(trendAlgo))
+	evalProvider.SetCompressionAlgo(string(compAlgo))
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
 	log.Println("[main] Market state service initialized")
@@ -527,6 +530,7 @@ func main() {
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
 	setupService.SetTrendDirectionCalc(trendCalc)
 	setupService.SetTrendAlgo(string(trendAlgo))
+	setupService.SetCompressionAlgo(string(compAlgo))
 	setupService.SetMarketProvider(marketService)
 	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupService.SetEvaluationStore(evalStore)
@@ -630,6 +634,7 @@ func main() {
 	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
 		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
 		evalRefresher.SetTrendAlgo(string(trendAlgo))
+		evalRefresher.SetCompressionAlgo(string(compAlgo))
 		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
 		backgroundWG.Add(1)
 		go func() {
@@ -773,6 +778,7 @@ func main() {
 			notifyScheduler.SetWatchlistStateStore(watchlistStore)
 			notifyScheduler.SetEvaluationStore(evalStore)
 			notifyScheduler.SetTrendAlgo(string(trendAlgo))
+			notifyScheduler.SetCompressionAlgo(string(compAlgo))
 			log.Println("[main] Watchlist transition alerts wired into scheduler")
 			backgroundWG.Add(1)
 			go func() {
