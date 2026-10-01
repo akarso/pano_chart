@@ -136,6 +136,7 @@ type Scheduler struct {
 	// evalStore — optional, enables PR-102 alert context (sparkline /
 	// symbolScore / rs from the shared evaluation snapshot).
 	evalStore ports.EvaluationStore
+	trendAlgo string
 }
 
 // NewScheduler creates the scheduler. Pass nil for any provider to skip that check.
@@ -154,6 +155,7 @@ func NewScheduler(
 		cfg:        cfg,
 		now:        time.Now,
 		marketHold: newMarketRegimeHold(cfg.MarketRegimeHoldDuration),
+		trendAlgo:  domain.DefaultTrendAlgo,
 	}
 }
 

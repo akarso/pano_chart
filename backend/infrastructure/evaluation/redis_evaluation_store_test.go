@@ -245,7 +245,7 @@ func TestRedisEvaluationStore_RoundTrip(t *testing.T) {
 		t.Errorf("ComputedAt: want %d, got %d", at.Unix(), got[0].ComputedAt)
 	}
 
-	raw := fr.strings[arrayKey("1h")]
+	raw := fr.strings[store.arrayKey("1h")]
 	var probe []map[string]any
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
 		t.Fatalf("json: %v", err)
@@ -400,11 +400,44 @@ func TestRedisEvaluationStore_TTLUsesSharedHelper(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	want := domain.EvaluationStoreTTL(domain.Timeframe15m)
-	if fr.ttls[arrayKey("15m")] != want {
-		t.Errorf("15m TTL: want %v, got %v", want, fr.ttls[arrayKey("15m")])
+	if fr.ttls[store.arrayKey("15m")] != want {
+		t.Errorf("15m TTL: want %v, got %v", want, fr.ttls[store.arrayKey("15m")])
 	}
-	if _, err := strconv.ParseInt(fr.strings[atKey("15m")], 10, 64); err != nil {
+	if _, err := strconv.ParseInt(fr.strings[store.atKey("15m")], 10, 64); err != nil {
 		t.Errorf("at key: %v", err)
+	}
+}
+
+func TestRedisEvaluationStore_TrendAlgoNamespacesKeys(t *testing.T) {
+	fr := newFakeRedis()
+	pred := NewRedisEvaluationStore(fr)
+	pred.SetTrendAlgo("predictability")
+	strength := NewRedisEvaluationStore(fr)
+	strength.SetTrendAlgo("strength")
+	at := time.Now().UTC()
+
+	predEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.1, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	strengthEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion, TrendAlgo: "strength",
+	}}
+	if err := pred.Put(context.Background(), "1h", predEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := strength.Put(context.Background(), "1h", strengthEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if pred.arrayKey("1h") == strength.arrayKey("1h") {
+		t.Fatal("trend algos must use distinct Redis keys")
+	}
+	gotPred, _, err := pred.Get(context.Background(), "1h")
+	if err != nil || len(gotPred) != 1 || gotPred[0].TrendScore != 0.1 {
+		t.Fatalf("predictability store polluted: %+v err=%v", gotPred, err)
+	}
+	gotStrength, _, err := strength.Get(context.Background(), "1h")
+	if err != nil || len(gotStrength) != 1 || gotStrength[0].TrendScore != 0.9 {
+		t.Fatalf("strength store polluted: %+v err=%v", gotStrength, err)
 	}
 }
 

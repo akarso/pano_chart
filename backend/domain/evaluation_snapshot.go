@@ -1,52 +1,30 @@
 package domain
 
-import (
-	"sync"
-	"time"
-)
+import "time"
 
 // AlgoVersion is the hardcoded scoring engine version tag.
 // It must be updated whenever scoring logic changes materially.
 const AlgoVersion = "v5.1.0"
 
-const defaultTrendAlgo = "predictability"
-
-var (
-	activeTrendAlgoMu sync.RWMutex
-	activeTrendAlgo   = defaultTrendAlgo
-)
-
-// ConfigureTrendAlgo sets the process-wide trend engine identity stamped on
-// and required of evaluation snapshots (PR-103). Empty / unknown → predictability.
-// Call once from main after parsing scoring.trend_algo / TREND_ALGO.
-func ConfigureTrendAlgo(algo string) {
-	if algo == "" {
-		algo = defaultTrendAlgo
-	}
-	activeTrendAlgoMu.Lock()
-	activeTrendAlgo = algo
-	activeTrendAlgoMu.Unlock()
-}
-
-// ActiveTrendAlgo returns the process trend engine identity.
-func ActiveTrendAlgo() string {
-	activeTrendAlgoMu.RLock()
-	defer activeTrendAlgoMu.RUnlock()
-	return activeTrendAlgo
-}
+// DefaultTrendAlgo is the legacy / unspecified trend engine identity.
+const DefaultTrendAlgo = "predictability"
 
 // EvaluationIdentityOK reports whether a stored snapshot was produced by the
-// current scoring engine and trend algorithm. Empty TrendAlgo is treated as
-// predictability (pre-PR-103 rows) so flipping to strength invalidates them.
-func EvaluationIdentityOK(algoVersion, trendAlgo string) bool {
+// expected scoring engine and trend algorithm. Empty trendAlgo / wantTrendAlgo
+// are treated as DefaultTrendAlgo (pre-PR-103 rows and callers).
+func EvaluationIdentityOK(algoVersion, trendAlgo, wantTrendAlgo string) bool {
 	if algoVersion != AlgoVersion {
 		return false
 	}
 	got := trendAlgo
 	if got == "" {
-		got = defaultTrendAlgo
+		got = DefaultTrendAlgo
 	}
-	return got == ActiveTrendAlgo()
+	want := wantTrendAlgo
+	if want == "" {
+		want = DefaultTrendAlgo
+	}
+	return got == want
 }
 
 // EvaluationSnapshot captures all regime scores and market state

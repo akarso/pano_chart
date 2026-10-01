@@ -15,6 +15,14 @@ func (s *Scheduler) SetEvaluationStore(store ports.EvaluationStore) {
 	s.evalStore = store
 }
 
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits.
+func (s *Scheduler) SetTrendAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultTrendAlgo
+	}
+	s.trendAlgo = algo
+}
+
 // alertBuildCache is tick-local: one MarketProvider / EvaluationStore /
 // RegimeStackProvider hit per distinct key, not per subscriber.
 type alertBuildCache struct {
@@ -74,7 +82,7 @@ func (s *Scheduler) buildAlertContext(
 	if s.evalStore != nil && timeframe != "" {
 		snap, at, err := s.evalStore.GetSymbol(ctx, timeframe, symbol)
 		if err == nil {
-			applySnapshotToContext(&out, snap, at, s.now(), timeframe)
+			applySnapshotToContext(&out, snap, at, s.now(), timeframe, s.trendAlgo)
 		}
 	}
 	applySymbolFields(&out, knownSymbol)
@@ -130,8 +138,9 @@ func applySnapshotToContext(
 	at time.Time,
 	now time.Time,
 	timeframe string,
+	wantTrendAlgo string,
 ) {
-	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, wantTrendAlgo) {
 		return
 	}
 	tf, err := domain.NewTimeframe(timeframe)

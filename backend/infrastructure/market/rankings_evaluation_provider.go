@@ -17,10 +17,11 @@ import (
 // RankingsEvaluationProvider adapts RankingsUseCase to EvaluationProvider,
 // preferring the evaluation store when fresh (PR-089b).
 type RankingsEvaluationProvider struct {
-	rankings usecases.RankingsUseCase
-	store    ports.EvaluationStore // optional; nil → always compute
-	now      func() time.Time
-	sf       singleflight.Group
+	rankings  usecases.RankingsUseCase
+	store     ports.EvaluationStore // optional; nil → always compute
+	trendAlgo string
+	now       func() time.Time
+	sf        singleflight.Group
 	// fallbackEnter is invoked when entering computeFromRankings (tests:
 	// wait until all siblings have joined before releasing the flight).
 	fallbackEnter func()
@@ -29,14 +30,22 @@ type RankingsEvaluationProvider struct {
 // NewRankingsEvaluationProvider constructs the adapter.
 func NewRankingsEvaluationProvider(r usecases.RankingsUseCase) *RankingsEvaluationProvider {
 	return &RankingsEvaluationProvider{
-		rankings: r,
-		now:      time.Now,
+		rankings:  r,
+		trendAlgo: domain.DefaultTrendAlgo,
+		now:       time.Now,
 	}
 }
 
 // SetStore attaches the evaluation store (optional).
 func (p *RankingsEvaluationProvider) SetStore(store ports.EvaluationStore) {
 	p.store = store
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits
+// and stamps fallback snapshots from rankings.
+func (p *RankingsEvaluationProvider) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	p.trendAlgo = string(mode)
 }
 
 // SetNow overrides the clock (tests).
@@ -101,7 +110,7 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 		log.Printf("[eval] provider reason=empty tf=%s", timeframe)
 		return nil, false, nil
 	}
-	if !algoVersionOK(evals) {
+	if !algoVersionOK(evals, p.trendAlgo) {
 		log.Printf("[eval] provider reason=algo tf=%s", timeframe)
 		return nil, false, nil
 	}
@@ -114,9 +123,9 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 	return evals, true, nil
 }
 
-func algoVersionOK(evals []domain.EvaluationSnapshot) bool {
+func algoVersionOK(evals []domain.EvaluationSnapshot, wantTrendAlgo string) bool {
 	for _, e := range evals {
-		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo) {
+		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo, wantTrendAlgo) {
 			return false
 		}
 	}
@@ -137,7 +146,7 @@ func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf
 		if err != nil {
 			return nil, err
 		}
-		return appmarket.SnapshotsFromRankings(out.Results, timeframe, time.Time{}), nil
+		return appmarket.SnapshotsFromRankings(out.Results, timeframe, time.Time{}, p.trendAlgo), nil
 	})
 	// Signal after DoChan so tests can wait until every sibling has joined
 	// the flight before releasing Execute.

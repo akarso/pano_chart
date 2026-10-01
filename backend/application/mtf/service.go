@@ -46,13 +46,22 @@ type Stack struct {
 
 // Service builds a Stack from the shared evaluation store.
 type Service struct {
-	store ports.EvaluationStore
-	now   func() time.Time
+	store     ports.EvaluationStore
+	trendAlgo string
+	now       func() time.Time
 }
 
 // NewService constructs the service.
 func NewService(store ports.EvaluationStore) *Service {
-	return &Service{store: store, now: time.Now}
+	return &Service{store: store, trendAlgo: domain.DefaultTrendAlgo, now: time.Now}
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits.
+func (s *Service) SetTrendAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultTrendAlgo
+	}
+	s.trendAlgo = algo
 }
 
 // Calculate reads every timeframe's stored evaluation for symbol and derives
@@ -81,7 +90,7 @@ func (s *Service) Calculate(ctx context.Context, symbol string) (Stack, error) {
 			}
 			continue // miss / transport error: skip this frame.
 		}
-		if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
+		if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo) {
 			continue
 		}
 		if !domain.EvaluationStoreFresh(at, now(), tf) {

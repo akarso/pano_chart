@@ -205,10 +205,6 @@ func TestRankingsEvaluationProvider_AlgoVersionMismatchFallsBack(t *testing.T) {
 }
 
 func TestRankingsEvaluationProvider_TrendAlgoMismatchFallsBack(t *testing.T) {
-	prev := domain.ActiveTrendAlgo()
-	t.Cleanup(func() { domain.ConfigureTrendAlgo(prev) })
-	domain.ConfigureTrendAlgo("strength")
-
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	store := &stubEvalStore{
 		evals: []domain.EvaluationSnapshot{{
@@ -221,6 +217,7 @@ func TestRankingsEvaluationProvider_TrendAlgoMismatchFallsBack(t *testing.T) {
 	rankings := &stubRankings{rows: []usecases.RankedResult{{Symbol: sym}}}
 	p := NewRankingsEvaluationProvider(rankings)
 	p.SetStore(store)
+	p.SetTrendAlgo("strength")
 	p.SetNow(func() time.Time { return now })
 
 	got, err := p.GetLatestEvaluations(context.Background(), "1h")

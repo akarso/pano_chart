@@ -58,8 +58,9 @@ type SetupService struct {
 	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
 	// trendDir recovers trend magnitude+bias for overlay / dominantRegime.
 	// Must match the rankings / WeightedSymbolScorer trend engine (PR-103).
-	trendDir scoring.DirectedScoreCalculator
-	now      func() time.Time
+	trendDir  scoring.DirectedScoreCalculator
+	trendAlgo string // expected EvaluationSnapshot.TrendAlgo for store hits
+	now       func() time.Time
 }
 
 const candleLimit = 200
@@ -77,6 +78,7 @@ func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScor
 		scorer:     scorer,
 		engine:     eng,
 		trendDir:   &scoring.TrendPredictabilityScoreCalculator{},
+		trendAlgo:  domain.DefaultTrendAlgo,
 		now:        time.Now,
 	}
 }
@@ -89,6 +91,13 @@ func (s *SetupService) SetTrendDirectionCalc(c scoring.DirectedScoreCalculator) 
 		return
 	}
 	s.trendDir = c
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits
+// (PR-103). Independent of SetTrendDirectionCalc (live overlay engine).
+func (s *SetupService) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	s.trendAlgo = string(mode)
 }
 
 // SetMarketProvider injects the market state provider (optional).
@@ -302,9 +311,9 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		}
 		return usecases.SymbolStats{}, false, nil
 	}
-	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo) {
 		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q want=%q/%q",
-			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, domain.AlgoVersion, domain.ActiveTrendAlgo())
+			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, domain.AlgoVersion, s.trendAlgo)
 		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now

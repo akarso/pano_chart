@@ -179,7 +179,6 @@ func main() {
 		log.Printf("[main] WARNING: invalid trend_algo %q, falling back to predictability", trendAlgoStr)
 	}
 	trendCalc := usecases.TrendCalcFor(trendAlgo)
-	domain.ConfigureTrendAlgo(string(trendAlgo))
 	log.Printf("[main] trend algo=%s", trendAlgo)
 
 	// --- Use cases ---
@@ -279,6 +278,7 @@ func main() {
 		snapshotLogger,
 	)
 	getRankingsUC.SetSignalEmitter(signalEmitter)
+	getRankingsUC.SetTrendAlgo(string(trendAlgo))
 
 	// --- Rankings cache TTL ---
 	rankingsCacheTTL := 3 * time.Minute // default
@@ -379,16 +379,19 @@ func main() {
 	// Always constructed so Market Pulse and setups can read; the refresher
 	// below populates it when PC_EVAL_REFRESH is enabled (default on).
 	evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+	evalStore.SetTrendAlgo(string(trendAlgo))
 
 	// --- Multi-timeframe regime stack (PR-099) — reads the same store, no
 	// candle fetch or rescoring ---
 	mtfService := mtf.NewService(evalStore)
+	mtfService.SetTrendAlgo(string(trendAlgo))
 
 	// --- Market state service (canonical regime/breadth classification —
 	// see PR-073: this replaced a second, independently-evolved softmax
 	// pipeline that could disagree with this one about the same market) ---
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
 	evalProvider.SetStore(evalStore)
+	evalProvider.SetTrendAlgo(string(trendAlgo))
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
 	log.Println("[main] Market state service initialized")
@@ -509,6 +512,7 @@ func main() {
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
 	setupService.SetTrendDirectionCalc(trendCalc)
+	setupService.SetTrendAlgo(string(trendAlgo))
 	setupService.SetMarketProvider(marketService)
 	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupService.SetEvaluationStore(evalStore)
@@ -611,6 +615,7 @@ func main() {
 	// per interval. Readers (provider/setups) already hold evalStore above.
 	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
 		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
+		evalRefresher.SetTrendAlgo(string(trendAlgo))
 		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
 		backgroundWG.Add(1)
 		go func() {
@@ -753,6 +758,7 @@ func main() {
 			notifyScheduler.SetRegimeStackProvider(mtfService)
 			notifyScheduler.SetWatchlistStateStore(watchlistStore)
 			notifyScheduler.SetEvaluationStore(evalStore)
+			notifyScheduler.SetTrendAlgo(string(trendAlgo))
 			log.Println("[main] Watchlist transition alerts wired into scheduler")
 			backgroundWG.Add(1)
 			go func() {

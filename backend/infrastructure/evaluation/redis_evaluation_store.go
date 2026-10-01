@@ -70,24 +70,44 @@ type RedisClient interface {
 // RedisEvaluationStore persists EvaluationSnapshots in Redis.
 //
 // Keys (tf must be a canonical timeframe — validated on every call):
-//   - eval:{tf}       → JSON array of snapshots
-//   - eval:{tf}:at    → unix seconds of Put
-//   - eval:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//   - eval:{trend}:{tf}       → JSON array of snapshots
+//   - eval:{trend}:{tf}:at    → unix seconds of Put
+//   - eval:{trend}:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//
+// trendAlgo is part of the key so replicas with different TREND_ALGO values
+// during a rolling deploy do not overwrite each other (PR-103).
 //
 // Empty Put writes "[]" with a fresh at (valid empty snapshot, not a miss).
 type RedisEvaluationStore struct {
-	redis RedisClient
+	redis     RedisClient
+	trendAlgo string
 }
 
 // NewRedisEvaluationStore constructs the store.
 func NewRedisEvaluationStore(redis RedisClient) *RedisEvaluationStore {
-	return &RedisEvaluationStore{redis: redis}
+	return &RedisEvaluationStore{redis: redis, trendAlgo: domain.DefaultTrendAlgo}
 }
 
-func arrayKey(tf string) string     { return fmt.Sprintf("eval:%s", tf) }
-func atKey(tf string) string        { return fmt.Sprintf("eval:%s:at", tf) }
-func symbolKey(tf string) string    { return fmt.Sprintf("eval:%s:sym", tf) }
-func symbolTmpKey(tf string) string { return fmt.Sprintf("eval:%s:sym:tmp", tf) }
+// SetTrendAlgo namespaces Redis keys by trend engine (predictability|strength).
+func (s *RedisEvaluationStore) SetTrendAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultTrendAlgo
+	}
+	s.trendAlgo = algo
+}
+
+func (s *RedisEvaluationStore) arrayKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) atKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:at", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolTmpKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym:tmp", s.trendAlgo, tf)
+}
 
 func parseTF(tf string) (domain.Timeframe, error) {
 	parsed, err := domain.NewTimeframe(tf)
@@ -189,7 +209,7 @@ func marshalPutArgs(stamped []domain.EvaluationSnapshot, atUnix int64, ttl time.
 
 func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []interface{}) error {
 	_, err := s.redis.Eval(ctx, putEvalScript, []string{
-		arrayKey(tf), atKey(tf), symbolKey(tf), symbolTmpKey(tf),
+		s.arrayKey(tf), s.atKey(tf), s.symbolKey(tf), s.symbolTmpKey(tf),
 	}, args...)
 	if err != nil {
 		return fmt.Errorf("atomic put: %w", err)
@@ -205,7 +225,7 @@ func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.Eva
 		return nil, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	vals, err := s.mget(ctx, arrayKey(tfStr), atKey(tfStr))
+	vals, err := s.mget(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("mget array+at: %w", err)
 	}
@@ -231,7 +251,7 @@ func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string)
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symbolKey(tfStr), atKey(tfStr)}, symbol)
+	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{s.symbolKey(tfStr), s.atKey(tfStr)}, symbol)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, fmt.Errorf("get symbol: %w", err)
 	}

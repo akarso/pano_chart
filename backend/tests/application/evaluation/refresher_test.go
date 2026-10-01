@@ -245,7 +245,7 @@ func TestRefresher_LeaderRefreshesAgainAfterRelease(t *testing.T) {
 	if store.putLen() != 1 {
 		t.Fatalf("first put: %d", store.putLen())
 	}
-	if lock.held("eval:refresh:15m") {
+	if lock.held("eval:refresh:predictability:15m") {
 		t.Fatal("lock must be released after successful Put")
 	}
 	if lock.release < 1 {
@@ -372,10 +372,6 @@ func TestRefresher_StoreFreshSkipsRescore(t *testing.T) {
 }
 
 func TestRefresher_TrendAlgoMismatchForcesRescore(t *testing.T) {
-	prev := domain.ActiveTrendAlgo()
-	t.Cleanup(func() { domain.ConfigureTrendAlgo(prev) })
-	domain.ConfigureTrendAlgo("predictability")
-
 	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
 		"15m": {sampleRanked("BTCUSDT")},
 	}}
@@ -387,6 +383,7 @@ func TestRefresher_TrendAlgoMismatchForcesRescore(t *testing.T) {
 	lock.now = func() time.Time { return now }
 
 	leader := appeval.NewRefresher(rank, store, []string{"15m"})
+	leader.SetTrendAlgo("predictability")
 	leader.SetLock(lock, "leader")
 	leader.SetNow(func() time.Time { return now })
 	leader.Tick(context.Background())
@@ -398,9 +395,9 @@ func TestRefresher_TrendAlgoMismatchForcesRescore(t *testing.T) {
 		t.Fatalf("stamped TrendAlgo=%q err=%v", got[0].TrendAlgo, err)
 	}
 
-	// Process flips to strength while the predictability Put is still time-fresh.
-	domain.ConfigureTrendAlgo("strength")
+	// Same store key (fakeStore is TF-only): strength identity must force rescore.
 	peer := appeval.NewRefresher(rank, store, []string{"15m"})
+	peer.SetTrendAlgo("strength")
 	peer.SetLock(lock, "peer")
 	peer.SetNow(func() time.Time { return at.Add(time.Second) })
 	peer.Tick(context.Background())
@@ -415,6 +412,45 @@ func TestRefresher_TrendAlgoMismatchForcesRescore(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].TrendAlgo != "strength" {
 		t.Fatalf("after flip TrendAlgo=%q err=%v", got[0].TrendAlgo, err)
 	}
+}
+
+func TestRefresher_TrendAlgoIsolatesRefreshLocks(t *testing.T) {
+	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
+		"15m": {sampleRanked("BTCUSDT")},
+	}}
+	store := &fakeStore{}
+	lock := newRecordingLock()
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	lock.now = func() time.Time { return t0 }
+
+	pred := appeval.NewRefresher(rank, store, []string{"15m"})
+	pred.SetTrendAlgo("predictability")
+	pred.SetLock(lock, "pred")
+	pred.SetNow(func() time.Time { return t0 })
+	// Hold the predictability lock by blocking Execute after claim.
+	rank.blockCh = make(chan struct{})
+	rank.enteredCh = make(chan struct{})
+	go pred.Tick(context.Background())
+	select {
+	case <-rank.enteredCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("predictability refresher did not enter Execute")
+	}
+	if !lock.held("eval:refresh:predictability:15m") {
+		t.Fatal("predictability lock not held")
+	}
+
+	strength := appeval.NewRefresher(rank, store, []string{"15m"})
+	strength.SetTrendAlgo("strength")
+	strength.SetLock(lock, "strength")
+	strength.SetNow(func() time.Time { return t0 })
+	// Strength must acquire its own lock even while predictability holds.
+	ok, err := lock.TryAcquire(context.Background(), "eval:refresh:strength:15m", time.Minute, "probe")
+	if err != nil || !ok {
+		t.Fatalf("strength lock must be independent, ok=%v err=%v", ok, err)
+	}
+	_ = lock.Release(context.Background(), "eval:refresh:strength:15m", "probe")
+	close(rank.blockCh)
 }
 
 func TestRefresher_EmptyRankingsDoesNotWipeStore(t *testing.T) {
@@ -586,7 +622,7 @@ func TestRefresher_ContextCancelDuringExecute(t *testing.T) {
 	if lock.release < 1 {
 		t.Fatal("Release must be attempted after cancel (with uncancellable ctx)")
 	}
-	if lock.held("eval:refresh:15m") {
+	if lock.held("eval:refresh:predictability:15m") {
 		t.Fatal("lock must be released after cancel/failure path — Release must not use cancelled ctx")
 	}
 }
@@ -619,7 +655,7 @@ func TestSnapshotsFromRankings_EnrichesAndDedupes(t *testing.T) {
 			Sparkline: []float64{1, 2, 3},
 		},
 	}
-	snaps := appeval.SnapshotsFromRankings(results, "1h", at)
+	snaps := appeval.SnapshotsFromRankings(results, "1h", at, domain.DefaultTrendAlgo)
 	if len(snaps) != 1 || snaps[0].TrendScore != 0.99 {
 		t.Fatalf("dedupe: %+v", snaps)
 	}
@@ -637,7 +673,7 @@ func TestSnapshotsFromRankings_CopiesTotalScoreAndRS(t *testing.T) {
 			Sparkline:        []float64{10, 11, 12},
 		},
 	}
-	snaps := appeval.SnapshotsFromRankings(results, "4h", at)
+	snaps := appeval.SnapshotsFromRankings(results, "4h", at, "strength")
 	if len(snaps) != 1 {
 		t.Fatalf("len=%d", len(snaps))
 	}
@@ -647,8 +683,8 @@ func TestSnapshotsFromRankings_CopiesTotalScoreAndRS(t *testing.T) {
 	if snaps[0].RelativeStrength == nil || *snaps[0].RelativeStrength != 0.032 {
 		t.Fatalf("RS=%v", snaps[0].RelativeStrength)
 	}
-	if snaps[0].TrendAlgo != domain.ActiveTrendAlgo() {
-		t.Fatalf("TrendAlgo=%q want %q", snaps[0].TrendAlgo, domain.ActiveTrendAlgo())
+	if snaps[0].TrendAlgo != "strength" {
+		t.Fatalf("TrendAlgo=%q want strength", snaps[0].TrendAlgo)
 	}
 	*snaps[0].RelativeStrength = 1
 	if rs != 0.032 {

@@ -36,28 +36,25 @@ func TestAlgoVersion_IsSet(t *testing.T) {
 }
 
 func TestEvaluationIdentityOK_TrendAlgo(t *testing.T) {
-	prev := domain.ActiveTrendAlgo()
-	t.Cleanup(func() { domain.ConfigureTrendAlgo(prev) })
-
-	domain.ConfigureTrendAlgo("predictability")
-	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "") {
-		t.Fatal("empty TrendAlgo must match predictability (legacy rows)")
+	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "", "predictability") {
+		t.Fatal("empty TrendAlgo must match predictability want (legacy rows)")
 	}
-	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "predictability") {
+	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "predictability", "") {
+		t.Fatal("empty want must default to predictability")
+	}
+	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "predictability", "predictability") {
 		t.Fatal("predictability must match")
 	}
-	if domain.EvaluationIdentityOK(domain.AlgoVersion, "strength") {
-		t.Fatal("strength must not match predictability process")
+	if domain.EvaluationIdentityOK(domain.AlgoVersion, "strength", "predictability") {
+		t.Fatal("strength must not match predictability want")
 	}
-
-	domain.ConfigureTrendAlgo("strength")
-	if domain.EvaluationIdentityOK(domain.AlgoVersion, "") {
-		t.Fatal("legacy empty TrendAlgo must not match strength process")
+	if domain.EvaluationIdentityOK(domain.AlgoVersion, "", "strength") {
+		t.Fatal("legacy empty TrendAlgo must not match strength want")
 	}
-	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "strength") {
+	if !domain.EvaluationIdentityOK(domain.AlgoVersion, "strength", "strength") {
 		t.Fatal("strength must match")
 	}
-	if domain.EvaluationIdentityOK("old", "strength") {
+	if domain.EvaluationIdentityOK("old", "strength", "strength") {
 		t.Fatal("wrong AlgoVersion must fail")
 	}
 }
