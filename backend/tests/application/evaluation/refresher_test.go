@@ -371,6 +371,52 @@ func TestRefresher_StoreFreshSkipsRescore(t *testing.T) {
 	}
 }
 
+func TestRefresher_TrendAlgoMismatchForcesRescore(t *testing.T) {
+	prev := domain.ActiveTrendAlgo()
+	t.Cleanup(func() { domain.ConfigureTrendAlgo(prev) })
+	domain.ConfigureTrendAlgo("predictability")
+
+	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
+		"15m": {sampleRanked("BTCUSDT")},
+	}}
+	store := &fakeStore{}
+	lock := newRecordingLock()
+
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	now := t0
+	lock.now = func() time.Time { return now }
+
+	leader := appeval.NewRefresher(rank, store, []string{"15m"})
+	leader.SetLock(lock, "leader")
+	leader.SetNow(func() time.Time { return now })
+	leader.Tick(context.Background())
+	if store.putLen() != 1 {
+		t.Fatal("leader put required")
+	}
+	got, at, err := store.Get(context.Background(), "15m")
+	if err != nil || len(got) != 1 || got[0].TrendAlgo != "predictability" {
+		t.Fatalf("stamped TrendAlgo=%q err=%v", got[0].TrendAlgo, err)
+	}
+
+	// Process flips to strength while the predictability Put is still time-fresh.
+	domain.ConfigureTrendAlgo("strength")
+	peer := appeval.NewRefresher(rank, store, []string{"15m"})
+	peer.SetLock(lock, "peer")
+	peer.SetNow(func() time.Time { return at.Add(time.Second) })
+	peer.Tick(context.Background())
+
+	if rank.callCount() != 2 {
+		t.Fatalf("trend algo flip must re-score, calls=%d", rank.callCount())
+	}
+	if store.putLen() != 2 {
+		t.Fatalf("trend algo flip must Put again, puts=%d", store.putLen())
+	}
+	got, _, err = store.Get(context.Background(), "15m")
+	if err != nil || len(got) != 1 || got[0].TrendAlgo != "strength" {
+		t.Fatalf("after flip TrendAlgo=%q err=%v", got[0].TrendAlgo, err)
+	}
+}
+
 func TestRefresher_EmptyRankingsDoesNotWipeStore(t *testing.T) {
 	rank := &fakeRankings{byTF: map[string][]usecases.RankedResult{
 		"15m": {sampleRanked("BTCUSDT")},
@@ -600,6 +646,9 @@ func TestSnapshotsFromRankings_CopiesTotalScoreAndRS(t *testing.T) {
 	}
 	if snaps[0].RelativeStrength == nil || *snaps[0].RelativeStrength != 0.032 {
 		t.Fatalf("RS=%v", snaps[0].RelativeStrength)
+	}
+	if snaps[0].TrendAlgo != domain.ActiveTrendAlgo() {
+		t.Fatalf("TrendAlgo=%q want %q", snaps[0].TrendAlgo, domain.ActiveTrendAlgo())
 	}
 	*snaps[0].RelativeStrength = 1
 	if rs != 0.032 {

@@ -293,10 +293,12 @@ func (r *Refresher) acquireRefreshLock(ctx context.Context, tf string) (release 
 
 // skipIfStoreFresh returns errStoreFresh when Redis already has a Put within
 // the refresh interval (shared across replicas after the lock is released).
+// Snapshots from a different AlgoVersion or trend algorithm are not treated
+// as fresh — TREND_ALGO flips must force a recompute (PR-103).
 func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
-	_, at, getErr := r.store.Get(ctx, tf)
+	evals, at, getErr := r.store.Get(ctx, tf)
 	if getErr == nil {
-		if r.now().Sub(at) < RefreshInterval(tf) {
+		if r.now().Sub(at) < RefreshInterval(tf) && evaluationBatchIdentityOK(evals) {
 			r.adoptStoreTime(tf, at)
 			return errStoreFresh
 		}
@@ -306,6 +308,18 @@ func (r *Refresher) skipIfStoreFresh(ctx context.Context, tf string) error {
 		return nil
 	}
 	return getErr
+}
+
+func evaluationBatchIdentityOK(evals []domain.EvaluationSnapshot) bool {
+	if len(evals) == 0 {
+		return false
+	}
+	for _, e := range evals {
+		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo) {
+			return false
+		}
+	}
+	return true
 }
 
 // scoreAndPersist runs rankings and writes non-empty results to the store.

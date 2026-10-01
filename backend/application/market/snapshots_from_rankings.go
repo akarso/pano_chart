@@ -37,6 +37,7 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 			RelativeStrength:  cloneFloatPtr(r.RelativeStrength),
 			ComputedAt:        atUnix,
 			AlgoVersion:       domain.AlgoVersion,
+			TrendAlgo:         domain.ActiveTrendAlgo(),
 		}
 		EnrichFromSparkline(&snap, spark)
 		if _, seen := bySym[sym]; !seen {

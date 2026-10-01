@@ -116,7 +116,7 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 
 func algoVersionOK(evals []domain.EvaluationSnapshot) bool {
 	for _, e := range evals {
-		if e.AlgoVersion != domain.AlgoVersion {
+		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo) {
 			return false
 		}
 	}

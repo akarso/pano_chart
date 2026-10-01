@@ -204,6 +204,34 @@ func TestRankingsEvaluationProvider_AlgoVersionMismatchFallsBack(t *testing.T) {
 	}
 }
 
+func TestRankingsEvaluationProvider_TrendAlgoMismatchFallsBack(t *testing.T) {
+	prev := domain.ActiveTrendAlgo()
+	t.Cleanup(func() { domain.ConfigureTrendAlgo(prev) })
+	domain.ConfigureTrendAlgo("strength")
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	store := &stubEvalStore{
+		evals: []domain.EvaluationSnapshot{{
+			Symbol: "BTCUSDT", TrendScore: 0.9,
+			AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+		}},
+		at: now.Add(-time.Second),
+	}
+	sym, _ := domain.NewSymbol("ETHUSDT")
+	rankings := &stubRankings{rows: []usecases.RankedResult{{Symbol: sym}}}
+	p := NewRankingsEvaluationProvider(rankings)
+	p.SetStore(store)
+	p.SetNow(func() time.Time { return now })
+
+	got, err := p.GetLatestEvaluations(context.Background(), "1h")
+	if err != nil {
+		t.Fatalf("GetLatestEvaluations: %v", err)
+	}
+	if rankings.callCount() != 1 || got[0].Symbol != "ETHUSDT" {
+		t.Fatalf("trend algo mismatch must fall back, calls=%d got=%#v", rankings.callCount(), got)
+	}
+}
+
 func TestRankingsEvaluationProvider_EmptyAlgoVersionFallsBack(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	store := &stubEvalStore{

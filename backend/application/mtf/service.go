@@ -81,7 +81,7 @@ func (s *Service) Calculate(ctx context.Context, symbol string) (Stack, error) {
 			}
 			continue // miss / transport error: skip this frame.
 		}
-		if snap.AlgoVersion != domain.AlgoVersion {
+		if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
 			continue
 		}
 		if !domain.EvaluationStoreFresh(at, now(), tf) {

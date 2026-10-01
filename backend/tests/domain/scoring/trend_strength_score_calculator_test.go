@@ -123,6 +123,35 @@ func TestTrendStrength_TinyMoveNeutralBias(t *testing.T) {
 	}
 }
 
+func TestTrendStrength_SinglePriceJumpNotTrend(t *testing.T) {
+	// 55 flat closes at 100, then 55 at 110: path == net move so raw ER=1
+	// and sparse swings fall back to ER, but concentration must kill the score.
+	calc := &scoring.TrendStrengthScoreCalculator{}
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Unix(1_700_000_000, 0).UTC()
+	out := make([]domain.Candle, 110)
+	for i := 0; i < 110; i++ {
+		px := 100.0
+		if i >= 55 {
+			px = 110.0
+		}
+		high, low := px*1.001, px*0.999
+		out[i] = domain.NewCandleUnsafe(sym, tf, base.Add(time.Duration(i)*time.Hour), px, high, low, px, 1)
+	}
+	series, err := domain.NewCandleSeries(sym, tf, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	score, bias, err := calc.ScoreWithDirection(series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if score > 0.25 {
+		t.Fatalf("single jump score=%g want ≤ 0.25 (bias=%q)", score, bias)
+	}
+}
+
 func syntheticRandomWalk(t *testing.T, seed int64, n int) domain.CandleSeries {
 	t.Helper()
 	rng := rand.New(rand.NewSource(seed))

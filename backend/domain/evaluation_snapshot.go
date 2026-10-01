@@ -1,10 +1,53 @@
 package domain
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // AlgoVersion is the hardcoded scoring engine version tag.
 // It must be updated whenever scoring logic changes materially.
 const AlgoVersion = "v5.1.0"
+
+const defaultTrendAlgo = "predictability"
+
+var (
+	activeTrendAlgoMu sync.RWMutex
+	activeTrendAlgo   = defaultTrendAlgo
+)
+
+// ConfigureTrendAlgo sets the process-wide trend engine identity stamped on
+// and required of evaluation snapshots (PR-103). Empty / unknown → predictability.
+// Call once from main after parsing scoring.trend_algo / TREND_ALGO.
+func ConfigureTrendAlgo(algo string) {
+	if algo == "" {
+		algo = defaultTrendAlgo
+	}
+	activeTrendAlgoMu.Lock()
+	activeTrendAlgo = algo
+	activeTrendAlgoMu.Unlock()
+}
+
+// ActiveTrendAlgo returns the process trend engine identity.
+func ActiveTrendAlgo() string {
+	activeTrendAlgoMu.RLock()
+	defer activeTrendAlgoMu.RUnlock()
+	return activeTrendAlgo
+}
+
+// EvaluationIdentityOK reports whether a stored snapshot was produced by the
+// current scoring engine and trend algorithm. Empty TrendAlgo is treated as
+// predictability (pre-PR-103 rows) so flipping to strength invalidates them.
+func EvaluationIdentityOK(algoVersion, trendAlgo string) bool {
+	if algoVersion != AlgoVersion {
+		return false
+	}
+	got := trendAlgo
+	if got == "" {
+		got = defaultTrendAlgo
+	}
+	return got == ActiveTrendAlgo()
+}
 
 // EvaluationSnapshot captures all regime scores and market state
 // at the time of evaluation for a single symbol/timeframe cycle.
@@ -59,4 +102,8 @@ type EvaluationSnapshot struct {
 
 	// Meta
 	AlgoVersion string `json:"algoVersion,omitempty"`
+
+	// TrendAlgo records which trend engine produced TrendScore / TotalScore
+	// (predictability | strength). Empty on pre-PR-103 store rows.
+	TrendAlgo string `json:"trendAlgo,omitempty"`
 }

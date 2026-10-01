@@ -305,6 +305,7 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 
 			if g.snapshotLogger != nil {
 				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
+				snap.TrendAlgo = domain.ActiveTrendAlgo()
 				_ = g.snapshotLogger.Log(snap)
 			}
 			return nil

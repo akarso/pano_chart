@@ -131,7 +131,7 @@ func applySnapshotToContext(
 	now time.Time,
 	timeframe string,
 ) {
-	if snap.AlgoVersion != domain.AlgoVersion {
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
 		return
 	}
 	tf, err := domain.NewTimeframe(timeframe)

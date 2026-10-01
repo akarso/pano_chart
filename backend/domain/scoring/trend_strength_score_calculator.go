@@ -57,14 +57,24 @@ func (c *TrendStrengthScoreCalculator) ScoreWithDirection(series domain.CandleSe
 		p[i] = math.Log(c)
 	}
 
-	// 1. Efficiency ratio
-	var path float64
+	// 1. Efficiency ratio + path concentration
+	var path, maxStep float64
 	for i := 1; i < m; i++ {
-		path += math.Abs(p[i] - p[i-1])
+		step := math.Abs(p[i] - p[i-1])
+		path += step
+		if step > maxStep {
+			maxStep = step
+		}
 	}
 	er := 0.0
 	if path > 0 {
 		er = math.Abs(p[m-1]-p[0]) / path
+	}
+	er = clamp01(er)
+	// Single-bar (or few-bar) jumps are perfectly efficient but not persistent
+	// direction — scale ER by how dispersed the path is across bars.
+	if path > 0 {
+		er *= 1 - clamp01(maxStep/path)
 	}
 	er = clamp01(er)
 

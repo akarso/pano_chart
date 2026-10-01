@@ -179,6 +179,7 @@ func main() {
 		log.Printf("[main] WARNING: invalid trend_algo %q, falling back to predictability", trendAlgoStr)
 	}
 	trendCalc := usecases.TrendCalcFor(trendAlgo)
+	domain.ConfigureTrendAlgo(string(trendAlgo))
 	log.Printf("[main] trend algo=%s", trendAlgo)
 
 	// --- Use cases ---

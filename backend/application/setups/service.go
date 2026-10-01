@@ -302,8 +302,9 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		}
 		return usecases.SymbolStats{}, false, nil
 	}
-	if snap.AlgoVersion != domain.AlgoVersion {
-		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q want=%q", symbol, timeframe, snap.AlgoVersion, domain.AlgoVersion)
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo) {
+		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q want=%q/%q",
+			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, domain.AlgoVersion, domain.ActiveTrendAlgo())
 		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now
