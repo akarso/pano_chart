@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/features/social/notification_service.dart';
@@ -45,6 +46,31 @@ void main() {
 
     expect(details.android, isNotNull);
     expect(details.android!.styleInformation, isNull);
+  });
+
+  testWidgets('resolveDetails skips PNG render on iOS', (tester) async {
+    final previous = debugDefaultTargetPlatformOverride;
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      var renderCalls = 0;
+      final svc = NotificationService(
+        renderSparkline: (_) async {
+          renderCalls++;
+          return Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
+        },
+      );
+
+      final details = await svc.resolveDetails(
+        title: 'Breakout starting',
+        body: 'BTCUSDT (1h)',
+        sparkline: List<double>.generate(30, (i) => 100.0 + i),
+      );
+
+      expect(renderCalls, 0);
+      expect(details.android!.styleInformation, isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = previous;
+    }
   });
 
   testWidgets(

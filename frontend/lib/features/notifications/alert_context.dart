@@ -75,9 +75,14 @@ class AlertContext {
   static String? _asString(dynamic v) => v is String ? v : null;
 
   static double? _asDouble(dynamic v) {
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v);
-    return null;
+    double? n;
+    if (v is num) {
+      n = v.toDouble();
+    } else if (v is String) {
+      n = double.tryParse(v);
+    }
+    if (n == null || n.isNaN || n.isInfinite) return null;
+    return n;
   }
 
   static List<double> _asDoubleList(dynamic v) {

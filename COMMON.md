@@ -414,9 +414,11 @@ one field is available (an empty `{}` is not attached):
 * `tapeRegime` / `tapeBias` / `tapeConfidence` come from the market
   summary for the alert's timeframe.
 * `symbolScore`, `rs`, and `sparkline` appear only when the alert names a
-  symbol (setup / watchlist) and the evaluation snapshot is current
-  (`AlgoVersion` match + `EvaluationStoreFresh`). Stale or wrong-algo snaps
-  omit those fields; the push still sends.
+  symbol (setup / watchlist). Prefer a fresh matching evaluation snapshot
+  (`AlgoVersion` + `EvaluationStoreFresh`). Stale or wrong-algo snaps omit
+  those store fields; the push still sends. Setup alerts on `1m` / `5m`
+  (no store Put — refresher only writes `15m`/`1h`/`4h`/`1d`) fall back to
+  the rankings row already scanned to pick the setup.
 * `alignment` is independent of the evaluation store — it comes from the
   regime stack (`knownAlignment` on watchlist, or `RegimeStackProvider` on
   setup) and is still attached when the snap is stale or wrong-algo.

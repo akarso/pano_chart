@@ -349,7 +349,7 @@ func (s *Scheduler) sendWatchlistNotification(
 			},
 			// Tape is resolved once per timeframe via ctxCache (not re-run
 			// per subscriber). Alignment comes from the already-paid stack.
-			s.buildAlertContext(ctx, timeframe, symbol, nil, &alignment, ctxCache),
+			s.buildAlertContext(ctx, timeframe, symbol, nil, &alignment, ctxCache, nil),
 		),
 		// Key includes now's Unix timestamp — unlike the other checks'
 		// keys (e.g. market's, which deliberately embeds only a calendar

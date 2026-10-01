@@ -376,6 +376,65 @@ func TestScheduler_Setup_AttachesContextSparkline(t *testing.T) {
 	}
 }
 
+func TestScheduler_Setup_1mUsesRankingsFieldsWhenStoreEmpty(t *testing.T) {
+	spy := &spySender{}
+	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)
+	eng := notifications.NewEngine(spy, notifications.DefaultEngineConfig())
+	eng.SetClock(func() time.Time { return now })
+
+	score := 0.88
+	rs := 0.02
+	spark := make([]float64, 110)
+	for i := range spark {
+		spark[i] = float64(50 + i)
+	}
+	setups := &fakeSetupProvider{
+		scores: setup.SetupScores{
+			Symbol:     "ETHUSDT",
+			BestSetup:  setup.TrendContinuation,
+			Score:      0.85,
+			Confidence: 0.7,
+		},
+		fields: notifications.SymbolAlertFields{
+			TotalScore: &score,
+			RS:         &rs,
+			Sparkline:  spark,
+		},
+	}
+	cfgStore := newMemConfigStore()
+	_ = cfgStore.Save(notifications.NotificationConfig{
+		UserID:         "u1",
+		SetupOfDay:     true,
+		SetupMinScore:  0.75,
+		SetupTimeframe: "1m",
+	})
+
+	sched := notifications.NewScheduler(eng, nil, setups, nil, notifications.DefaultSchedulerConfig())
+	sched.SetClock(func() time.Time { return now })
+	sched.SetConfigStore(cfgStore)
+	// Empty eval store — 1m is never refreshed.
+	sched.SetEvaluationStore(&fakeEvalStore{at: now, snaps: map[string]domain.EvaluationSnapshot{}})
+	sched.CheckSetupOfDay(context.Background())
+
+	if spy.userCount() != 1 {
+		t.Fatalf("expected 1 setup send, got %d", spy.userCount())
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(spy.lastUserSend().n.Data["context"]), &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["symbolScore"].(float64) != 0.88 {
+		t.Fatalf("symbolScore=%v want rankings fallback", parsed["symbolScore"])
+	}
+	if parsed["rs"].(float64) != 0.02 {
+		t.Fatalf("rs=%v", parsed["rs"])
+	}
+	sparkline, ok := parsed["sparkline"].([]any)
+	if !ok || len(sparkline) != 30 {
+		t.Fatalf("sparkline=%v want len 30 from rankings fallback", parsed["sparkline"])
+	}
+}
+
 func TestScheduler_Setup_CachesContextPerSymbol(t *testing.T) {
 	spy := &spySender{}
 	now := time.Date(2025, 6, 1, 14, 0, 0, 0, time.UTC)

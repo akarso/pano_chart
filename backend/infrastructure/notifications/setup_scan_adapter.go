@@ -35,11 +35,13 @@ func NewSetupScanAdapter(setupSvc *setups.SetupService, rankings RankingsProvide
 const scanLimit = 20
 
 // BestSetup evaluates the top-ranked symbols and returns the one with the
-// highest setup score. Returns zero-value SetupScores if nothing qualifies.
-func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (setup.SetupScores, error) {
+// highest setup score. SymbolAlertFields are taken from the winning
+// rankings row so PR-102 alert context still has score/RS/sparkline on
+// 1m/5m (evaluation store is never written for those timeframes).
+func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (setup.SetupScores, appnotify.SymbolAlertFields, error) {
 	tf, err := domain.NewTimeframe(timeframe)
 	if err != nil {
-		return setup.SetupScores{}, err
+		return setup.SetupScores{}, appnotify.SymbolAlertFields{}, err
 	}
 
 	out, err := a.rankings.Execute(ctx, usecases.GetRankingsRequest{
@@ -47,7 +49,7 @@ func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (set
 		Sort:      usecases.SortByTotal,
 	})
 	if err != nil {
-		return setup.SetupScores{}, err
+		return setup.SetupScores{}, appnotify.SymbolAlertFields{}, err
 	}
 	results := out.Results
 
@@ -57,7 +59,9 @@ func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (set
 	}
 
 	var best setup.SetupScores
-	for _, r := range results[:n] {
+	var bestRanked *usecases.RankedResult
+	for i := range results[:n] {
+		r := &results[i]
 		scores, err := a.setupSvc.Evaluate(ctx, string(r.Symbol), timeframe)
 		if err != nil {
 			log.Printf("[notify-setup-scan] eval %s/%s error: %v", r.Symbol, timeframe, err)
@@ -65,6 +69,7 @@ func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (set
 		}
 		if scores.Score > best.Score {
 			best = scores
+			bestRanked = r
 		}
 	}
 
@@ -73,5 +78,21 @@ func (a *SetupScanAdapter) BestSetup(ctx context.Context, timeframe string) (set
 			best.Symbol, best.Score, best.Confidence, timeframe)
 	}
 
-	return best, nil
+	return best, symbolFieldsFromRanked(bestRanked), nil
+}
+
+func symbolFieldsFromRanked(r *usecases.RankedResult) appnotify.SymbolAlertFields {
+	if r == nil {
+		return appnotify.SymbolAlertFields{}
+	}
+	score := r.TotalScore
+	fields := appnotify.SymbolAlertFields{
+		TotalScore: &score,
+		Sparkline:  append([]float64(nil), r.Sparkline...),
+	}
+	if r.RelativeStrength != nil {
+		rs := *r.RelativeStrength
+		fields.RS = &rs
+	}
+	return fields
 }

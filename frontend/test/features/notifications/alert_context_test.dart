@@ -55,6 +55,14 @@ void main() {
       expect(ctx.sparkline, [1.0, 2.0, 3.0]);
     });
 
+    test('fromJson drops non-finite sparkline points', () {
+      final ctx = AlertContext.fromJson({
+        'sparkline': [1, 'NaN', 2, 'Infinity', 3, '-Infinity', 'not-a-number'],
+      });
+      expect(ctx.sparkline, [1.0, 2.0, 3.0]);
+      expect(ctx.hasSparkline, isTrue);
+    });
+
     test('fromJson caps sparkline to the last 30 points', () {
       final pts = List<double>.generate(50, (i) => i.toDouble());
       final ctx = AlertContext.fromJson({'sparkline': pts});

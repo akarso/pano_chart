@@ -38,13 +38,16 @@ func contextCacheKey(timeframe, symbol string) string {
 // fields are simply left unset. Stale or wrong-algo snapshots omit symbol
 // fields (true fail-open). When knownAlignment is non-nil it is used
 // instead of calling RegimeStackProvider (watchlist already has the stack).
-// cache, when non-nil, dedupes work within a scheduler tick.
+// knownSymbol fills score/RS/sparkline gaps when the evaluation store has
+// no usable Put (e.g. setup alerts on 1m/5m). cache, when non-nil, dedupes
+// work within a scheduler tick.
 func (s *Scheduler) buildAlertContext(
 	ctx context.Context,
 	timeframe, symbol string,
 	tape *mkt.Summary,
 	knownAlignment *float64,
 	cache *alertBuildCache,
+	knownSymbol *SymbolAlertFields,
 ) AlertContext {
 	key := contextCacheKey(timeframe, symbol)
 	if cache != nil {
@@ -74,6 +77,7 @@ func (s *Scheduler) buildAlertContext(
 			applySnapshotToContext(&out, snap, at, s.now(), timeframe)
 		}
 	}
+	applySymbolFields(&out, knownSymbol)
 
 	if knownAlignment != nil {
 		out.Alignment = floatPtr(*knownAlignment)
@@ -145,5 +149,22 @@ func applySnapshotToContext(
 	}
 	if len(snap.Sparkline) > 0 {
 		out.Sparkline = DownsampleSparkline(snap.Sparkline, AlertSparklinePoints)
+	}
+}
+
+// applySymbolFields fills score/RS/sparkline only where still unset, so a
+// rankings fallback never overrides a fresh store hit.
+func applySymbolFields(out *AlertContext, fields *SymbolAlertFields) {
+	if fields == nil {
+		return
+	}
+	if out.SymbolScore == nil && fields.TotalScore != nil {
+		out.SymbolScore = floatPtr(*fields.TotalScore)
+	}
+	if out.RS == nil && fields.RS != nil {
+		out.RS = floatPtr(*fields.RS)
+	}
+	if len(out.Sparkline) == 0 && len(fields.Sparkline) > 0 {
+		out.Sparkline = DownsampleSparkline(fields.Sparkline, AlertSparklinePoints)
 	}
 }

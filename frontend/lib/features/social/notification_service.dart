@@ -92,6 +92,8 @@ class NotificationService {
 
   /// Resolves sparkline bytes then builds details. Paint/encode failures
   /// yield plain details (styleInformation == null) so title/body still ship.
+  /// PNG work is skipped on platforms that cannot show big-picture style
+  /// (iOS / non-Android) — rendering would be discarded.
   @visibleForTesting
   Future<NotificationDetails> resolveDetails({
     String channelId = 'general',
@@ -102,7 +104,10 @@ class NotificationService {
     Uint8List? sparklinePng,
   }) async {
     var png = sparklinePng;
-    if (png == null && sparkline != null && sparkline.length >= 2) {
+    if (png == null &&
+        sparkline != null &&
+        sparkline.length >= 2 &&
+        _supportsSparklineBigPicture) {
       try {
         png = await _renderSparkline(sparkline);
       } catch (_) {
@@ -117,6 +122,11 @@ class NotificationService {
       sparklinePng: png,
     );
   }
+
+  /// Android local notifications can attach a big-picture image; iOS
+  /// [DarwinNotificationDetails] in this PR cannot, so skip the render.
+  static bool get _supportsSparklineBigPicture =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// Shows a local notification with the given [title] and [body].
   ///
