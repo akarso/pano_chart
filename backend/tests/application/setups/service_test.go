@@ -211,7 +211,11 @@ func TestSetupService_HappyPath(t *testing.T) {
 // use a real, series-consistent score rather than an arbitrary constant.
 func trendDominantStatsFor(t *testing.T, series domain.CandleSeries) usecases.SymbolStats {
 	t.Helper()
-	calc := &scoring.TrendPredictabilityScoreCalculator{}
+	return trendDominantStatsWith(t, series, &scoring.TrendPredictabilityScoreCalculator{})
+}
+
+func trendDominantStatsWith(t *testing.T, series domain.CandleSeries, calc scoring.DirectedScoreCalculator) usecases.SymbolStats {
+	t.Helper()
 	score, _, err := calc.ScoreWithDirection(series)
 	if err != nil {
 		t.Fatalf("unexpected error scoring fixture series: %v", err)
@@ -277,6 +281,25 @@ func TestDominantRegime_DirectionMatchesPriceAction(t *testing.T) {
 			t.Errorf("expected no uptrend claim for a flat/undirected series, got %q", result.Regime)
 		}
 	})
+}
+
+// Cold-path Evaluate with Trend Strength on both the scorer magnitude and
+// SetTrendDirectionCalc must not scoresAgree-fail into sideways (PR-103).
+func TestSetupService_TrendStrengthColdPath_NoScoresAgreeFallback(t *testing.T) {
+	series := makeDirectionalSeries(110, true)
+	strength := usecases.TrendCalcFor(usecases.TrendAlgoStrength)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: trendDominantStatsWith(t, series, strength)}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetTrendDirectionCalc(strength)
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if result.Regime != "uptrend" {
+		t.Fatalf("expected uptrend under strength cold path, got %q (scoresAgree mismatch regresses to sideways)", result.Regime)
+	}
 }
 
 func TestDominantRegime_ScoreMismatchFallsBackToSideways(t *testing.T) {

@@ -167,10 +167,24 @@ func main() {
 		}
 	}
 
+	// --- Trend algorithm selection (PR-103) ---
+	trendAlgoStr := os.Getenv("TREND_ALGO")
+	if trendAlgoStr == "" {
+		if cfg := scoring.GetConfig(); cfg != nil {
+			trendAlgoStr = cfg.Scoring.TrendAlgo
+		}
+	}
+	trendAlgo, trendAlgoOK := usecases.ParseTrendAlgo(trendAlgoStr)
+	if !trendAlgoOK {
+		log.Printf("[main] WARNING: invalid trend_algo %q, falling back to predictability", trendAlgoStr)
+	}
+	trendCalc := usecases.TrendCalcFor(trendAlgo)
+	log.Printf("[main] trend algo=%s", trendAlgo)
+
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
 		{Calculator: sidewaysCalc, Weight: 1.0},
-		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
+		{Calculator: trendCalc, Weight: 1.0},
 		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
 	}
 	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights, exchangeInfoURL, tickerURL)
@@ -281,6 +295,7 @@ func main() {
 
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings_v2")
+	rankingsUC.SetTrendAlgo(string(trendAlgo))
 	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
@@ -492,6 +507,7 @@ func main() {
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
+	setupService.SetTrendDirectionCalc(trendCalc)
 	setupService.SetMarketProvider(marketService)
 	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
 	setupService.SetEvaluationStore(evalStore)
