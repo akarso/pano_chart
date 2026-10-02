@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -9,7 +10,7 @@ import (
 
 // HistoryProvider abstracts regime history retrieval.
 type HistoryProvider interface {
-	GetHistory(timeframe string, limit int) (mkt.RegimeHistory, error)
+	GetHistory(ctx context.Context, timeframe string, limit int) (mkt.RegimeHistory, error)
 }
 
 // MarketRegimeHistoryHandler handles GET /api/market/regime/history requests.
@@ -43,7 +44,7 @@ func (h *MarketRegimeHistoryHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 		tf = "4h"
 	}
 
-	history, err := h.provider.GetHistory(tf, 50)
+	history, err := h.provider.GetHistory(r.Context(), tf, 50)
 	if err != nil {
 		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
 		return

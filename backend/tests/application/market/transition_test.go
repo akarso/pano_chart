@@ -211,6 +211,9 @@ func TestTransitionService_Calculate(t *testing.T) {
 	if result.Horizon != "12 candles (~2d)" {
 		t.Errorf("horizon: got %q, want %q", result.Horizon, "12 candles (~2d)")
 	}
+	if result.Source != "heuristic" {
+		t.Errorf("source: got %q, want heuristic", result.Source)
+	}
 
 	// Verify probabilities sum to 1.
 	sum := result.Probabilities.Trend + result.Probabilities.Sideways + result.Probabilities.Compression + result.Probabilities.Expansion

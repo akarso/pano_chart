@@ -25,10 +25,14 @@ func NewMarketTransitionHandler(c TransitionCalculator) *MarketTransitionHandler
 
 // transitionResponse is the JSON response DTO.
 type transitionResponse struct {
-	Timeframe     string           `json:"timeframe"`
-	CurrentRegime string           `json:"currentRegime"`
-	Probabilities probabilitiesDTO `json:"probabilities"`
-	Horizon       string           `json:"horizon"`
+	Timeframe       string           `json:"timeframe"`
+	CurrentRegime   string           `json:"currentRegime"`
+	Probabilities   probabilitiesDTO `json:"probabilities"`
+	Horizon         string           `json:"horizon"`
+	Source          string           `json:"source"`
+	EmpiricalWeight float64          `json:"empiricalWeight"`
+	SampleSize      int              `json:"sampleSize"`
+	Pooled          bool             `json:"pooled"`
 }
 
 type probabilitiesDTO struct {
@@ -44,10 +48,14 @@ func (h *MarketTransitionHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	if tf == "" {
 		tf = "4h"
 	}
+	if _, err := ParseTimeframe(tf); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_TIMEFRAME", "invalid timeframe")
+		return
+	}
 
 	result, err := h.calculator.Calculate(r.Context(), tf)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		writeError(w, http.StatusInternalServerError, "TRANSITION_ERROR", err.Error())
 		return
 	}
 
@@ -60,7 +68,11 @@ func (h *MarketTransitionHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 			Compression: roundTo(result.Probabilities.Compression, 4),
 			Expansion:   roundTo(result.Probabilities.Expansion, 4),
 		},
-		Horizon: result.Horizon,
+		Horizon:         result.Horizon,
+		Source:          result.Source,
+		EmpiricalWeight: roundTo(result.EmpiricalWeight, 4),
+		SampleSize:      result.SampleSize,
+		Pooled:          result.Pooled,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

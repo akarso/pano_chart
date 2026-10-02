@@ -1,6 +1,10 @@
 package regimehistory
 
-import mkt "pano_chart/backend/domain/market"
+import (
+	"context"
+
+	mkt "pano_chart/backend/domain/market"
+)
 
 // Service provides read access to regime history.
 type Service struct {
@@ -14,8 +18,8 @@ func NewService(repo Repository) *Service {
 
 // GetHistory returns the regime history for a timeframe, including the
 // current regime age (duration of the most recent period).
-func (s *Service) GetHistory(timeframe string, limit int) (mkt.RegimeHistory, error) {
-	periods, err := s.repo.GetHistory(timeframe, limit)
+func (s *Service) GetHistory(ctx context.Context, timeframe string, limit int) (mkt.RegimeHistory, error) {
+	periods, err := s.repo.GetHistory(ctx, timeframe, limit)
 	if err != nil {
 		return mkt.RegimeHistory{}, err
 	}
@@ -43,4 +47,17 @@ func (s *Service) CurrentAge(timeframe string) (int, error) {
 		return 0, nil
 	}
 	return latest.DurationCandles, nil
+}
+
+// OpenPeriodStart returns the StartTimestamp of the open (latest) period.
+// Used so transition merged-age prefix only applies to the same open period.
+func (s *Service) OpenPeriodStart(timeframe string) (int64, error) {
+	latest, err := s.repo.GetLatest(timeframe)
+	if err != nil {
+		return 0, err
+	}
+	if latest == nil {
+		return 0, nil
+	}
+	return latest.StartTimestamp, nil
 }

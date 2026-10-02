@@ -259,6 +259,22 @@ by silent/bias overrides is full-window / mean|Δclose| (not Wilder).
 count-based `participation` object is the glossary term for up/down/ranging
 counts. UI copy must not present either as the headline regime.
 
+### Transition probabilities (PR-107)
+
+`GET /api/market/transition?timeframe=` returns heuristic probabilities
+blended with an empirical matrix when the **age bucket (or pooled all-age
+row) used for the current regime** has ≥ 30 raw samples:
+
+* `source`: `heuristic` | `blend` (`blend` only at ≥ 30 samples for the row used)
+* `empiricalWeight`: `w = clamp(n/100, 0, 0.7)` from that row’s sample count (0 when heuristic)
+* `sampleSize`: raw count for the bucket or pooled row consulted (0 if none)
+* `pooled`: true when `sampleSize` / probs came from the all-age row (empty or
+  sparse age bucket below the blend threshold with a rich pooled row)
+* Silent/indecisive history maps to sideways and adjacent equals are merged
+  before counting; unknown regimes break the sequence (no fabricated transitions)
+* Matrix rebuilds in-memory every 15 minutes per timeframe; history errors
+  are negative-cached for the same TTL; timeframe query must be a known TF
+
 ### Composite index
 
 `GET /api/market/composite`:

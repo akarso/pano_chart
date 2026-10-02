@@ -1,6 +1,7 @@
 package regimehistory
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -154,8 +155,8 @@ func (r *SQLiteRepository) UpdateDuration(timeframe string, newDuration int) err
 }
 
 // GetHistory returns the most recent `limit` periods ordered oldest-first.
-func (r *SQLiteRepository) GetHistory(timeframe string, limit int) ([]mkt.RegimePeriod, error) {
-	rows, err := r.db.Query(
+func (r *SQLiteRepository) GetHistory(ctx context.Context, timeframe string, limit int) ([]mkt.RegimePeriod, error) {
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT regime, start_ts, end_ts, duration_candles
 		 FROM (
 		   SELECT regime, start_ts, end_ts, duration_candles

@@ -419,7 +419,7 @@ type fakeRegimes struct {
 	err  error
 }
 
-func (f *fakeRegimes) GetHistory(string, int) (mkt.RegimeHistory, error) {
+func (f *fakeRegimes) GetHistory(context.Context, string, int) (mkt.RegimeHistory, error) {
 	return f.hist, f.err
 }
 

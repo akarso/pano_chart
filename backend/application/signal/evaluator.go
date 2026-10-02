@@ -54,7 +54,7 @@ type TapeSource interface {
 
 // RegimeHistorySource looks up past regimes for transition grading.
 type RegimeHistorySource interface {
-	GetHistory(timeframe string, limit int) (mkt.RegimeHistory, error)
+	GetHistory(ctx context.Context, timeframe string, limit int) (mkt.RegimeHistory, error)
 }
 
 // Evaluator grades unresolved signals whose horizon has elapsed.
@@ -336,13 +336,13 @@ func (e *Evaluator) gradeOne(
 	tapeCache map[string]metrics.CompositeTape,
 ) (domainsignal.Outcome, error) {
 	if !domainsignal.NeedsPath(sig.Label) {
-		return e.gradeWithoutPath(sig, now)
+		return e.gradeWithoutPath(ctx, sig, now)
 	}
 	return e.gradeWithPath(ctx, sig, now, tapeCache)
 }
 
 // gradeWithoutPath handles transition:* (regime history) and unsupported labels.
-func (e *Evaluator) gradeWithoutPath(sig domainsignal.Signal, now time.Time) (domainsignal.Outcome, error) {
+func (e *Evaluator) gradeWithoutPath(ctx context.Context, sig domainsignal.Signal, now time.Time) (domainsignal.Outcome, error) {
 	label := strings.ToLower(strings.TrimSpace(sig.Label))
 	regimeAt := ""
 	if strings.HasPrefix(label, "transition:") {
@@ -352,7 +352,7 @@ func (e *Evaluator) gradeWithoutPath(sig domainsignal.Signal, now time.Time) (do
 			return domainsignal.Outcome{}, errIncompletePath
 		}
 		var err error
-		regimeAt, err = e.lookupRegime(sig.Timeframe, end)
+		regimeAt, err = e.lookupRegime(ctx, sig.Timeframe, end)
 		if err != nil {
 			return domainsignal.Outcome{}, err
 		}
@@ -534,11 +534,11 @@ func simpleATR(candles []domain.Candle, n int) float64 {
 	return sum / float64(n)
 }
 
-func (e *Evaluator) lookupRegime(timeframe string, at time.Time) (string, error) {
+func (e *Evaluator) lookupRegime(ctx context.Context, timeframe string, at time.Time) (string, error) {
 	if e.regimes == nil {
 		return "", errRegimeUnavailable
 	}
-	hist, err := e.regimes.GetHistory(timeframe, regimeHistoryLimit)
+	hist, err := e.regimes.GetHistory(ctx, timeframe, regimeHistoryLimit)
 	if err != nil {
 		return "", errRegimeUnavailable
 	}
