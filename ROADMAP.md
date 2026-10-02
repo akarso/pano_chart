@@ -1181,7 +1181,8 @@ change.
 ### PR-112b — Replay mode (frontend scrubber)
 
 **Layer:** frontend. **Depends on:** PR-112a (must ship first — UI gated by
-`kReplayUiEnabled`, default off, until `?asOf=` is live).
+`kReplayUiEnabled`; default **on** once 112a is live; kill with
+`--dart-define=REPLAY_UI=false`).
 
 **Spec file:** `frontend/docs/v2/PR-112b.md`.
 
