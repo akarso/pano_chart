@@ -6,12 +6,14 @@ import (
 	"log"
 	"math"
 	"sort"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring" // also used for structural regime detection (compression/breakout)
@@ -104,6 +106,8 @@ type GetRankingsRequest struct {
 	Timeframe    domain.Timeframe
 	Sort         SortMode
 	SidewaysAlgo SidewaysAlgoMode // empty = use default
+	// AsOf, when set, scores against candles ending at this instant (PR-112a).
+	AsOf *time.Time
 }
 
 // RankedResult represents a single symbol in the rankings output.
@@ -260,6 +264,13 @@ func (g *GetRankings) SetRSFilter(f symbolSkipper) {
 // Execute computes the full ranking for the requested sort mode.
 func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error) {
 	empty := RankingsResult{Sort: req.Sort, RequestedSort: req.Sort}
+	if req.AsOf == nil {
+		if t, ok := replay.AsOf(ctx); ok {
+			req.AsOf = &t
+		}
+	} else {
+		ctx = replay.WithAsOf(ctx, *req.AsOf)
+	}
 
 	symbols, err := g.universe.Symbols(ctx, g.exchangeInfoURL, g.tickerURL)
 	if err != nil {
@@ -318,7 +329,7 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		grp.Go(func() error {
 			defer sem.Release(1)
 
-			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.candleFetchN)
+			cs, err := replay.FetchCandles(gCtx, g.candleRepo, sym, req.Timeframe, g.candleFetchN)
 			if err != nil {
 				return nil // skip symbols with fetch errors
 			}
@@ -589,6 +600,9 @@ func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, re
 // on cache miss.
 func EmitBadgeSignals(ctx context.Context, emitter ports.SignalEmitter, timeframe string, results []RankedResult) {
 	if emitter == nil {
+		return
+	}
+	if _, ok := replay.AsOf(ctx); ok {
 		return
 	}
 	for _, r := range results {

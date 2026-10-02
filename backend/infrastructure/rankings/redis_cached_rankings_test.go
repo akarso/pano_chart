@@ -94,6 +94,45 @@ func TestCacheMissCallsNext(t *testing.T) {
 	}
 }
 
+func TestRedisCachedRankings_AsOfBypassesCache(t *testing.T) {
+	fr := &fakeRedis{store: map[string]string{}}
+	uc := &fakeRankingsUC{result: sampleResults()}
+	cache := NewRedisCachedRankings(uc, fr, time.Minute, "rankings_v2")
+
+	// Prime live cache.
+	liveReq := usecases.GetRankingsRequest{
+		Timeframe: domain.NewTimeframeUnsafe("1h"),
+		Sort:      usecases.SortByTotal,
+	}
+	if _, err := cache.Execute(context.Background(), liveReq); err != nil {
+		t.Fatal(err)
+	}
+	if len(fr.store) == 0 {
+		t.Fatal("expected live result cached")
+	}
+	uc.called = 0
+
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	replayReq := usecases.GetRankingsRequest{
+		Timeframe: liveReq.Timeframe,
+		Sort:      usecases.SortByTotal,
+		AsOf:      &asOf,
+	}
+	if _, err := cache.Execute(context.Background(), replayReq); err != nil {
+		t.Fatal(err)
+	}
+	if uc.called != 1 {
+		t.Fatalf("asOf must bypass cache; next called=%d", uc.called)
+	}
+	// Second asOf call still bypasses (no replay cache write).
+	if _, err := cache.Execute(context.Background(), replayReq); err != nil {
+		t.Fatal(err)
+	}
+	if uc.called != 2 {
+		t.Fatalf("asOf must not populate cache; next called=%d", uc.called)
+	}
+}
+
 func TestStoresInRedisAfterMiss(t *testing.T) {
 	fr := &fakeRedis{store: map[string]string{}}
 	uc := &fakeRankingsUC{result: sampleResults()}

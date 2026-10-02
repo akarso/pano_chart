@@ -1161,10 +1161,11 @@ change.
 ### PR-112a — Replay mode (backend `asOf`)
 
 **Layer:** application + adapters. **Depends on:** PR-089b.
+**Spec:** `backend/docs/v2/PR-112a.md`. **Contract:** `COMMON.md` (Replay `asOf`).
 
 **Spec.**
-1. `GET /api/rankings`, `/api/market/regime`, `/api/market/composite`, `/api/market/transition`
-   accept `asOf=<unix seconds>`. When present:
+1. `GET /api/rankings`, `/api/market/regime`, `/api/market/composite`, `/api/market/transition`,
+   `/api/market/regime/history` accept `asOf=<unix seconds>`. When present:
    - candle fetches use `GetSeries(symbol, tf, asOf − N×tf, asOf)` instead of `GetLastNCandles`
    - caches are bypassed (or keyed by `asOf` rounded to the bar)
    - regime history returns only periods ending before `asOf`

@@ -3,8 +3,10 @@ package transition
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	mkt "pano_chart/backend/domain/market"
 	domainsignal "pano_chart/backend/domain/signal"
 )
@@ -30,6 +32,11 @@ type AgeProvider interface {
 // same-named regime that started after a flip within the matrix TTL).
 type openPeriodStarter interface {
 	OpenPeriodStart(timeframe string) (int64, error)
+}
+
+// replayAgeProvider supplies regime age at a replay cutoff (PR-112a).
+type replayAgeProvider interface {
+	AgeAtAsOf(ctx context.Context, timeframe string, asOf time.Time) (int, error)
 }
 
 // TransitionService orchestrates regime detection and transition-probability
@@ -74,9 +81,9 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	}
 
 	volSlope := summary.VolatilityExpansion - 1.0
-	liveAge := s.liveAge(timeframe)
+	regimeAge := s.regimeAge(ctx, timeframe)
 	currentRegime := mkt.Regime(summary.State)
-	view, regimeAge := s.matrixAndAge(ctx, timeframe, currentRegime, liveAge)
+	view, regimeAge := s.matrixAndAge(ctx, timeframe, currentRegime, regimeAge)
 
 	heuristic := s.engine.Calculate(
 		currentRegime,
@@ -111,12 +118,29 @@ func (s *TransitionService) liveAge(timeframe string) int {
 	return age
 }
 
+func (s *TransitionService) regimeAge(ctx context.Context, timeframe string) int {
+	if asOf, ok := replay.AsOf(ctx); ok {
+		// Never invent the live default age under replay (PR-112a).
+		if rap, ok := s.ageProvider.(replayAgeProvider); ok {
+			if a, err := rap.AgeAtAsOf(ctx, timeframe, asOf); err == nil && a > 0 {
+				return a
+			}
+		}
+		return 0
+	}
+	return s.liveAge(timeframe)
+}
+
 func (s *TransitionService) matrixAndAge(
 	ctx context.Context,
 	timeframe string,
 	current mkt.Regime,
 	liveAge int,
 ) (MatrixView, int) {
+	// Replay: skip live matrix cache (keyed without asOf) — heuristic only (PR-112a).
+	if _, ok := replay.AsOf(ctx); ok {
+		return MatrixView{}, liveAge
+	}
 	if s.matrixCache == nil {
 		return MatrixView{}, liveAge
 	}
@@ -186,6 +210,9 @@ func formatHorizon(timeframe string, regimeAge int) string {
 
 func (s *TransitionService) emitTransitionSignals(ctx context.Context, timeframe string, probs mkt.TransitionProbabilities) {
 	if s.signalEmitter == nil {
+		return
+	}
+	if _, ok := replay.AsOf(ctx); ok {
 		return
 	}
 	targets := []struct {

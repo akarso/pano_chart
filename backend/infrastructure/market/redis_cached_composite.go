@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"pano_chart/backend/application/market/metrics"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -47,6 +48,10 @@ func NewRedisCachedComposite(
 
 // Calculate tries the cache first, otherwise delegates and stores.
 func (c *RedisCachedComposite) Calculate(ctx context.Context, timeframe string, limit int) (mkt.CompositeIndex, error) {
+	// Replay reads must not reuse live composite points (PR-112a).
+	if _, ok := replay.AsOf(ctx); ok {
+		return c.next.Calculate(ctx, timeframe, limit)
+	}
 	key := fmt.Sprintf("%s:%s:%d", c.keyPrefix, timeframe, limit)
 
 	// 1. Attempt cache hit
@@ -101,6 +106,10 @@ type tapeCacheDTO struct {
 // first caller's cancellation cannot abort work (or poison the result) for
 // siblings still waiting on the same key.
 func (c *RedisCachedComposite) CalculateTape(ctx context.Context, timeframe string, limit int) (metrics.CompositeTape, error) {
+	// Replay reads must not reuse live tapes (PR-112a).
+	if _, ok := replay.AsOf(ctx); ok {
+		return c.next.CalculateTape(ctx, timeframe, limit)
+	}
 	key := fmt.Sprintf("%s:tape:%s:%d", c.keyPrefix, timeframe, limit)
 
 	if tape, ok := c.tapeFromCache(ctx, key); ok {

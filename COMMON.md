@@ -275,6 +275,32 @@ row) used for the current regime** has ≥ 30 raw samples:
 * Matrix rebuilds in-memory every 15 minutes per timeframe; history errors
   are negative-cached for the same TTL; timeframe query must be a known TF
 
+### Replay `asOf` (PR-112a)
+
+`GET /api/rankings`, `/api/market/regime`, `/api/market/composite`,
+`/api/market/transition`, and `/api/market/regime/history` accept optional
+`asOf=<unix seconds>`:
+
+* Candle reads use a historical window ending at `asOf`, then keep only bars
+  fully closed at `asOf` (`open + tf ≤ asOf`) — same intent as live
+  `GetLastNCandles` dropping the in-progress bar. Live caches are bypassed.
+* Regime history is point-in-time: closed predecessors plus the period
+  covering `asOf` (shown open) with `currentAge` measured at `asOf`.
+  The store read over-fetches `max(limit×3, limit+10)` newest periods before
+  filtering — deep scrubber times older than that window may omit the covering
+  period (empty / incomplete timeline). Intended for shallow Market Pulse
+  scrubbing, not an unbounded historical archive API.
+* Transition under `asOf` uses history age at that instant; if age is unknown
+  (gap / missing provider), age is `0` — never the live default (`12`).
+* `asOf` must be a positive unix second **not after** `now` (`400` if future).
+* Replay is **Pro-only**: missing/invalid Bearer → `401`; inactive
+  subscription → `403` (`pro required`); subscription check failure → `503`.
+  Unauthenticated live reads (no `asOf`) are unchanged.
+* Replay traffic is rate-limited separately at **10 req/min/user** (burst 5)
+  across all replay endpoints; excess → `429`. Rankings `?mtf=1` is ignored
+  when `asOf` is set (MTF overlay is live-only until PR-112b).
+* Replay does **not** write badge or transition signals to the signal log.
+
 ### Composite index
 
 `GET /api/market/composite`:

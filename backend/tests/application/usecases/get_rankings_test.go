@@ -307,11 +307,15 @@ func findResult(results []usecases.RankedResult, sym string) usecases.RankedResu
 
 // recordingCandleRepo records GetLastNCandles n for PR-105 window isolation tests.
 type recordingCandleRepo struct {
-	inner *FakeCandleRepository
-	ns    []int
+	inner        *FakeCandleRepository
+	ns           []int
+	seriesCalls  int
+	lastSeriesTo time.Time
 }
 
 func (r *recordingCandleRepo) GetSeries(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, from, to time.Time) (domain.CandleSeries, error) {
+	r.seriesCalls++
+	r.lastSeriesTo = to
 	return r.inner.GetSeries(ctx, symbol, timeframe, from, to)
 }
 
@@ -403,5 +407,67 @@ func TestGetRankings_PercentileDoesNotWidenSharedSeries(t *testing.T) {
 		t.Fatalf("breakout diverged: abs up/down=%g/%g pct=%g/%g",
 			abs.Scores["Breakout Up"], abs.Scores["Breakout Down"],
 			pct.Scores["Breakout Up"], pct.Scores["Breakout Down"])
+	}
+}
+
+// TestGetRankings_AsOfUsesHistoricalWindow covers ROADMAP PR-112a: with asOf set,
+// FetchCandles uses GetSeries ending at that instant; without asOf, live path
+// is unchanged (GetLastN).
+func TestGetRankings_AsOfUsesHistoricalWindow(t *testing.T) {
+	const precision = 20
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Date(2024, 11, 14, 0, 0, 0, 0, time.UTC) // unix ~1731542400
+	bars := make([]domain.Candle, 80)
+	px := 100.0
+	for i := 0; i < 80; i++ {
+		if i < 40 {
+			px += 1.0 // early uptrend
+		} else {
+			px -= 1.0 // late downtrend
+		}
+		bars[i] = mustNewCandleAt(sym, tf, base.Add(time.Duration(i)*time.Hour), px)
+	}
+	series, err := domain.NewCandleSeries(sym, tf, bars)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	weights := []usecases.ScoreWeight{
+		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
+	}
+	ranker := usecases.NewDefaultRankSymbols(weights)
+	universe := &fakeUniverse{symbols: []domain.Symbol{sym}}
+	volumes := &fakeVolumes{vols: map[string]float64{"BTCUSDT": 1e6}}
+
+	rec := &recordingCandleRepo{inner: NewFakeCandleRepository(map[domain.Symbol]domain.CandleSeries{sym: series}, nil)}
+	uc := usecases.NewGetRankings(
+		universe, ranker, volumes, rec,
+		"http://fake/exchangeInfo", "http://fake/ticker",
+		precision, usecases.SidewaysAlgoV5, weights, 4, nil,
+	)
+
+	asOf := base.Add(40 * time.Hour) // end of uptrend window
+	live, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{Timeframe: tf, Sort: usecases.SortByTotal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayOut, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+		Timeframe: tf, Sort: usecases.SortByTotal, AsOf: &asOf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live.Results) != 1 || len(replayOut.Results) != 1 {
+		t.Fatalf("live=%d replay=%d", len(live.Results), len(replayOut.Results))
+	}
+	liveTrend := live.Results[0].Scores["Trend Predictability"]
+	replayTrend := replayOut.Results[0].Scores["Trend Predictability"]
+	// Live window is late downtrend; asOf window is early uptrend — signs should differ.
+	if liveTrend >= 0 {
+		t.Fatalf("live trend score=%g want negative (late downtrend)", liveTrend)
+	}
+	if replayTrend <= 0 {
+		t.Fatalf("asOf trend score=%g want positive (early uptrend)", replayTrend)
 	}
 }

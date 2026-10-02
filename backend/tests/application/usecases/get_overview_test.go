@@ -48,10 +48,23 @@ func (f *FakeCandleRepository) GetSeries(ctx context.Context, symbol domain.Symb
 	if f.err != nil {
 		return domain.CandleSeries{}, f.err
 	}
-	if cs, ok := f.candlesPerSymbol[symbol]; ok {
-		return cs, nil
+	cs, ok := f.candlesPerSymbol[symbol]
+	if !ok {
+		return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
 	}
-	return domain.NewCandleSeries(symbol, timeframe, []domain.Candle{})
+	// Half-open [from, to) matching FreeTier / replay window semantics.
+	candles := make([]domain.Candle, 0, cs.Len())
+	for i := 0; i < cs.Len(); i++ {
+		c, err := cs.At(i)
+		if err != nil {
+			continue
+		}
+		ts := c.Timestamp()
+		if !ts.Before(from) && ts.Before(to) {
+			candles = append(candles, c)
+		}
+	}
+	return domain.NewCandleSeries(symbol, timeframe, candles)
 }
 
 func (f *FakeCandleRepository) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {

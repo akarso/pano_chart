@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -64,6 +65,13 @@ func (r *RedisCachedRankings) SetSignalEmitter(e ports.SignalEmitter) {
 
 // Execute implements RankingsUseCase.
 func (r *RedisCachedRankings) Execute(ctx context.Context, req usecases.GetRankingsRequest) (usecases.RankingsResult, error) {
+	// Replay reads must not reuse live rankings (PR-112a).
+	if req.AsOf != nil {
+		return r.next.Execute(ctx, req)
+	}
+	if _, ok := replay.AsOf(ctx); ok {
+		return r.next.Execute(ctx, req)
+	}
 	key := r.buildKey(req)
 
 	// 1. Attempt Redis GET

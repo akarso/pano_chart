@@ -110,6 +110,41 @@ func TestRankingsV2Handler_InvalidTimeframe(t *testing.T) {
 	uc.AssertNotCalled(t, "Execute")
 }
 
+func TestRankingsV2Handler_InvalidAsOf(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&asOf=nope", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	assert.Equal(t, "invalid asOf", body["error"])
+	uc.AssertNotCalled(t, "Execute")
+}
+
+func TestRankingsV2Handler_AsOfPassedToUseCase(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+		AsOf:      &asOf,
+	}).Return(rankingsOut(nil, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&asOf=1700000000", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	uc.AssertExpectations(t)
+}
+
 func TestRankingsV2Handler_InternalError(t *testing.T) {
 	uc := &rankingsUseCaseMock{}
 	handler := h.NewRankingsV2Handler(uc)

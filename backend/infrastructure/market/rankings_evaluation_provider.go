@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -83,7 +85,8 @@ func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, t
 		return nil, err
 	}
 	tfKey := tf.String()
-	if p.store != nil {
+	// Live store is "now" — never serve it for replay (PR-112a).
+	if _, ok := replay.AsOf(ctx); !ok && p.store != nil {
 		evals, hit, err := p.readStore(ctx, tf, tfKey, nowFn)
 		if err != nil {
 			return nil, err
@@ -146,12 +149,21 @@ func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf
 	// at EvaluationStaleAfter (or cold store) does not stampede rankings.
 	// DoChan + select: cancelled callers return immediately while the shared
 	// flight continues (same pattern as RedisCachedComposite.CalculateTape).
-	ch := p.sf.DoChan(timeframe, func() (interface{}, error) {
+	// Replay flights are keyed by asOf so they never share a live computation.
+	flightKey := timeframe
+	var asOf *time.Time
+	if t, ok := replay.AsOf(ctx); ok {
+		asOf = &t
+		flightKey = timeframe + ":asOf:" + strconv.FormatInt(t.Unix(), 10)
+	}
+	ch := p.sf.DoChan(flightKey, func() (interface{}, error) {
 		workCtx := context.WithoutCancel(ctx)
-		out, err := p.rankings.Execute(workCtx, usecases.GetRankingsRequest{
+		req := usecases.GetRankingsRequest{
 			Timeframe: tf,
 			Sort:      usecases.SortByTotal,
-		})
+			AsOf:      asOf,
+		}
+		out, err := p.rankings.Execute(workCtx, req)
 		if err != nil {
 			return nil, err
 		}
