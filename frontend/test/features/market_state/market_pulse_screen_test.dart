@@ -463,6 +463,8 @@ void main() {
 
     testWidgets('stale overlapping load does not overwrite newer asOf',
         (tester) async {
+      final older = _taggedComposite(111.0);
+      final newer = _taggedComposite(999.0);
       final composite = _GatedCompositeApi(_baseComposite(n: 110));
       final replay = ReplayController(reloadDebounce: Duration.zero);
       final now = DateTime.utc(2025, 9, 16, 10, 17);
@@ -489,18 +491,25 @@ void main() {
       replay.enter(timeframe: '1h', now: now);
       await tester.pump();
       expect(composite.pending, greaterThan(0));
-      final firstGenAsOf = replay.asOfUnixFor('1h', now: now);
+      final firstGenAsOf = replay.asOfUnixFor('1h', now: now)!;
+      composite.setDataForAsOf(firstGenAsOf, older);
 
       // Second scrub before the first load finishes.
       replay.stepBars('1h', -1, now: now);
       await tester.pump();
-      final secondAsOf = replay.asOfUnixFor('1h', now: now);
+      final secondAsOf = replay.asOfUnixFor('1h', now: now)!;
       expect(secondAsOf, isNot(firstGenAsOf));
+      composite.setDataForAsOf(secondAsOf, newer);
 
-      // Complete older requests first, then newer — last applied must win.
-      composite.releaseAll();
+      // Newer generation completes first, then the stale older one.
+      composite.releasePendingWithAsOf(secondAsOf);
       await tester.pumpAndSettle();
-      expect(composite.asOfCalls.last, secondAsOf);
+      expect(_paintedLastValue(tester), 999.0);
+
+      composite.releasePendingWithAsOf(firstGenAsOf);
+      await tester.pumpAndSettle();
+      expect(_paintedLastValue(tester), 999.0,
+          reason: 'stale older response must not clobber the newer chart');
     });
 
     testWidgets('hides live-only cards while replaying', (tester) async {
@@ -1050,18 +1059,32 @@ class _RecordingCompositeApi implements CompositeIndexApi {
   }
 }
 
-/// Holds each fetch until [releaseAll] so overlapping loads can be ordered.
+/// Holds each fetch until released so overlapping loads can be ordered.
 class _GatedCompositeApi implements CompositeIndexApi {
   _GatedCompositeApi(this.data);
-  final CompositeIndexData data;
+  CompositeIndexData data;
   final asOfCalls = <int?>[];
   final _waiters = <Completer<void>>[];
+  final _asOfByWaiter = <int?>[];
+  final _dataByAsOf = <int?, CompositeIndexData>{};
 
   int get pending => _waiters.where((c) => !c.isCompleted).length;
+
+  void setDataForAsOf(int? asOf, CompositeIndexData value) {
+    _dataByAsOf[asOf] = value;
+  }
 
   void releaseAll() {
     for (final c in _waiters) {
       if (!c.isCompleted) c.complete();
+    }
+  }
+
+  void releasePendingWithAsOf(int? asOf) {
+    for (var i = 0; i < _waiters.length; i++) {
+      if (!_waiters[i].isCompleted && _asOfByWaiter[i] == asOf) {
+        _waiters[i].complete();
+      }
     }
   }
 
@@ -1074,9 +1097,33 @@ class _GatedCompositeApi implements CompositeIndexApi {
     asOfCalls.add(asOf);
     final gate = Completer<void>();
     _waiters.add(gate);
+    _asOfByWaiter.add(asOf);
     await gate.future;
-    return _compositeForLimit(data, limit);
+    final source = _dataByAsOf[asOf] ?? data;
+    return _compositeForLimit(source, limit);
   }
+}
+
+double _paintedLastValue(WidgetTester tester) {
+  final paint = tester.widget<CustomPaint>(
+    find.byKey(const Key('mp-composite-paint')),
+  );
+  final painter = paint.painter! as CompositeChartPainter;
+  return painter.points.last.value;
+}
+
+CompositeIndexData _taggedComposite(double lastValue, {int n = 110}) {
+  return CompositeIndexData(
+    timeframe: '1h',
+    symbolCount: 100,
+    points: [
+      for (var i = 0; i < n; i++)
+        IndexPoint(
+          timestamp: 1000 + i * 100,
+          value: i == n - 1 ? lastValue : 100.0 + i * 0.1,
+        ),
+    ],
+  );
 }
 
 /// Mimics backend: shorter limit = last N closes rebased to 100 at first.

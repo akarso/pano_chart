@@ -227,12 +227,19 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Debounced (or enter/exit-immediate) fetch reload. Skipped while Pulse
   /// owns the shared controller so notification + menu routes don't double
   /// the replay rate budget.
+  ///
+  /// Deferred to the next frame so [ReplayController.releasePulseSurface]
+  /// (called from Pulse [State.dispose]) cannot kick off Overview work
+  /// mid-unmount. Recheck mounted + Pulse-foreground before reloading so
+  /// an exit-while-Pulse-open still no-ops here (Pulse owns the scrub).
   void _onReplayReload() {
-    if (!mounted) return;
-    if (widget.replayController?.isPulseForeground == true) return;
-    _syncViewModelEntitlement();
-    _loadScorecards();
-    vm.loadInitial(_timeframe);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.replayController?.isPulseForeground == true) return;
+      _syncViewModelEntitlement();
+      _loadScorecards();
+      vm.loadInitial(_timeframe);
+    });
   }
 
   void _syncAutoRefreshWithReplay() {
@@ -251,11 +258,14 @@ class OverviewWidgetState extends State<OverviewWidget>
     // Empty fail-closed replay grid still arms the timer so exit recovers.
     final count = vm.state.items.length;
     final n = count == 0 ? 1 : count;
+    final interval = overviewAutoRefreshInterval(n);
     if (_autoRefreshTimer == null) {
       _autoRefreshTimer = AutoRefreshTimer(
-        interval: overviewAutoRefreshInterval(n),
+        interval: interval,
         onTick: _autoRefresh,
       );
+    } else {
+      _autoRefreshTimer!.updateInterval(interval);
     }
     _autoRefreshTimer!.start();
   }
@@ -620,12 +630,14 @@ class OverviewWidgetState extends State<OverviewWidget>
   void _maybeStartAutoRefresh(int symbolCount) {
     if (!_isProUser || symbolCount == 0) return;
     if (widget.replayController?.isActive == true) return;
+    final interval = overviewAutoRefreshInterval(symbolCount);
     if (_autoRefreshTimer != null) {
+      _autoRefreshTimer!.updateInterval(interval);
       _autoRefreshTimer!.start();
       return;
     }
     _autoRefreshTimer = AutoRefreshTimer(
-      interval: overviewAutoRefreshInterval(symbolCount),
+      interval: interval,
       onTick: _autoRefresh,
     );
     _autoRefreshTimer!.start();
