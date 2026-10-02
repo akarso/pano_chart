@@ -245,7 +245,7 @@ func TestRedisEvaluationStore_RoundTrip(t *testing.T) {
 		t.Errorf("ComputedAt: want %d, got %d", at.Unix(), got[0].ComputedAt)
 	}
 
-	raw := fr.strings[arrayKey("1h")]
+	raw := fr.strings[store.arrayKey("1h")]
 	var probe []map[string]any
 	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
 		t.Fatalf("json: %v", err)
@@ -400,11 +400,166 @@ func TestRedisEvaluationStore_TTLUsesSharedHelper(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	want := domain.EvaluationStoreTTL(domain.Timeframe15m)
-	if fr.ttls[arrayKey("15m")] != want {
-		t.Errorf("15m TTL: want %v, got %v", want, fr.ttls[arrayKey("15m")])
+	if fr.ttls[store.arrayKey("15m")] != want {
+		t.Errorf("15m TTL: want %v, got %v", want, fr.ttls[store.arrayKey("15m")])
 	}
-	if _, err := strconv.ParseInt(fr.strings[atKey("15m")], 10, 64); err != nil {
+	if _, err := strconv.ParseInt(fr.strings[store.atKey("15m")], 10, 64); err != nil {
 		t.Errorf("at key: %v", err)
+	}
+}
+
+func TestRedisEvaluationStore_TrendAlgoNamespacesKeys(t *testing.T) {
+	fr := newFakeRedis()
+	pred := NewRedisEvaluationStore(fr)
+	pred.SetTrendAlgo("predictability")
+	strength := NewRedisEvaluationStore(fr)
+	strength.SetTrendAlgo("strength")
+	at := time.Now().UTC()
+
+	predEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.1, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	strengthEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion, TrendAlgo: "strength",
+	}}
+	if err := pred.Put(context.Background(), "1h", predEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := strength.Put(context.Background(), "1h", strengthEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if pred.arrayKey("1h") == strength.arrayKey("1h") {
+		t.Fatal("trend algos must use distinct Redis keys")
+	}
+	gotPred, _, err := pred.Get(context.Background(), "1h")
+	if err != nil || len(gotPred) != 1 || gotPred[0].TrendScore != 0.1 {
+		t.Fatalf("predictability store polluted: %+v err=%v", gotPred, err)
+	}
+	gotStrength, _, err := strength.Get(context.Background(), "1h")
+	if err != nil || len(gotStrength) != 1 || gotStrength[0].TrendScore != 0.9 {
+		t.Fatalf("strength store polluted: %+v err=%v", gotStrength, err)
+	}
+}
+
+func TestRedisEvaluationStore_CompressionAlgoNamespacesKeys(t *testing.T) {
+	fr := newFakeRedis()
+	abs := NewRedisEvaluationStore(fr)
+	abs.SetCompressionAlgo("absolute")
+	pct := NewRedisEvaluationStore(fr)
+	pct.SetCompressionAlgo("percentile")
+	at := time.Now().UTC()
+
+	absEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", CompressionScore: 0.1, AlgoVersion: domain.AlgoVersion, CompressionAlgo: "absolute",
+	}}
+	pctEvals := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", CompressionScore: 0.9, AlgoVersion: domain.AlgoVersion, CompressionAlgo: "percentile",
+	}}
+	if err := abs.Put(context.Background(), "1h", absEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if err := pct.Put(context.Background(), "1h", pctEvals, at); err != nil {
+		t.Fatal(err)
+	}
+	if abs.arrayKey("1h") == pct.arrayKey("1h") {
+		t.Fatal("compression algos must use distinct Redis keys")
+	}
+	gotAbs, _, err := abs.Get(context.Background(), "1h")
+	if err != nil || len(gotAbs) != 1 || gotAbs[0].CompressionScore != 0.1 {
+		t.Fatalf("absolute store polluted: %+v err=%v", gotAbs, err)
+	}
+	gotPct, _, err := pct.Get(context.Background(), "1h")
+	if err != nil || len(gotPct) != 1 || gotPct[0].CompressionScore != 0.9 {
+		t.Fatalf("percentile store polluted: %+v err=%v", gotPct, err)
+	}
+}
+
+func TestRedisEvaluationStore_PredictabilityReadsLegacyKeys(t *testing.T) {
+	fr := newFakeRedis()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	legacy := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.42, SidewaysScore: 0.1,
+		AlgoVersion: domain.AlgoVersion,
+	}}
+	raw, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.strings[legacyArrayKey("1h")] = string(raw)
+	fr.strings[legacyAtKey("1h")] = strconv.FormatInt(at.Unix(), 10)
+	symJSON, err := json.Marshal(legacy[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.hashes[legacySymbolKey("1h")] = map[string]string{"BTCUSDT": string(symJSON)}
+
+	store := NewRedisEvaluationStore(fr) // default predictability
+	got, gotAt, err := store.Get(context.Background(), "1h")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if !gotAt.Equal(at) || len(got) != 1 || got[0].TrendScore != 0.42 {
+		t.Fatalf("Get legacy: at=%v got=%+v", gotAt, got)
+	}
+	sym, symAt, err := store.GetSymbol(context.Background(), "1h", "BTCUSDT")
+	if err != nil || !symAt.Equal(at) || sym.TrendScore != 0.42 {
+		t.Fatalf("GetSymbol legacy: %+v at=%v err=%v", sym, symAt, err)
+	}
+
+	// Namespaced Put must win over legacy on subsequent reads.
+	migrated := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.77, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	if err := store.Put(context.Background(), "1h", migrated, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err = store.Get(context.Background(), "1h")
+	if err != nil || len(got) != 1 || got[0].TrendScore != 0.77 {
+		t.Fatalf("namespaced must prefer over legacy: %+v err=%v", got, err)
+	}
+
+	// Strength must not read predictability legacy keys.
+	strength := NewRedisEvaluationStore(fr)
+	strength.SetTrendAlgo("strength")
+	_, _, err = strength.Get(context.Background(), "1h")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("strength must not fall back to legacy, got %v", err)
+	}
+}
+
+func TestRedisEvaluationStore_RemovedSymbolDoesNotResurrectLegacy(t *testing.T) {
+	fr := newFakeRedis()
+	at := time.Unix(1_700_000_000, 0).UTC()
+	legacySnap := domain.EvaluationSnapshot{
+		Symbol: "OLDUSDT", TrendScore: 0.9, AlgoVersion: domain.AlgoVersion,
+	}
+	legacyJSON, err := json.Marshal(legacySnap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.strings[legacyAtKey("1h")] = strconv.FormatInt(at.Unix(), 10)
+	fr.hashes[legacySymbolKey("1h")] = map[string]string{"OLDUSDT": string(legacyJSON)}
+
+	store := NewRedisEvaluationStore(fr)
+	// Current predictability batch exists but does not include OLDUSDT.
+	current := []domain.EvaluationSnapshot{{
+		Symbol: "BTCUSDT", TrendScore: 0.5, AlgoVersion: domain.AlgoVersion, TrendAlgo: "predictability",
+	}}
+	if err := store.Put(context.Background(), "1h", current, at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.GetSymbol(context.Background(), "1h", "OLDUSDT")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("removed symbol must stay a miss, got %v", err)
+	}
+	// Empty current batch: still a generation — must not resurrect legacy.
+	if err := store.Put(context.Background(), "1h", nil, at.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = store.GetSymbol(context.Background(), "1h", "OLDUSDT")
+	if !errors.Is(err, ports.ErrEvaluationNotFound) {
+		t.Fatalf("empty batch must not resurrect legacy, got %v", err)
 	}
 }
 

@@ -10,7 +10,6 @@ import '../../features/bubble_map/bubble_map_view_model.dart';
 import '../../features/candles/application/get_candle_series.dart';
 import '../../features/candles/application/get_candle_series.dart' as impl;
 import '../../features/candles/infrastructure/http_candle_api.dart';
-import '../../features/events/api/events_api.dart';
 import '../../features/events/application/get_events.dart';
 import '../../features/events/events_view_model.dart';
 import '../../features/events/infrastructure/http_events_api.dart';
@@ -20,12 +19,14 @@ import '../../features/market_state/http_composite_index_api.dart';
 import '../../features/market_state/http_market_state_api.dart';
 import '../../features/market_state/http_regime_api.dart';
 import '../../features/market_state/http_regime_history_api.dart';
+import '../../features/market_state/http_sector_rotation_api.dart';
 import '../../features/market_state/http_transition_api.dart';
 import '../../features/detail/http_fragility_api.dart';
 import '../../features/detail/http_behavior_api.dart';
+import '../../features/detail/http_mtf_regimes_api.dart';
+import '../../features/detail/http_plan_api.dart';
 import '../../features/detail/http_setup_api.dart';
 import '../../features/volatility/http_volatility_api.dart';
-import '../../features/news/api/news_api.dart';
 import '../../features/news/application/get_news.dart';
 import '../../features/news/infrastructure/http_news_api.dart';
 import '../../features/news/news_view_model.dart';
@@ -39,6 +40,10 @@ import '../../features/social/api/social_api.dart';
 import '../../features/social/infrastructure/http_device_registration_api.dart';
 import '../../features/social/infrastructure/http_social_api.dart';
 import '../../features/social/social_feed_view_model.dart';
+import '../../features/watchlist/http_watchlist_api.dart';
+import '../../features/watchlist/watchlist_api.dart';
+import '../../features/watchlist/watchlist_controller.dart';
+import '../../infrastructure/preferences_service.dart';
 
 /// Composition root responsible for explicitly wiring dependencies.
 class CompositionRoot {
@@ -130,6 +135,11 @@ class CompositionRoot {
     return HttpRegimeHistoryApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
+  /// Creates a wired SectorRotationApi.
+  SectorRotationApi createSectorRotationApi() {
+    return HttpSectorRotationApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
   /// Creates a wired NewsViewModel backed by the news API.
   NewsViewModel createNewsViewModel() {
     final api = HttpNewsApi(client: httpClient, baseUrl: apiBaseUrl);
@@ -184,6 +194,17 @@ class CompositionRoot {
     return HttpVolatilityApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
+  /// Creates a wired [MtfRegimesApi] for fetching the multi-timeframe
+  /// regime stack (PR-100).
+  MtfRegimesApi createMtfRegimesApi() {
+    return HttpMtfRegimesApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [PlanApi] for the range trade planner (PR-110/111).
+  PlanApi createPlanApi() {
+    return HttpPlanApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
   /// Creates a wired [SocialApi].
   SocialApi createSocialApi() {
     return HttpSocialApi(client: httpClient, baseUrl: apiBaseUrl);
@@ -213,5 +234,24 @@ class CompositionRoot {
       getAuthSecret: authSecretProvider,
       onUnauthorized: onUnauthorized,
     );
+  }
+
+  /// Creates a wired [WatchlistApi]. Not pro-gated (unlike e.g.
+  /// [createNotificationConfigApi]'s MTF-style siblings) — every user can
+  /// star symbols, only the transition *alert* is pro-only (ROADMAP
+  /// PR-101), so this is wired unconditionally wherever it's needed.
+  WatchlistApi createWatchlistApi() {
+    return HttpWatchlistApi(
+      baseUrl: apiBaseUrl,
+      getAuthSecret: authSecretProvider,
+      onUnauthorized: onUnauthorized,
+    );
+  }
+
+  /// One watchlist for the whole app. Screens share this instance so a
+  /// star toggled on the detail screen, the grid, or a notification deep
+  /// link is the same set.
+  WatchlistController createWatchlistController(PreferencesService prefs) {
+    return WatchlistController(prefs: prefs, api: createWatchlistApi());
   }
 }

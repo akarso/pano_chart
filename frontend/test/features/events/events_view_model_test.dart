@@ -1,7 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pano_chart_frontend/domain/event.dart';
-import 'package:pano_chart_frontend/features/events/api/events_api.dart';
-import 'package:pano_chart_frontend/features/events/api/events_response_dto.dart';
 import 'package:pano_chart_frontend/features/events/application/get_events.dart';
 import 'package:pano_chart_frontend/features/events/event_filter.dart';
 import 'package:pano_chart_frontend/features/events/events_view_model.dart';

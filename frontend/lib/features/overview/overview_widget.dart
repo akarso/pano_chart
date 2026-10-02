@@ -26,6 +26,7 @@ import '../market_state/http_composite_index_api.dart';
 import '../market_state/http_market_state_api.dart';
 import '../market_state/http_regime_api.dart';
 import '../market_state/http_regime_history_api.dart';
+import '../market_state/http_sector_rotation_api.dart';
 import '../market_state/http_transition_api.dart';
 import '../market_state/market_pulse_screen.dart';
 import '../billing/billing_manager.dart';
@@ -45,6 +46,8 @@ import '../detail/detail_screen.dart';
 import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
+import '../detail/http_mtf_regimes_api.dart';
+import '../detail/http_plan_api.dart';
 import '../detail/http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -52,9 +55,15 @@ import '../scorecards/scorecard_data.dart';
 import '../scorecards/scorecards_screen.dart';
 import '../scorecards/reliability_chip.dart';
 import '../volatility/http_volatility_api.dart';
+import '../market_state/regime_colors.dart';
+import 'aligned_badge_presentation.dart';
 import 'overview_state.dart';
 import 'overview_view_model.dart';
 import 'relative_strength_chip.dart';
+import '../watchlist/watchlist_controller.dart';
+import '../replay/replay_asof.dart';
+import '../replay/replay_controller.dart';
+import '../replay/replay_widgets.dart';
 
 /// Overview widget that displays a scrollable grid of market sparklines.
 ///
@@ -72,6 +81,7 @@ class OverviewWidget extends StatefulWidget {
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
+  final SectorRotationApi? sectorRotationApi;
   final StablecoinConfig stablecoins;
   final NewsViewModel? newsViewModel;
   final BillingManager? billingManager;
@@ -79,9 +89,16 @@ class OverviewWidget extends StatefulWidget {
   final FragilityApi? fragilityApi;
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
+  final MtfRegimesApi? mtfRegimesApi;
+  final PlanApi? planApi;
   final SocialFeedViewModel? socialFeedViewModel;
   final NotificationConfigApi? notificationConfigApi;
   final ScorecardApi? scorecardApi;
+  final ReplayController? replayController;
+
+  /// Shared watchlist. When null, this widget owns a local controller
+  /// backed by [prefs] so the grid star still paints from the cache.
+  final WatchlistController? watchlist;
 
   const OverviewWidget({
     Key? key,
@@ -96,6 +113,7 @@ class OverviewWidget extends StatefulWidget {
     this.regimeApi,
     this.transitionApi,
     this.regimeHistoryApi,
+    this.sectorRotationApi,
     this.stablecoins = const StablecoinConfig({}),
     this.newsViewModel,
     this.billingManager,
@@ -103,9 +121,13 @@ class OverviewWidget extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.volatilityApi,
+    this.mtfRegimesApi,
+    this.planApi,
     this.socialFeedViewModel,
     this.notificationConfigApi,
     this.scorecardApi,
+    this.replayController,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -131,7 +153,9 @@ class OverviewWidgetState extends State<OverviewWidget>
   // list is capped at 15 items) — set at the end of every build so
   // _checkAndLoadMore can skip paginating for data the cap won't show.
   bool _freeTierCapActive = false;
-  Set<String> _favourites = {};
+  late final WatchlistController _watchlist;
+  bool _ownsWatchlist = false;
+  Set<String> _shownFavourites = {};
 
   /// Which overlay panel is open (none by default).
   _OverlayKind _overlay = _OverlayKind.none;
@@ -174,6 +198,8 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   PreferencesService? get _prefs => widget.prefs;
 
+  Set<String> get _favourites => _watchlist.symbols;
+
   /// Capabilities derived from current subscription state.
   Capabilities get _capabilities =>
       Capabilities.fromBilling(widget.billingManager);
@@ -181,10 +207,86 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Whether auto-refresh is enabled (pro tier).
   bool get _isProUser => _capabilities.isPro;
 
+  /// Syncs the view model's entitlement flag before any fetch that might
+  /// request the `?mtf=1` overlay (PR-100) — `_isProUser` is a live getter
+  /// (re-evaluated from `widget.billingManager` on every access), so this
+  /// must run right before each trigger rather than once, since entitlement
+  /// can change mid-lifetime (purchase/restore).
+  void _syncViewModelEntitlement() {
+    vm.isProUser = _isProUser;
+    vm.asOfUnix = widget.replayController?.asOfUnixFor(_timeframe);
+  }
+
+  /// Immediate UI / timer reaction to scrub (banner, scrubber, pause refresh).
+  void _onReplayUiChanged() {
+    if (!mounted) return;
+    _syncAutoRefreshWithReplay();
+    setState(() {});
+  }
+
+  /// Debounced (or enter/exit-immediate) fetch reload. Skipped while Pulse
+  /// owns the shared controller so notification + menu routes don't double
+  /// the replay rate budget.
+  ///
+  /// Deferred to the next frame so [ReplayController.releasePulseSurface]
+  /// (called from Pulse [State.dispose]) cannot kick off Overview work
+  /// mid-unmount. Recheck mounted + Pulse-foreground before reloading so
+  /// an exit-while-Pulse-open still no-ops here (Pulse owns the scrub).
+  void _onReplayReload() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (widget.replayController?.isPulseForeground == true) return;
+      _syncViewModelEntitlement();
+      _loadScorecards();
+      vm.loadInitial(_timeframe);
+    });
+  }
+
+  void _syncAutoRefreshWithReplay() {
+    if (widget.replayController?.isActive == true) {
+      _autoRefreshTimer?.stop();
+      return;
+    }
+    _ensureAutoRefreshRunning();
+  }
+
+  /// Starts or resumes the Pro auto-refresh timer when appropriate.
+  /// Does not depend on a successful fetch (exit-from-replay DoD).
+  void _ensureAutoRefreshRunning() {
+    if (!_isProUser) return;
+    if (widget.replayController?.isActive == true) return;
+    // Empty fail-closed replay grid still arms the timer so exit recovers.
+    final count = vm.state.items.length;
+    final n = count == 0 ? 1 : count;
+    final interval = overviewAutoRefreshInterval(n);
+    if (_autoRefreshTimer == null) {
+      _autoRefreshTimer = AutoRefreshTimer(
+        interval: interval,
+        onTick: _autoRefresh,
+      );
+    } else {
+      _autoRefreshTimer!.updateInterval(interval);
+    }
+    _autoRefreshTimer!.start();
+  }
+
+  void _attachReplay(ReplayController? c) {
+    c?.addListener(_onReplayUiChanged);
+    c?.addReloadListener(_onReplayReload);
+  }
+
+  void _detachReplay(ReplayController? c) {
+    c?.removeListener(_onReplayUiChanged);
+    c?.removeReloadListener(_onReplayReload);
+  }
+
   @override
   void initState() {
     super.initState();
     vm = widget.viewModel;
+    _bindWatchlist();
+    _attachReplay(widget.replayController);
+    vm.asOfUnix = widget.replayController?.asOfUnixFor(_timeframe);
 
     // ---- staleness tracker ----
     _stalenessTracker
@@ -208,7 +310,6 @@ class OverviewWidgetState extends State<OverviewWidget>
       _normalizeSparklines = p.normalizeSparklines;
       _hiResSparklines = p.hiResSparklines;
       _excludeStablecoins = p.excludeStablecoins;
-      _favourites = p.favourites;
 
       // Sync sort, sidewaysAlgo, and sortDirection into the view model
       // state so the first loadInitial uses the persisted values.
@@ -273,6 +374,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       });
     };
     _scrollController.addListener(_onScroll);
+    _syncViewModelEntitlement();
     vm.loadInitial(_timeframe);
     _loadScorecards();
 
@@ -296,10 +398,27 @@ class OverviewWidgetState extends State<OverviewWidget>
     return _scorecards.load(
       api: widget.scorecardApi,
       timeframe: _timeframe,
+      since: _scorecardSince,
       notify: () {
         if (mounted) setState(() {});
       },
     );
+  }
+
+  String get _scorecardSince {
+    final asOf = widget.replayController?.asOfFor(_timeframe);
+    return asOf != null ? replayScorecardSince(asOf) : '30d';
+  }
+
+  @override
+  void didUpdateWidget(covariant OverviewWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.replayController, widget.replayController)) {
+      _detachReplay(oldWidget.replayController);
+      _attachReplay(widget.replayController);
+      _syncViewModelEntitlement();
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -326,8 +445,14 @@ class OverviewWidgetState extends State<OverviewWidget>
           _stalenessTracker.stop();
         },
         onResume: () {
-          _autoRefreshTimer?.start();
+          _syncAutoRefreshWithReplay();
           _stalenessTracker.start();
+          // A notification shade is inactive → resumed and never paused.
+          // That transition restarts timers and does not spend a watchlist
+          // GET from the rate-limit burst.
+          if (_lifecycleManager?.resumeFollowsBackground ?? false) {
+            _watchlist.reconcile();
+          }
         },
       );
       newManager.addPausable(_pausable!);
@@ -336,6 +461,9 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   @override
   void dispose() {
+    _detachReplay(widget.replayController);
+    _watchlist.removeListener(_onWatchlistChanged);
+    if (_ownsWatchlist) _watchlist.dispose();
     if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     vm.onChanged = null;
     _autoRefreshTimer?.dispose();
@@ -364,6 +492,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       // reached almost immediately, and there's no point fetching more
       // data the cap won't display anyway — see PR-077 CR follow-up.
       if (!vm.state.isLoading && vm.state.hasMore && !_freeTierCapActive) {
+        _syncViewModelEntitlement();
         vm.loadNext(_timeframe);
       }
     }
@@ -499,9 +628,16 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Initialises the auto-refresh timer the first time we have data.
   /// Subsequent calls are no-ops (the timer is already running).
   void _maybeStartAutoRefresh(int symbolCount) {
-    if (!_isProUser || _autoRefreshTimer != null || symbolCount == 0) return;
+    if (!_isProUser || symbolCount == 0) return;
+    if (widget.replayController?.isActive == true) return;
+    final interval = overviewAutoRefreshInterval(symbolCount);
+    if (_autoRefreshTimer != null) {
+      _autoRefreshTimer!.updateInterval(interval);
+      _autoRefreshTimer!.start();
+      return;
+    }
     _autoRefreshTimer = AutoRefreshTimer(
-      interval: overviewAutoRefreshInterval(symbolCount),
+      interval: interval,
       onTick: _autoRefresh,
     );
     _autoRefreshTimer!.start();
@@ -511,9 +647,11 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// data (the flash-dot trigger happens in the [onChanged] listener),
   /// then notifies staleness tracker.
   Future<void> _autoRefresh() async {
+    if (widget.replayController?.isActive == true) return;
     _captureSparklineValues();
     _isRefreshing = true;
     _isAutoRefreshing = true;
+    _syncViewModelEntitlement();
     await vm.refresh(_timeframe);
   }
 
@@ -574,7 +712,7 @@ class OverviewWidgetState extends State<OverviewWidget>
       final series = await widget.getCandleSeries.execute(input);
       if (!mounted) return;
       Navigator.of(context).pop();
-      final result = await Navigator.of(context).push<bool>(
+      await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => DetailScreen(
             symbol: AppSymbol(item.symbol),
@@ -582,7 +720,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             series: series,
             warmupCount: _indicatorWarmup,
             initialVisibleCount: _sparklineCandles,
-            isFavourite: _favourites.contains(item.symbol),
+            isFavourite: _watchlist.contains(item.symbol),
             eventsViewModel: _isProUser ? widget.eventsViewModel : null,
             socialFeedViewModel: _isProUser ? widget.socialFeedViewModel : null,
             getCandleSeries: widget.getCandleSeries,
@@ -590,8 +728,11 @@ class OverviewWidgetState extends State<OverviewWidget>
             fragilityApi: _isProUser ? widget.fragilityApi : null,
             behaviorApi: _isProUser ? widget.behaviorApi : null,
             volatilityApi: _isProUser ? widget.volatilityApi : null,
+            mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
+            planApi: _isProUser ? widget.planApi : null,
             scorecardApi: widget.scorecardApi,
             isProUser: _isProUser,
+            watchlist: _watchlist,
             detailContext: DetailContext(
               rank: rank,
               totalScore: item.totalScore,
@@ -606,17 +747,6 @@ class OverviewWidgetState extends State<OverviewWidget>
           ),
         ),
       );
-      // Update favourites from detail screen result.
-      if (result != null && mounted) {
-        setState(() {
-          if (result) {
-            _favourites.add(item.symbol);
-          } else {
-            _favourites.remove(item.symbol);
-          }
-          _prefs?.favourites = _favourites;
-        });
-      }
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -626,11 +756,58 @@ class OverviewWidgetState extends State<OverviewWidget>
     }
   }
 
+  void _bindWatchlist() {
+    final shared = widget.watchlist;
+    if (shared != null) {
+      _watchlist = shared;
+    } else {
+      _watchlist = WatchlistController(prefs: widget.prefs);
+      _ownsWatchlist = true;
+    }
+    _shownFavourites = Set.of(_watchlist.symbols);
+    _watchlist.addListener(_onWatchlistChanged);
+    _watchlist.reconcile();
+  }
+
+  void _onWatchlistChanged() {
+    if (!mounted) return;
+    final next = _watchlist.symbols;
+    final changed = !setEquals(next, _shownFavourites);
+    _shownFavourites = Set.of(next);
+    setState(() {});
+    if (changed && _showFavourites && next.isNotEmpty) {
+      _syncViewModelEntitlement();
+      vm.loadMissingFavourites(_timeframe, next);
+    }
+    if (_watchlist.statusMessage == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWatchlistStatus());
+  }
+
+  void _showWatchlistStatus() {
+    if (!mounted) return;
+    final message = _watchlist.takeStatus();
+    if (message == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Toggles [symbol] on the shared watchlist. The controller repaints
+  /// every listener. A rejection is reported here when this route is
+  /// still mounted; otherwise the post-frame status handler shows it.
+  void _toggleWatchlist(String symbol) {
+    _watchlist.toggle(symbol).then((_) {
+      if (!mounted) return;
+      _showWatchlistStatus();
+    });
+  }
+
   // ---- pull-to-refresh ----
 
   Future<void> _onRefresh() async {
     _captureSparklineValues();
     _isRefreshing = true;
+    _syncViewModelEntitlement();
     await vm.refresh(_timeframe);
   }
 
@@ -657,6 +834,8 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   Widget build(BuildContext context) {
     final state = vm.state;
+    final replay = widget.replayController;
+    final asOf = replay?.asOfFor(_timeframe);
 
     return SafeArea(
       bottom: false,
@@ -674,7 +853,15 @@ class OverviewWidgetState extends State<OverviewWidget>
               children: [_buildNavBar(), _buildOverlayPanel(state)],
             ),
           ),
+          if (asOf != null)
+            ReplayBanner(
+              asOf: asOf,
+              onExit: () => replay?.exit(),
+              footnote: kReplayBannerFootnote,
+            ),
           Expanded(child: _buildBody(state)),
+          if (asOf != null && replay != null)
+            ReplayScrubber(controller: replay, timeframe: _timeframe),
           _buildTrialBanner(),
         ],
       ),
@@ -695,105 +882,167 @@ class OverviewWidgetState extends State<OverviewWidget>
         ),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          if (_showFavourites) ...[
-            // Back arrow + title (matches Bubble Map AppBar style)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => setState(() => _showFavourites = false),
-              child: const SizedBox(
-                width: 36,
-                height: 44,
-                child: Center(
-                  child: Icon(
-                    Icons.arrow_back_ios_new,
-                    color: Colors.white,
-                    size: 18,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tight = constraints.maxWidth < 340;
+          final iconBox = tight ? 36.0 : 44.0;
+          return Row(
+            children: [
+              if (_showFavourites) ...[
+                // Back arrow + title (matches Bubble Map AppBar style)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _showFavourites = false),
+                  child: const SizedBox(
+                    width: 36,
+                    height: 44,
+                    child: Center(
+                      child: Icon(
+                        Icons.arrow_back_ios_new,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ),
+                const Text(
+                  'Watchlist',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF00E6C0),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ] else ...[
+                // Logo + branding
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    _scrollController.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 300),
+                      curve: Curves.easeOut,
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 0, right: 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          margin: EdgeInsets.only(right: tight ? 4 : 14),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(3),
+                            child: Image.asset(
+                              'assets/icon.png',
+                              width: 26,
+                              height: 26,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const Spacer(),
+              // "Watchlist" filter chip (ROADMAP PR-101) — filters the grid to
+              // starred symbols, same underlying _showFavourites flag/filtering
+              // logic the app already had (the "favourites" star doubles as
+              // the backend-synced watchlist, see the toggle methods above).
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: FilterChip(
+                        label: const Text('Watchlist'),
+                        avatar: Icon(
+                          _showFavourites ? Icons.star : Icons.star_border,
+                          size: 16,
+                          color: _showFavourites
+                              ? Colors.black
+                              : Colors.white70,
+                        ),
+                        selected: _showFavourites,
+                        showCheckmark: false,
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        labelStyle: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: _showFavourites ? Colors.black : Colors.white,
+                        ),
+                        backgroundColor: Colors.white.withAlpha(
+                          (0.08 * 255).round(),
+                        ),
+                        selectedColor: Colors.amber,
+                        onSelected: (selected) {
+                          final willShow = selected;
+                          setState(() => _showFavourites = willShow);
+                          if (willShow && _favourites.isNotEmpty) {
+                            _syncViewModelEntitlement();
+                            vm.loadMissingFavourites(_timeframe, _favourites);
+                          }
+                        },
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const Text(
-              'Favourites',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF00E6C0),
-                letterSpacing: 0.5,
-              ),
-            ),
-          ] else ...[
-            // Logo + branding
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _scrollController.animateTo(
-                  0,
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeOut,
-                );
-              },
-              child: Padding(
-                padding: const EdgeInsets.only(left: 0, right: 8),
-                child: Row(
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(right: 14),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: Image.asset(
-                          'assets/icon.png',
-                          width: 26,
-                          height: 26,
-                        ),
-                      ),
-                    ),
-                  ],
+              const SizedBox(width: 8),
+              if (_isProUser && widget.replayController != null)
+                IconButton(
+                  key: const Key('replay-toggle'),
+                  tooltip: widget.replayController!.isActive
+                      ? 'Exit replay'
+                      : 'Replay',
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints.tightFor(
+                    width: iconBox,
+                    height: iconBox,
+                  ),
+                  icon: Icon(
+                    Icons.history,
+                    size: tight ? 20 : 22,
+                    color: widget.replayController!.isActive
+                        ? Colors.lightBlueAccent
+                        : Colors.white70,
+                  ),
+                  onPressed: () {
+                    final replay = widget.replayController!;
+                    if (replay.isActive) {
+                      replay.exit();
+                    } else {
+                      replay.enter(timeframe: _timeframe);
+                    }
+                  },
                 ),
+              if (_isProUser && widget.replayController != null)
+                const SizedBox(width: 4),
+              // Settings icon
+              _NavBarIcon(
+                key: const ValueKey('overview-settings-nav-icon'),
+                isActive: _overlay == _OverlayKind.settings,
+                svgAsset: 'assets/gear-setting-settings.svg',
+                onTap: () => _toggleOverlay(_OverlayKind.settings),
+                boxSize: iconBox,
               ),
-            ),
-          ],
-          const Spacer(),
-          // Favourites toggle
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              final willShow = !_showFavourites;
-              setState(() => _showFavourites = willShow);
-              if (willShow && _favourites.isNotEmpty) {
-                vm.loadMissingFavourites(_timeframe, _favourites);
-              }
-            },
-            child: SizedBox(
-              width: 44,
-              height: 44,
-              child: Center(
-                child: Icon(
-                  _showFavourites ? Icons.star : Icons.star_border,
-                  color: _showFavourites ? Colors.amber : Colors.white,
-                  size: 22,
-                ),
+              const SizedBox(width: 8),
+              // Menu icon
+              _NavBarIcon(
+                key: const ValueKey('overview-menu-nav-icon'),
+                isActive: _overlay == _OverlayKind.menu,
+                svgAsset: 'assets/menu.svg',
+                onTap: () => _toggleOverlay(_OverlayKind.menu),
+                boxSize: iconBox,
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Settings icon
-          _NavBarIcon(
-            isActive: _overlay == _OverlayKind.settings,
-            svgAsset: 'assets/gear-setting-settings.svg',
-            onTap: () => _toggleOverlay(_OverlayKind.settings),
-          ),
-          const SizedBox(width: 8),
-          // Menu icon
-          _NavBarIcon(
-            key: const ValueKey('overview-menu-nav-icon'),
-            isActive: _overlay == _OverlayKind.menu,
-            svgAsset: 'assets/menu.svg',
-            onTap: () => _toggleOverlay(_OverlayKind.menu),
-          ),
-          const SizedBox(width: 4),
-        ],
+              const SizedBox(width: 4),
+            ],
+          );
+        },
       ),
     );
   }
@@ -884,12 +1133,31 @@ class OverviewWidgetState extends State<OverviewWidget>
                       setState(() => _timeframe = v ?? '1h');
                       _prefs?.timeframe = _timeframe;
                       _stalenessTracker.setTimeframe(_timeframe);
-                      _loadScorecards();
                       // Pause auto-refresh during reload; it resumes via
-                      // _maybeStartAutoRefresh once new data arrives.
+                      // _maybeStartAutoRefresh once new data arrives (or
+                      // immediately on exit-from-replay via
+                      // _syncAutoRefreshWithReplay).
                       _autoRefreshTimer?.stop();
-                      _autoRefreshTimer = null;
-                      vm.loadInitial(_timeframe);
+                      final replay = widget.replayController;
+                      if (replay?.isActive == true) {
+                        // Re-align for the new TF. When setAsOf changes the
+                        // instant, the reload listener fetches once; when it
+                        // no-ops, reload here.
+                        final changed = replay!.setAsOf(
+                          _timeframe,
+                          replay.asOf!,
+                          immediateReload: true,
+                        );
+                        if (!changed) {
+                          _syncViewModelEntitlement();
+                          _loadScorecards();
+                          vm.loadInitial(_timeframe);
+                        }
+                      } else {
+                        _loadScorecards();
+                        _syncViewModelEntitlement();
+                        vm.loadInitial(_timeframe);
+                      }
                     },
                   ),
                   ctrlFontSize,
@@ -900,36 +1168,53 @@ class OverviewWidgetState extends State<OverviewWidget>
                     initialValue: state.sort,
                     onSelected: (v) {
                       _prefs?.sort = v;
+                      _syncViewModelEntitlement();
                       vm.changeSort(v, _timeframe);
                     },
                     itemBuilder: (context) => [
                       if (_isProUser) ...[
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'sideways',
                           child: Text('Sideways'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'compression',
                           child: Text('Compression'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'breakout',
                           child: Text('Breakout'),
                         ),
-                        PopupMenuItem(value: 'trend', child: Text('Trend')),
-                        PopupMenuItem(
+                        const PopupMenuItem(
+                          value: 'trend',
+                          child: Text('Trend'),
+                        ),
+                        const PopupMenuItem(
                           value: 'leaders',
                           child: Text('Leaders (vs market)'),
                         ),
-                        PopupMenuItem(
+                        const PopupMenuItem(
                           value: 'laggards',
                           child: Text('Laggards (vs market)'),
                         ),
+                        const PopupMenuItem(
+                          value: 'aligned',
+                          child: Text('Aligned'),
+                        ),
                         const PopupMenuDivider(),
                       ],
-                      PopupMenuItem(value: 'gain', child: Text('Gainers')),
-                      PopupMenuItem(value: 'losers', child: Text('Losers')),
-                      PopupMenuItem(value: 'volume', child: Text('Volume')),
+                      const PopupMenuItem(
+                        value: 'gain',
+                        child: Text('Gainers'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'losers',
+                        child: Text('Losers'),
+                      ),
+                      const PopupMenuItem(
+                        value: 'volume',
+                        child: Text('Volume'),
+                      ),
                     ],
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -1102,6 +1387,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                         builder: (_) => ScorecardsScreen(
                           api: widget.scorecardApi!,
                           timeframe: _timeframe,
+                          since: _scorecardSince,
                         ),
                       ),
                     );
@@ -1168,8 +1454,16 @@ class OverviewWidgetState extends State<OverviewWidget>
                     fragilityApi: widget.fragilityApi,
                     behaviorApi: widget.behaviorApi,
                     volatilityApi: widget.volatilityApi,
+                    // Gated here (unlike the sibling APIs above, which are
+                    // pre-existing behavior out of scope for this PR — see
+                    // PR-100 CR): a free user can reach Bubble Map and tap
+                    // through to a symbol detail screen, so this new
+                    // pro-tier field must not ride along ungated.
+                    mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
+                    planApi: _isProUser ? widget.planApi : null,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
+                    watchlist: _watchlist,
                   ),
                 ),
               );
@@ -1182,10 +1476,10 @@ class OverviewWidgetState extends State<OverviewWidget>
           _menuRow(
             icon: Icons.pie_chart,
             label: 'Market Pulse',
-            onTap: () {
+            onTap: () async {
               setState(() => _overlay = _OverlayKind.none);
               if (!_requireAccess()) return;
-              Navigator.of(context).push(
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MarketPulseScreen(
                     marketStateApi: widget.marketStateApi!,
@@ -1193,11 +1487,18 @@ class OverviewWidgetState extends State<OverviewWidget>
                     regimeApi: widget.regimeApi,
                     transitionApi: widget.transitionApi,
                     regimeHistoryApi: widget.regimeHistoryApi,
+                    sectorRotationApi: widget.sectorRotationApi,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
+                    replayController: widget.replayController,
+                    initialTimeframe: _timeframe,
                   ),
                 ),
               );
+              // Pulse releasePulseSurface already triggers one Overview reload.
+              if (!mounted) return;
+              _syncAutoRefreshWithReplay();
+              setState(() {});
             },
           ),
         if (widget.marketStateApi != null) _menuDivider(),
@@ -1677,7 +1978,7 @@ class OverviewWidgetState extends State<OverviewWidget>
     if (_showFavourites && visibleItems.isEmpty) {
       return const Center(
         child: Text(
-          'No favourites yet.\nTap ★ on any detail screen to add.',
+          'Your watchlist is empty.\nTap ★ on any tile or detail screen to add.',
           textAlign: TextAlign.center,
           style: TextStyle(color: Colors.white38, fontSize: 14),
         ),
@@ -1770,6 +2071,8 @@ class OverviewWidgetState extends State<OverviewWidget>
                     reliability: _badgeReliability(item),
                     rsAvailable: state.rsAvailable,
                     showRsChip: _isProUser,
+                    showAlignmentBadge: _isProUser,
+                    onToggleWatchlist: () => _toggleWatchlist(item.symbol),
                   ),
                 );
                 return child;
@@ -1853,11 +2156,14 @@ class _NavBarIcon extends StatelessWidget {
   final String svgAsset;
   final VoidCallback onTap;
 
+  final double boxSize;
+
   const _NavBarIcon({
     super.key,
     required this.isActive,
     required this.svgAsset,
     required this.onTap,
+    this.boxSize = 44,
   });
 
   @override
@@ -1866,8 +2172,8 @@ class _NavBarIcon extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: SizedBox(
-        width: 44,
-        height: 44,
+        width: boxSize,
+        height: boxSize,
         child: Center(
           child: isActive
               ? const Icon(Icons.close, color: Colors.white, size: 22)
@@ -1940,6 +2246,119 @@ String _signalLabel(
   }
 }
 
+/// Measured slots for one overview grid tile. Built by
+/// [_OverviewGridItem._resolveTileLayout], consumed by the overlay builders.
+class _OverviewTileLayout {
+  final BoxConstraints constraints;
+  final double fontSize;
+  final double pad;
+  final double starExtent;
+  final double starIconSize;
+  final bool starInBottomRow;
+  final double nameLeft;
+  final double nameRight;
+  final bool reservedMetaStrip;
+  final double metaTopBound;
+  final bool lockMetaBelowName;
+  final double metaBand;
+  final double metaLeft;
+  final double metaWidth;
+  final bool showMetaRow;
+  final bool showBottomMeta;
+  final double pctFontSize;
+  final bool showRsInBand;
+  final double badgeColumnMaxHeight;
+  final bool showReliabilityPill;
+  final ScorecardSummaryItem? reliabilityRow;
+
+  const _OverviewTileLayout({
+    required this.constraints,
+    required this.fontSize,
+    required this.pad,
+    required this.starExtent,
+    required this.starIconSize,
+    required this.starInBottomRow,
+    required this.nameLeft,
+    required this.nameRight,
+    required this.reservedMetaStrip,
+    required this.metaTopBound,
+    required this.lockMetaBelowName,
+    required this.metaBand,
+    required this.metaLeft,
+    required this.metaWidth,
+    required this.showMetaRow,
+    required this.showBottomMeta,
+    required this.pctFontSize,
+    required this.showRsInBand,
+    required this.badgeColumnMaxHeight,
+    required this.showReliabilityPill,
+    required this.reliabilityRow,
+  });
+}
+
+/// Badge column height/width and the meta strip it reserves.
+class _BadgeColumnSlots {
+  final bool showReliabilityPill;
+  final ScorecardSummaryItem? reliabilityRow;
+  final double badgeColumnMaxHeight;
+  final double badgeReserve;
+  final bool reservedMetaStrip;
+  final double metaTopBound;
+
+  const _BadgeColumnSlots({
+    required this.showReliabilityPill,
+    required this.reliabilityRow,
+    required this.badgeColumnMaxHeight,
+    required this.badgeReserve,
+    required this.reservedMetaStrip,
+    required this.metaTopBound,
+  });
+}
+
+/// Star placement and the horizontal name band beside/above it.
+class _StarNameSlots {
+  final double starExtent;
+  final double starIconSize;
+  final bool starInBottomRow;
+  final double nameLeft;
+  final double nameRight;
+  final bool nameAboveStar;
+  final bool showBottomMeta;
+
+  const _StarNameSlots({
+    required this.starExtent,
+    required this.starIconSize,
+    required this.starInBottomRow,
+    required this.nameLeft,
+    required this.nameRight,
+    required this.nameAboveStar,
+    required this.showBottomMeta,
+  });
+}
+
+/// Price/RS band under the name and badge column.
+class _MetaRowSlots {
+  final bool lockMetaBelowName;
+  final double metaBand;
+  final double metaLeft;
+  final double metaWidth;
+  final bool showMetaRow;
+  final bool showBottomMeta;
+  final double pctFontSize;
+  final bool showRsInBand;
+
+  const _MetaRowSlots({
+    required this.lockMetaBelowName,
+    required this.metaBand,
+    required this.metaLeft,
+    required this.metaWidth,
+    required this.showMetaRow,
+    required this.showBottomMeta,
+    required this.pctFontSize,
+    required this.showRsInBand,
+  });
+}
+
 class _OverviewGridItem extends StatelessWidget {
   final OverviewItem item;
   final int columns;
@@ -1953,6 +2372,8 @@ class _OverviewGridItem extends StatelessWidget {
   final ScorecardSummaryItem? reliability;
   final bool rsAvailable;
   final bool showRsChip;
+  final bool showAlignmentBadge;
+  final VoidCallback? onToggleWatchlist;
 
   const _OverviewGridItem({
     required this.item,
@@ -1967,12 +2388,20 @@ class _OverviewGridItem extends StatelessWidget {
     this.reliability,
     this.rsAvailable = false,
     this.showRsChip = false,
+    this.showAlignmentBadge = false,
+    this.onToggleWatchlist,
   });
 
   @override
   Widget build(BuildContext context) {
     final borderRadius = columns == 3 ? 6.0 : 12.0;
-    return Card(
+    final card = Card(
+      // Zero margin so the aligned-badge border (drawn on the wrapping
+      // Container, see _wrapWithAlignmentBadge) hugs the card's actual
+      // edge instead of leaving Card's default margin as a visible gap.
+      // Grid spacing is controlled by the GridView's own
+      // crossAxisSpacing/mainAxisSpacing, not by this margin.
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(borderRadius),
       ),
@@ -1980,121 +2409,550 @@ class _OverviewGridItem extends StatelessWidget {
         aspectRatio: 2.5,
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // Scale font proportionally to card width.
-            final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
-            final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
-            return Stack(
-              children: [
-                Padding(
-                  padding: EdgeInsets.all(pad),
-                  child: _buildSparkline(
-                    hiRes ? item.sparkline : _downsample(item.sparkline),
-                  ),
-                ),
-                Positioned(
-                  left: pad + 4,
-                  top: pad,
+            final layout = _resolveTileLayout(
+              constraints,
+              MediaQuery.textScalerOf(context),
+            );
+            return _buildTileStack(layout);
+          },
+        ),
+      ),
+    );
+
+    return _wrapWithAlignmentBadge(card, borderRadius);
+  }
+
+  /// Measures badge/star/name/meta slots for the current tile size.
+  _OverviewTileLayout _resolveTileLayout(
+    BoxConstraints constraints,
+    TextScaler textScaler,
+  ) {
+    final fontSize = (constraints.maxWidth * 0.08).clamp(9.0, 18.0);
+    final pad = (constraints.maxWidth * 0.03).clamp(4.0, 12.0);
+    final nameBottom = _nameBottomBound(
+      constraints: constraints,
+      pad: pad,
+      scaledFont: textScaler.scale(fontSize),
+    );
+    final badge = _resolveBadgeColumnSlots(
+      constraints: constraints,
+      fontSize: fontSize,
+      pad: pad,
+      nameBottom: nameBottom,
+      textScaler: textScaler,
+    );
+    final starName = _resolveStarNameSlots(
+      constraints: constraints,
+      pad: pad,
+      nameBottom: nameBottom,
+      badgeReserve: badge.badgeReserve,
+    );
+    final meta = _resolveMetaRowSlots(
+      constraints: constraints,
+      pad: pad,
+      fontSize: fontSize,
+      starExtent: starName.starExtent,
+      starInBottomRow: starName.starInBottomRow,
+      nameAboveStar: starName.nameAboveStar,
+      showBottomMeta: starName.showBottomMeta,
+      metaTopBound: badge.metaTopBound,
+    );
+    return _OverviewTileLayout(
+      constraints: constraints,
+      fontSize: fontSize,
+      pad: pad,
+      starExtent: starName.starExtent,
+      starIconSize: starName.starIconSize,
+      starInBottomRow: starName.starInBottomRow,
+      nameLeft: starName.nameLeft,
+      nameRight: starName.nameRight,
+      reservedMetaStrip: badge.reservedMetaStrip,
+      metaTopBound: badge.metaTopBound,
+      lockMetaBelowName: meta.lockMetaBelowName,
+      metaBand: meta.metaBand,
+      metaLeft: meta.metaLeft,
+      metaWidth: meta.metaWidth,
+      showMetaRow: meta.showMetaRow,
+      showBottomMeta: meta.showBottomMeta,
+      pctFontSize: meta.pctFontSize,
+      showRsInBand: meta.showRsInBand,
+      badgeColumnMaxHeight: badge.badgeColumnMaxHeight,
+      showReliabilityPill: badge.showReliabilityPill,
+      reliabilityRow: badge.reliabilityRow,
+    );
+  }
+
+  double _nameBottomBound({
+    required BoxConstraints constraints,
+    required double pad,
+    required double scaledFont,
+  }) {
+    final nameBand = scaledFont * 1.5;
+    // Keep the name band inside the card so a bottom Positioned never
+    // gets top below bottom at large text scales.
+    return (pad + nameBand).clamp(
+      pad,
+      pad > constraints.maxHeight - pad ? pad : constraints.maxHeight - pad,
+    );
+  }
+
+  /// Reliability pill under the badge: scale into a 14px meta strip when
+  /// the full column would starve price/RS, otherwise drop the pill.
+  _BadgeColumnSlots _resolveBadgeColumnSlots({
+    required BoxConstraints constraints,
+    required double fontSize,
+    required double pad,
+    required double nameBottom,
+    required TextScaler textScaler,
+  }) {
+    final reliabilityRow = reliability;
+    var showReliabilityPill =
+        item.badgeComponent.isNotEmpty &&
+        reliabilityRow != null &&
+        reliabilityTone(reliabilityRow) != null;
+    final unscaledBadgeColumnHeight = _badgeColumnHeight(
+      item,
+      fontSize: fontSize,
+      columns: columns,
+      textScaler: textScaler,
+      includePill: showReliabilityPill,
+    );
+    var badgeColumnHeight = unscaledBadgeColumnHeight;
+    var badgeColumnMaxHeight = badgeColumnHeight;
+    var badgeColumnBottom = pad + badgeColumnHeight;
+    var metaGap = 0.0;
+    var reservedMetaStrip = false;
+    final hangsPastName = showReliabilityPill && badgeColumnBottom > nameBottom;
+    // Gap is applied whenever the column hangs past the name band, so
+    // include it when deciding whether the meta strip stays ≥14px.
+    const columnMetaGap = 2.0;
+    final bandUnderColumn =
+        (constraints.maxHeight -
+                badgeColumnBottom -
+                pad -
+                (hangsPastName ? columnMetaGap : 0.0))
+            .clamp(0.0, double.infinity);
+    if (showReliabilityPill && bandUnderColumn < 14) {
+      // Leave a full 14px meta strip; scale the badge column above it.
+      // No gap on this path — the strip is reserved exactly.
+      final maxCol = (constraints.maxHeight - 2 * pad - 14).clamp(
+        0.0,
+        double.infinity,
+      );
+      if (maxCol >= 10) {
+        badgeColumnMaxHeight = maxCol;
+        badgeColumnHeight = maxCol;
+        badgeColumnBottom = pad + maxCol;
+        reservedMetaStrip = true;
+      } else {
+        // Not enough room to keep both — drop the pill and put meta
+        // back under the name band.
+        showReliabilityPill = false;
+        badgeColumnHeight = _badgeColumnHeight(
+          item,
+          fontSize: fontSize,
+          columns: columns,
+          textScaler: textScaler,
+          includePill: false,
+        );
+        badgeColumnMaxHeight = badgeColumnHeight;
+        badgeColumnBottom = pad + badgeColumnHeight;
+      }
+    } else if (hangsPastName) {
+      metaGap = columnMetaGap;
+    }
+    // After scaling, keep meta at the reserved strip even when the name
+    // band sits lower — the name ellipsizes above that line.
+    final metaTopBound = reservedMetaStrip
+        ? badgeColumnBottom
+        : (badgeColumnBottom > nameBottom ? badgeColumnBottom : nameBottom) +
+              metaGap;
+    // FittedBox scales the column uniformly; match the name inset to
+    // the painted width so a tall scale-2 pill cannot zero the slot.
+    var badgeReserve = _badgeReserveWidth(
+      item,
+      fontSize: fontSize,
+      columns: columns,
+      textScaler: textScaler,
+      reliability: showReliabilityPill ? reliabilityRow : null,
+    );
+    if (reservedMetaStrip &&
+        unscaledBadgeColumnHeight > 0 &&
+        badgeColumnMaxHeight < unscaledBadgeColumnHeight) {
+      badgeReserve *= badgeColumnMaxHeight / unscaledBadgeColumnHeight;
+    }
+    return _BadgeColumnSlots(
+      showReliabilityPill: showReliabilityPill,
+      reliabilityRow: showReliabilityPill ? reliabilityRow : null,
+      badgeColumnMaxHeight: badgeColumnMaxHeight,
+      badgeReserve: badgeReserve,
+      reservedMetaStrip: reservedMetaStrip,
+      metaTopBound: metaTopBound,
+    );
+  }
+
+  /// Places the star beside or below the name, and insets the name past
+  /// the badge reserve.
+  _StarNameSlots _resolveStarNameSlots({
+    required BoxConstraints constraints,
+    required double pad,
+    required double nameBottom,
+    required double badgeReserve,
+  }) {
+    // 48px when the card has room. Floor at 32px when the card can hold
+    // it; never larger than the card. On a short tile the name sits
+    // beside the star when both the star and the badge leave room;
+    // otherwise the name stays on the top row and the star sits below.
+    const minStarExtent = 32.0;
+    const minNameWidth = 24.0;
+    const minTapExtent = 32.0;
+    var starExtent = 48.0;
+    final maxStarExtent = constraints.maxHeight - pad;
+    if (maxStarExtent < minStarExtent) {
+      starExtent = maxStarExtent < 8 ? 8.0 : maxStarExtent;
+    } else {
+      if (starExtent > maxStarExtent) starExtent = maxStarExtent;
+      if (starExtent < minStarExtent) starExtent = minStarExtent;
+    }
+    final sidePad = pad + 4;
+    final starTop = constraints.maxHeight - pad - starExtent;
+    final wantBesideStar = starTop < nameBottom;
+    var starIndent = 0.0;
+    // Name on the top row; bottom row is clipped to the leftover band
+    // under the name.
+    var nameAboveStar = false;
+    // Star stays in the bottom row unless that band is too short for a
+    // usable tap target.
+    var starInBottomRow = true;
+    var showBottomMeta = true;
+
+    void adoptBelowNameBand() {
+      nameAboveStar = true;
+      final maxBelow = constraints.maxHeight - nameBottom - pad;
+      if (maxBelow >= minTapExtent) {
+        starExtent = maxBelow < starExtent ? maxBelow : starExtent;
+        starInBottomRow = true;
+        showBottomMeta = true;
+      } else {
+        // Band is only a few pixels — move the control to the top-left
+        // so it stays tappable and clear of the name.
+        starInBottomRow = false;
+        starExtent = minTapExtent;
+        if (starExtent > constraints.maxHeight - 2 * pad) {
+          starExtent = constraints.maxHeight - 2 * pad;
+        }
+        if (starExtent < 8) starExtent = 8;
+        starIndent = starExtent;
+        showBottomMeta = maxBelow >= 14;
+      }
+    }
+
+    if (wantBesideStar) {
+      final besideWidth =
+          constraints.maxWidth - 2 * sidePad - starExtent - badgeReserve;
+      if (besideWidth >= minNameWidth) {
+        // Star on the top-left beside the name — not in the bottom row,
+        // so percent/RS cannot inherit its height.
+        starIndent = starExtent;
+        starInBottomRow = false;
+      } else {
+        adoptBelowNameBand();
+      }
+    }
+    var nameLeft = sidePad + starIndent;
+    // Keep the measured badge inset so the name never sits under the
+    // badge. If the beside-star band is still too narrow, drop the star
+    // indent and use the below-name layout.
+    var nameRight = sidePad + badgeReserve;
+    if (constraints.maxWidth - nameLeft - nameRight < minNameWidth &&
+        starIndent > 0 &&
+        !nameAboveStar) {
+      starIndent = 0;
+      nameLeft = sidePad;
+      adoptBelowNameBand();
+      nameLeft = sidePad + starIndent;
+    }
+    if (constraints.maxWidth - nameLeft - nameRight < 8) {
+      if (starInBottomRow) {
+        starIndent = 0;
+        nameLeft = sidePad;
+      }
+    }
+    var starIconSize = starExtent * 0.5;
+    if (starIconSize < 14) starIconSize = 14;
+    if (starIconSize > 22) starIconSize = 22;
+    if (starIconSize > starExtent) starIconSize = starExtent;
+    return _StarNameSlots(
+      starExtent: starExtent,
+      starIconSize: starIconSize,
+      starInBottomRow: starInBottomRow,
+      nameLeft: nameLeft,
+      nameRight: nameRight,
+      nameAboveStar: nameAboveStar,
+      showBottomMeta: showBottomMeta,
+    );
+  }
+
+  /// Price/RS strip under the name and badge column.
+  _MetaRowSlots _resolveMetaRowSlots({
+    required BoxConstraints constraints,
+    required double pad,
+    required double fontSize,
+    required double starExtent,
+    required bool starInBottomRow,
+    required bool nameAboveStar,
+    required bool showBottomMeta,
+    required double metaTopBound,
+  }) {
+    // Leftover band under the name / badge column — used whenever the
+    // meta row is height-bounded (beside-star or below-name).
+    final lockMetaBelowName = !starInBottomRow || nameAboveStar;
+    final metaBand = (constraints.maxHeight - metaTopBound - pad).clamp(
+      0.0,
+      double.infinity,
+    );
+    var bottomMeta = showBottomMeta;
+    if (lockMetaBelowName) {
+      bottomMeta = metaBand >= 14;
+    }
+    final pctFontSize = lockMetaBelowName && bottomMeta
+        ? (metaBand * 0.4).clamp(6.0, (fontSize * 0.55).clamp(7.0, 11.0))
+        : (fontSize * 0.55).clamp(7.0, 11.0);
+    final showRsInBand =
+        showRsChip && bottomMeta && (!lockMetaBelowName || metaBand >= 14);
+    // When the star is pinned top-left, keep percent/RS to its right so
+    // they never cover the button's lower half.
+    final metaLeft = !starInBottomRow ? pad + starExtent : pad + 4;
+    final metaWidth = (constraints.maxWidth - metaLeft - (pad + 4)).clamp(
+      0.0,
+      double.infinity,
+    );
+    final showMetaRow =
+        (starInBottomRow || bottomMeta) &&
+        (!lockMetaBelowName || metaBand > 0) &&
+        metaWidth > 0;
+    return _MetaRowSlots(
+      lockMetaBelowName: lockMetaBelowName,
+      metaBand: metaBand,
+      metaLeft: metaLeft,
+      metaWidth: metaWidth,
+      showMetaRow: showMetaRow,
+      showBottomMeta: bottomMeta,
+      pctFontSize: pctFontSize,
+      showRsInBand: showRsInBand,
+    );
+  }
+
+  Widget _buildTileStack(_OverviewTileLayout layout) {
+    return Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        Padding(
+          padding: EdgeInsets.all(layout.pad),
+          child: _buildSparkline(
+            hiRes ? item.sparkline : _downsample(item.sparkline),
+          ),
+        ),
+        _buildNameOverlay(layout),
+        if (layout.showMetaRow) _buildMetaOverlay(layout),
+        if (item.badgeComponent.isNotEmpty) _buildBadgeOverlay(layout),
+        // Paint the top-left star after the meta row so hit tests prefer
+        // the button over any residual overlap.
+        if (!layout.starInBottomRow)
+          Positioned(
+            left: layout.pad,
+            top: layout.pad,
+            child: _buildStarButton(layout),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildNameOverlay(_OverviewTileLayout layout) {
+    return Positioned(
+      left: layout.nameLeft,
+      top: layout.pad,
+      right: layout.nameRight,
+      // When a 14px meta strip is reserved under a scaled badge column,
+      // keep the name inside the space above that strip.
+      bottom: layout.reservedMetaStrip
+          ? layout.constraints.maxHeight - layout.metaTopBound
+          : null,
+      child: ClipRect(
+        child: Text(
+          key: Key('overview-name-${item.symbol}'),
+          item.symbol.replaceAll('USDT', ''),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: layout.fontSize,
+            fontWeight: FontWeight.w600,
+            color: Colors.white.withAlpha(
+              ((columns == 1
+                          ? 0.9
+                          : columns == 2
+                          ? 0.8
+                          : 0.7) *
+                      255)
+                  .round(),
+            ),
+            backgroundColor: Colors.black.withAlpha((0.25 * 255).round()),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetaOverlay(_OverviewTileLayout layout) {
+    // Bottom row: price (and favourite star) left, RS chip right.
+    // Height-bounded under the name / badge column whenever the star is
+    // beside or below the name; inset past a top-left star so taps still
+    // hit the button.
+    return Positioned(
+      left: layout.metaLeft,
+      right: layout.pad + 4,
+      top: layout.lockMetaBelowName ? layout.metaTopBound : null,
+      bottom: layout.pad,
+      child: Builder(
+        builder: (_) {
+          final pct = _sparklinePriceChange(item.sparkline);
+          final rounded = pct.toStringAsFixed(1);
+          // Treat ±0.0 as zero — grey, no sign.
+          final isZero = rounded == '0.0' || rounded == '-0.0';
+          final label = isZero ? '0.0%' : '${pct >= 0 ? '+' : ''}$rounded%';
+          final color = isZero
+              ? Colors.grey
+              : (pct >= 0 ? Colors.green : Colors.red);
+          final narrow = columns == 3 || layout.lockMetaBelowName;
+          final row = Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (layout.starInBottomRow) _buildStarButton(layout),
+              if (layout.showBottomMeta) ...[
+                Expanded(
                   child: Text(
-                    item.symbol.replaceAll('USDT', ''),
+                    key: Key('overview-pct-${item.symbol}'),
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: fontSize,
+                      fontSize: layout.pctFontSize,
+                      color: color,
                       fontWeight: FontWeight.w600,
-                      color: Colors.white.withAlpha(
-                        ((columns == 1
-                                    ? 0.9
-                                    : columns == 2
-                                    ? 0.8
-                                    : 0.7) *
-                                255)
-                            .round(),
-                      ),
-                      backgroundColor: Colors.black.withAlpha(
-                        (0.25 * 255).round(),
-                      ),
-                    ),
-                  ),
-                ),
-                if (item.badgeComponent.isNotEmpty)
-                  Positioned(
-                    right: pad + 4,
-                    top: pad,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        _buildBadge(item, fontSize),
-                        ReliabilityChip(item: reliability, dense: true),
+                      shadows: const [
+                        Shadow(color: Colors.black, blurRadius: 3),
+                        Shadow(color: Colors.black, blurRadius: 3),
                       ],
                     ),
                   ),
-                // Bottom row: price (and favourite star) left, RS chip right.
-                // Shared row reserves space so long % labels don't overlap the
-                // chip on narrow 3-column tiles.
-                Positioned(
-                  left: pad + 4,
-                  right: pad + 4,
-                  bottom: pad,
-                  child: Builder(
-                    builder: (_) {
-                      final pct = _sparklinePriceChange(item.sparkline);
-                      final rounded = pct.toStringAsFixed(1);
-                      // Treat ±0.0 as zero — grey, no sign.
-                      final isZero = rounded == '0.0' || rounded == '-0.0';
-                      final label = isZero
-                          ? '0.0%'
-                          : '${pct >= 0 ? '+' : ''}$rounded%';
-                      final color = isZero
-                          ? Colors.grey
-                          : (pct >= 0 ? Colors.green : Colors.red);
-                      final narrow = columns == 3;
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          if (isFavourite)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 2),
-                              child: Icon(
-                                Icons.star,
-                                color: Colors.amber
-                                    .withAlpha((0.8 * 255).round()),
-                                size: (fontSize * 0.8).clamp(10.0, 16.0),
-                              ),
-                            ),
-                          Expanded(
-                            child: Text(
-                              label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize:
-                                    (fontSize * 0.55).clamp(7.0, 11.0),
-                                color: color,
-                                fontWeight: FontWeight.w600,
-                                shadows: const [
-                                  Shadow(
-                                      color: Colors.black, blurRadius: 3),
-                                  Shadow(
-                                      color: Colors.black, blurRadius: 3),
-                                ],
-                              ),
-                            ),
-                          ),
-                          if (showRsChip)
-                            RelativeStrengthChip(
-                              rsAvailable: rsAvailable,
-                              rs: item.rs,
-                              beta: item.beta,
-                              dense: true,
-                              compactLabel: narrow,
-                            ),
-                        ],
-                      );
-                    },
-                  ),
                 ),
+                if (layout.showRsInBand)
+                  Flexible(
+                    child: RelativeStrengthChip(
+                      rsAvailable: rsAvailable,
+                      rs: item.rs,
+                      beta: item.beta,
+                      dense: true,
+                      compactLabel: narrow,
+                    ),
+                  ),
               ],
-            );
-          },
+            ],
+          );
+          if (!layout.lockMetaBelowName) return row;
+          // Scale or clip percent/RS into the leftover band.
+          return ClipRect(
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.bottomLeft,
+                child: SizedBox(
+                  height: layout.metaBand > 0 ? layout.metaBand : null,
+                  width: layout.metaWidth,
+                  child: row,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildBadgeOverlay(_OverviewTileLayout layout) {
+    // Badge column after the meta row so the reliability pill keeps its
+    // taps when heights are tight.
+    return Positioned(
+      right: layout.pad + 4,
+      top: layout.pad,
+      height: layout.badgeColumnMaxHeight,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.topRight,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            KeyedSubtree(
+              key: Key('overview-badge-${item.symbol}'),
+              child: _buildBadge(item, layout.fontSize),
+            ),
+            if (layout.showReliabilityPill && layout.reliabilityRow != null)
+              ReliabilityChip(item: layout.reliabilityRow!, dense: true),
+          ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildStarButton(_OverviewTileLayout layout) {
+    return IconButton(
+      tooltip: isFavourite ? 'Remove from watchlist' : 'Add to watchlist',
+      onPressed: onToggleWatchlist,
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: EdgeInsets.zero,
+        minimumSize: Size(layout.starExtent, layout.starExtent),
+        maximumSize: Size(layout.starExtent, layout.starExtent),
+        fixedSize: Size(layout.starExtent, layout.starExtent),
+      ),
+      constraints: BoxConstraints.tightFor(
+        width: layout.starExtent,
+        height: layout.starExtent,
+      ),
+      icon: Icon(
+        isFavourite ? Icons.star : Icons.star_border,
+        color: isFavourite
+            ? Colors.amber.withAlpha((0.8 * 255).round())
+            : Colors.white.withAlpha((0.5 * 255).round()),
+        size: layout.starIconSize,
+      ),
+    );
+  }
+
+  /// Wraps [card] with a top-edge colored border + tooltip when this item's
+  /// MTF stack is strongly aligned (>= 0.75, PR-100). Otherwise returns
+  /// [card] unchanged — no extra widget nesting for the common case.
+  Widget _wrapWithAlignmentBadge(Widget card, double borderRadius) {
+    final alignment = item.alignment;
+    final alignedState = item.alignedState;
+    if (!showAlignmentBadge ||
+        alignment == null ||
+        alignedState == null ||
+        alignment < 0.75) {
+      return card;
+    }
+    final color = regimeColor(alignedState);
+    return Tooltip(
+      message: alignedTooltip(alignedState, alignment),
+      child: Container(
+        key: Key('aligned-badge-${item.symbol}'),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(borderRadius),
+          border: Border(top: BorderSide(color: color, width: 3)),
+        ),
+        child: card,
       ),
     );
   }
@@ -2156,15 +3014,8 @@ class _OverviewGridItem extends StatelessWidget {
 
   Widget _buildBadge(OverviewItem item, double fontSize) {
     final signal = _parseSignalType(item.badgeComponent);
-    final trendFalling =
-        badgeScorecardLabel('trend', item.sparkline) == 'trend_down';
-    final trendDirection = trendFalling ? -1.0 : 1.0;
-    final scale = columns == 1
-        ? 1.0
-        : columns == 2
-        ? 0.9
-        : 0.8;
-    final badgeFontSize = (fontSize * 0.7 * scale).clamp(7.0, 12.0);
+    final trendDirection = _badgeTrendDirection(item);
+    final badgeFontSize = _badgeFontSize(fontSize, columns);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       decoration: BoxDecoration(
@@ -2187,6 +3038,115 @@ class _OverviewGridItem extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Vertical space the top-right badge column needs (badge ± reliability).
+  double _badgeColumnHeight(
+    OverviewItem item, {
+    required double fontSize,
+    required int columns,
+    required TextScaler textScaler,
+    required bool includePill,
+  }) {
+    if (item.badgeComponent.isEmpty) return 0;
+    final signal = _parseSignalType(item.badgeComponent);
+    final label = _signalLabel(
+      signal,
+      abbreviate: columns > 1,
+      trendScore: _badgeTrendDirection(item),
+    );
+    final badgePainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: _badgeFontSize(fontSize, columns),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    // Container vertical padding is 2 on each side.
+    var height = badgePainter.height + 4;
+    if (includePill) {
+      final chipPainter = TextPainter(
+        text: const TextSpan(
+          text: '88%',
+          style: TextStyle(fontSize: 8, fontWeight: FontWeight.w600),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      // Dense ReliabilityChip outer vertical pad is 1px on each side.
+      height += chipPainter.height + 2;
+    }
+    return height;
+  }
+
+  /// Horizontal space the top-right badge column needs, including padding.
+  /// Uses the wider of the signal badge and the reliability pill.
+  double _badgeReserveWidth(
+    OverviewItem item, {
+    required double fontSize,
+    required int columns,
+    required TextScaler textScaler,
+    ScorecardSummaryItem? reliability,
+  }) {
+    if (item.badgeComponent.isEmpty) return 0;
+    final signal = _parseSignalType(item.badgeComponent);
+    final label = _signalLabel(
+      signal,
+      abbreviate: columns > 1,
+      trendScore: _badgeTrendDirection(item),
+    );
+    final badgePainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: _badgeFontSize(fontSize, columns),
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    // Container horizontal padding is 4 on each side. A small gap keeps
+    // the name clear of the badge once both are laid out.
+    var reserve = badgePainter.width + 8 + 2;
+    if (reliability != null && reliabilityTone(reliability) != null) {
+      final chipPainter = TextPainter(
+        text: TextSpan(
+          text: reliabilityChipLabel(reliability, dense: true),
+          style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w600),
+        ),
+        textDirection: TextDirection.ltr,
+        textScaler: textScaler,
+        maxLines: 1,
+      )..layout();
+      // Dense chip horizontal padding is 3 on each side. Extra gap covers
+      // layout rounding so the name stays clear of the painted pill.
+      final chipReserve = chipPainter.width + 6 + 4;
+      if (chipReserve > reserve) reserve = chipReserve;
+    }
+    return reserve;
+  }
+
+  double _badgeTrendDirection(OverviewItem item) {
+    final trendFalling =
+        badgeScorecardLabel('trend', item.sparkline) == 'trend_down';
+    return trendFalling ? -1.0 : 1.0;
+  }
+
+  double _badgeFontSize(double fontSize, int columns) {
+    final scale = columns == 1
+        ? 1.0
+        : columns == 2
+        ? 0.9
+        : 0.8;
+    return (fontSize * 0.7 * scale).clamp(7.0, 12.0);
   }
 }
 

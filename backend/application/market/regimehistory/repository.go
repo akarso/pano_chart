@@ -1,6 +1,10 @@
 package regimehistory
 
-import mkt "pano_chart/backend/domain/market"
+import (
+	"context"
+
+	mkt "pano_chart/backend/domain/market"
+)
 
 // Repository persists regime history periods.
 type Repository interface {
@@ -18,5 +22,5 @@ type Repository interface {
 	UpdateDuration(timeframe string, newDuration int) error
 
 	// GetHistory returns the most recent `limit` periods, ordered oldest-first.
-	GetHistory(timeframe string, limit int) ([]mkt.RegimePeriod, error)
+	GetHistory(ctx context.Context, timeframe string, limit int) ([]mkt.RegimePeriod, error)
 }

@@ -135,7 +135,7 @@ void main() {
 
     test('reading thresholds follow rounded bar percents', () {
       // 29.6% raw would be Narrow on floats; largest-remainder can yield 30.
-      final p = const ParticipationCounts(up: 37, down: 38, ranging: 50, total: 125);
+      const p = ParticipationCounts(up: 37, down: 38, ranging: 50, total: 125);
       final (up, ranging, down) = participationPercents(p);
       expect(up + ranging + down, 100);
       // Whatever the rounded lead is, the reading must use those same ints.

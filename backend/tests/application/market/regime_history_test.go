@@ -127,7 +127,7 @@ func TestSQLiteRepository_GetHistory(t *testing.T) {
 		Regime: mkt.RegimeTrend, StartTimestamp: 3000, DurationCandles: 3,
 	})
 
-	periods, err := repo.GetHistory("4h", 50)
+	periods, err := repo.GetHistory(context.Background(), "4h", 50)
 	if err != nil {
 		t.Fatalf("get history: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestSQLiteRepository_GetHistory_respectsLimit(t *testing.T) {
 		}
 	}
 
-	periods, _ := repo.GetHistory("4h", 2)
+	periods, _ := repo.GetHistory(context.Background(), "4h", 2)
 	if len(periods) != 2 {
 		t.Fatalf("expected 2 periods, got %d", len(periods))
 	}
@@ -254,7 +254,7 @@ func TestTracker_regimeChangeClosesAndOpensNew(t *testing.T) {
 	_ = tracker.Update("4h", mkt.RegimeCompression, "", 28800)
 	_ = tracker.Update("4h", mkt.RegimeTrend, "", 43200)
 
-	periods, _ := repo.GetHistory("4h", 50)
+	periods, _ := repo.GetHistory(context.Background(), "4h", 50)
 	if len(periods) != 2 {
 		t.Fatalf("expected 2 periods, got %d", len(periods))
 	}
@@ -286,7 +286,7 @@ func TestService_GetHistory(t *testing.T) {
 	svc := regimehistory.NewService(repo)
 
 	// Empty history.
-	h, err := svc.GetHistory("4h", 50)
+	h, err := svc.GetHistory(context.Background(), "4h", 50)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestService_GetHistory(t *testing.T) {
 	_ = tracker.Update("4h", mkt.RegimeSideways, "", 28800)
 	_ = tracker.Update("4h", mkt.RegimeCompression, "", 43200)
 
-	h, _ = svc.GetHistory("4h", 50)
+	h, _ = svc.GetHistory(context.Background(), "4h", 50)
 	if h.CurrentAge != 1 {
 		t.Errorf("current age: got %d, want 1", h.CurrentAge)
 	}
@@ -387,7 +387,7 @@ type fakeHistoryProvider struct {
 	err     error
 }
 
-func (f *fakeHistoryProvider) GetHistory(tf string, limit int) (mkt.RegimeHistory, error) {
+func (f *fakeHistoryProvider) GetHistory(_ context.Context, tf string, limit int) (mkt.RegimeHistory, error) {
 	if f.err != nil {
 		return mkt.RegimeHistory{}, f.err
 	}

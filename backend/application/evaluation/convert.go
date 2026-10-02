@@ -11,6 +11,6 @@ import (
 // SnapshotsFromRankings delegates to application/market so the refresher and
 // RankingsEvaluationProvider share one conversion path without
 // infrastructure → application/evaluation imports.
-func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time) []domain.EvaluationSnapshot {
-	return appmarket.SnapshotsFromRankings(results, timeframe, computedAt)
+func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time, trendAlgo, compressionAlgo string) []domain.EvaluationSnapshot {
+	return appmarket.SnapshotsFromRankings(results, timeframe, computedAt, trendAlgo, compressionAlgo)
 }

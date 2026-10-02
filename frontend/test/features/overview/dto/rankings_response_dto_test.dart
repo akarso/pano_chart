@@ -25,6 +25,8 @@ void main() {
           'rs': 0.032,
           'beta': 1.2,
           'rsRank': 1.0,
+          'alignment': 1.0,
+          'alignedState': 'trend',
         },
         {
           'symbol': 'ETHUSDT',
@@ -60,6 +62,8 @@ void main() {
     expect(dto.results[0].rs, 0.032);
     expect(dto.results[0].beta, 1.2);
     expect(dto.results[0].rsRank, 1.0);
+    expect(dto.results[0].alignment, 1.0);
+    expect(dto.results[0].alignedState, 'trend');
 
     expect(dto.results[1].symbol, 'ETHUSDT');
     expect(dto.results[1].totalScore, -1.5);
@@ -67,6 +71,8 @@ void main() {
     expect(dto.results[1].sparkline, [3200.0, 3180.0]);
     expect(dto.results[1].badgeComponent, '');
     expect(dto.results[1].rs, isNull);
+    expect(dto.results[1].alignment, isNull);
+    expect(dto.results[1].alignedState, isNull);
   });
 
   test('RankingsResponseDto_rsAvailableDefaultsFalse', () {

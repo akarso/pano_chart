@@ -6,11 +6,14 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	adhttp "pano_chart/backend/adapters/http"
 	"pano_chart/backend/application/market/transition"
+	"pano_chart/backend/application/replay"
 	mkt "pano_chart/backend/domain/market"
 	domainsignal "pano_chart/backend/domain/signal"
 )
@@ -210,6 +213,9 @@ func TestTransitionService_Calculate(t *testing.T) {
 	}
 	if result.Horizon != "12 candles (~2d)" {
 		t.Errorf("horizon: got %q, want %q", result.Horizon, "12 candles (~2d)")
+	}
+	if result.Source != "heuristic" {
+		t.Errorf("source: got %q, want heuristic", result.Source)
 	}
 
 	// Verify probabilities sum to 1.
@@ -411,3 +417,87 @@ func TestTransitionService_EmitsWhenTargetAtLeastHalf(t *testing.T) {
 type fixedAge int
 
 func (f fixedAge) CurrentAge(string) (int, error) { return int(f), nil }
+
+type dualAge struct {
+	live, replay int
+}
+
+func (d dualAge) CurrentAge(string) (int, error) { return d.live, nil }
+
+func (d dualAge) AgeAtAsOf(_ context.Context, _ string, _ time.Time) (int, error) {
+	return d.replay, nil
+}
+
+func TestTransitionService_SkipsEmitUnderAsOf(t *testing.T) {
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateCompression,
+			Breadth:             mkt.Breadth{Compression: 1.0},
+			VolatilityExpansion: 1.5,
+		},
+	}
+	cap := &capturingEmitter{}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedAge(30))
+	svc.SetSignalEmitter(cap)
+
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	ctx := replay.WithAsOf(context.Background(), asOf)
+	if _, err := svc.Calculate(ctx, "4h"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cap.all()) != 0 {
+		t.Fatalf("expected no transition signals under replay, got %d", len(cap.all()))
+	}
+}
+
+func TestTransitionService_UsesReplayAgeForHorizon(t *testing.T) {
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{State: mkt.StateSideways, VolatilityExpansion: 1.0},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(dualAge{live: 40, replay: 7})
+
+	live, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	replayRes, err := svc.Calculate(replay.WithAsOf(context.Background(), asOf), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.Horizon == replayRes.Horizon {
+		t.Fatalf("horizon should differ: live=%q replay=%q", live.Horizon, replayRes.Horizon)
+	}
+	if !strings.Contains(replayRes.Horizon, "7 candles") {
+		t.Fatalf("replay horizon=%q want age 7", replayRes.Horizon)
+	}
+}
+
+func TestTransitionService_ReplayAgeZeroWhenUnavailable(t *testing.T) {
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{State: mkt.StateSideways, VolatilityExpansion: 1.0},
+	}
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	ctx := replay.WithAsOf(context.Background(), asOf)
+
+	noProvider := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	got, err := noProvider.Calculate(ctx, "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Horizon, "0 candles") {
+		t.Fatalf("nil age provider under asOf: horizon=%q want 0 (not live default 12)", got.Horizon)
+	}
+
+	zeroAge := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	zeroAge.SetAgeProvider(dualAge{live: 40, replay: 0})
+	got, err = zeroAge.Calculate(ctx, "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got.Horizon, "0 candles") {
+		t.Fatalf("AgeAtAsOf=0 under asOf: horizon=%q want 0 (not live 12)", got.Horizon)
+	}
+}

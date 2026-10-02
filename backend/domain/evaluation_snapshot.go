@@ -6,6 +6,42 @@ import "time"
 // It must be updated whenever scoring logic changes materially.
 const AlgoVersion = "v5.1.0"
 
+// DefaultTrendAlgo is the legacy / unspecified trend engine identity.
+const DefaultTrendAlgo = "predictability"
+
+// DefaultCompressionAlgo is the legacy / unspecified compression engine identity.
+const DefaultCompressionAlgo = "absolute"
+
+// EvaluationIdentityOK reports whether a stored snapshot was produced by the
+// expected scoring engine, trend algorithm, and compression algorithm.
+// Empty trend / compression fields (got or want) default to
+// DefaultTrendAlgo / DefaultCompressionAlgo (pre-PR-103 / pre-PR-105 rows).
+func EvaluationIdentityOK(algoVersion, trendAlgo, wantTrendAlgo, compressionAlgo, wantCompressionAlgo string) bool {
+	if algoVersion != AlgoVersion {
+		return false
+	}
+	gotTrend := trendAlgo
+	if gotTrend == "" {
+		gotTrend = DefaultTrendAlgo
+	}
+	wantTrend := wantTrendAlgo
+	if wantTrend == "" {
+		wantTrend = DefaultTrendAlgo
+	}
+	if gotTrend != wantTrend {
+		return false
+	}
+	gotComp := compressionAlgo
+	if gotComp == "" {
+		gotComp = DefaultCompressionAlgo
+	}
+	wantComp := wantCompressionAlgo
+	if wantComp == "" {
+		wantComp = DefaultCompressionAlgo
+	}
+	return gotComp == wantComp
+}
+
 // EvaluationSnapshot captures all regime scores and market state
 // at the time of evaluation for a single symbol/timeframe cycle.
 // Treat as a value object: construct via helpers (e.g. SnapshotsFromRankings),
@@ -43,10 +79,28 @@ type EvaluationSnapshot struct {
 	// Populated by the evaluation store writer (PR-089a); empty when absent.
 	Sparkline []float64 `json:"sparkline,omitempty"`
 
+	// TotalScore is the ranked composite score copied from rankings when
+	// the snapshot is written (PR-102). Nil when the store row predates
+	// this field or the snapshot was built without a rankings score —
+	// absent must not unmarshal as a false zero.
+	TotalScore *float64 `json:"totalScore,omitempty"`
+
+	// RelativeStrength is log excess return vs the tape when available
+	// (PR-096 / PR-102). Nil when RS was not scored for this row.
+	RelativeStrength *float64 `json:"rs,omitempty"`
+
 	// ComputedAt is unix seconds when this snapshot was written to the store.
 	// Zero when the snapshot was built on the fly (not from the store).
 	ComputedAt int64 `json:"computedAt,omitempty"`
 
 	// Meta
 	AlgoVersion string `json:"algoVersion,omitempty"`
+
+	// TrendAlgo records which trend engine produced TrendScore / TotalScore
+	// (predictability | strength). Empty on pre-PR-103 store rows.
+	TrendAlgo string `json:"trendAlgo,omitempty"`
+
+	// CompressionAlgo records which compression engine produced CompressionScore
+	// (absolute | percentile). Empty on pre-PR-105 store rows.
+	CompressionAlgo string `json:"compressionAlgo,omitempty"`
 }

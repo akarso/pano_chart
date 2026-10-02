@@ -64,17 +64,18 @@ type SidewaysResult struct {
 // SidewaysV5Config holds all tunable parameters for Sideways v5
 // (weights, N, candleCount, ideal volatility band, ATR multiplier)
 type SidewaysV5Config struct {
-	N                int                // Extrema window size
-	CandleCount      int                // Number of candles to analyze
-	IdealATRRange    float64            // Ideal price range in ATR units (resolved for a specific timeframe)
-	IdealATRRangeMap map[string]float64 // Per-timeframe overrides (e.g. "1h" -> 4.0)
-	RangeTolerance   float64            // Gaussian tolerance in ATR units (e.g. 1.5)
-	ATRMultiplier    float64            // Spike detection multiplier
-	W1               float64            // Weight for CCS (channel structure)
-	W2               float64            // Weight for OQS (oscillation quality)
-	W3               float64            // Weight for DCS (drift control)
-	W4               float64            // Weight for VOS (volatility/oscillation)
-	ExtremaCount     int                // Minimum number of extrema required
+	N                   int                // Extrema window size
+	CandleCount         int                // Number of candles to analyze
+	IdealATRRange       float64            // Ideal price range in ATR units (resolved for a specific timeframe)
+	IdealATRRangeMap    map[string]float64 // Per-timeframe overrides (e.g. "1h" -> 4.0)
+	RangeTolerance      float64            // Gaussian tolerance in ATR units (e.g. 1.5)
+	ATRMultiplier       float64            // Spike detection multiplier
+	W1                  float64            // Weight for CCS (channel structure)
+	W2                  float64            // Weight for OQS (oscillation quality)
+	W3                  float64            // Weight for DCS (drift control)
+	W4                  float64            // Weight for VOS (volatility/oscillation)
+	MeanReversionWeight float64            // Weight for MRS (PR-104); 0 → no behavior change
+	ExtremaCount        int                // Minimum number of extrema required
 }
 
 // DetectSidewaysV5 runs the structural equilibrium detector
@@ -258,8 +259,28 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	}
 
 	// --- 9. Final composition (Weighted Average) ---
+	mrWeight := normalizeMeanReversionWeight(cfg.MeanReversionWeight)
+	components := map[string]float64{
+		"CCS": CCS,
+		"OQS": OQS,
+		"DCS": DCS,
+		"VOS": VOS,
+		"SRM": SRM,
+	}
 	weightedSum := cfg.W1*CCS + cfg.W2*OQS + cfg.W3*DCS + cfg.W4*VOS
 	totalWeight := cfg.W1 + cfg.W2 + cfg.W3 + cfg.W4
+	// Skip MRS work when unused (default weight 0). "MRS" appears in
+	// Components only when the weight is active — early returns omit it too.
+	if mrWeight > 0 {
+		closes := make([]float64, len(candles))
+		for i, c := range candles {
+			closes[i] = c.Close()
+		}
+		mrs := MeanReversionScore(closes)
+		components["MRS"] = mrs
+		weightedSum += mrWeight * mrs
+		totalWeight += mrWeight
+	}
 	avgScore := 0.0
 	if totalWeight > 0 {
 		avgScore = weightedSum / totalWeight
@@ -280,14 +301,8 @@ func DetectSidewaysV5(candles []domain.Candle, cfg SidewaysV5Config) SidewaysRes
 	// calculation with no logging or randomness of its own (CR follow-up).
 
 	return SidewaysResult{
-		Score: finalScore,
-		Components: map[string]float64{
-			"CCS": CCS,
-			"OQS": OQS,
-			"DCS": DCS,
-			"VOS": VOS,
-			"SRM": SRM,
-		},
+		Score:         finalScore,
+		Components:    components,
 		SpikeDetected: spikeDetected,
 	}
 }

@@ -586,7 +586,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
   _FakeCompositeApi(this.data);
 
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async => data;
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) async => data;
 }
 
 class _FakeRegimeApi implements RegimeApi {
@@ -594,7 +594,7 @@ class _FakeRegimeApi implements RegimeApi {
   _FakeRegimeApi(this.data);
 
   @override
-  Future<RegimeData> fetch({String timeframe = '4h'}) async => data;
+  Future<RegimeData> fetch({String timeframe = '4h', int? asOf}) async => data;
 }
 
 class _NeverCompleteStateApi implements MarketStateApi {
@@ -606,14 +606,14 @@ class _NeverCompleteStateApi implements MarketStateApi {
 
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) {
     return Completer<CompositeIndexData>().future;
   }
 }
 
 class _NeverCompleteRegimeApi implements RegimeApi {
   @override
-  Future<RegimeData> fetch({String timeframe = '4h'}) {
+  Future<RegimeData> fetch({String timeframe = '4h', int? asOf}) {
     return Completer<RegimeData>().future;
   }
 }

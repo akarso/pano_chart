@@ -27,6 +27,8 @@ void main() {
           rs: 0.032,
           beta: 1.2,
           rsRank: 1.0,
+          alignment: 1.0,
+          alignedState: 'trend',
         ),
         RankingItemDto(
           symbol: 'ETHUSDT',
@@ -41,7 +43,8 @@ void main() {
     ));
 
     final impl = GetRankingsImpl(api);
-    final result = await impl.call(timeframe: '1h', page: 1, sort: 'total');
+    final result = await impl.call(
+        timeframe: '1h', page: 1, sort: 'total', mtf: true);
 
     expect(result.items.length, 2);
     expect(result.rsAvailable, true);
@@ -59,6 +62,8 @@ void main() {
     expect(result.items[0].rs, 0.032);
     expect(result.items[0].beta, 1.2);
     expect(result.items[0].rsRank, 1.0);
+    expect(result.items[0].alignment, 1.0);
+    expect(result.items[0].alignedState, 'trend');
     expect(result.effectiveSort, 'total');
     expect(result.requestedSort, 'leaders');
 
@@ -66,6 +71,30 @@ void main() {
     expect(result.items[1].trendScore, -0.5);
     expect(result.items[1].badgeComponent, '');
     expect(result.items[1].rs, isNull);
+    expect(result.items[1].alignment, isNull);
+    expect(result.items[1].alignedState, isNull);
+    expect(api.capturedMtf, true,
+        reason: 'PR-100: mtf is forwarded to the underlying API call');
+  });
+
+  test('GetRankingsImpl_mtfDefaultsFalse', () async {
+    final api = _FakeRankingsApi(const RankingsResponseDto(
+      timeframe: '1h',
+      sort: 'total',
+      page: 1,
+      pageSize: 30,
+      totalItems: 0,
+      totalPages: 0,
+      precision: 0,
+      results: [],
+    ));
+
+    final impl = GetRankingsImpl(api);
+    await impl.call(timeframe: '1h', page: 1, sort: 'total');
+
+    expect(api.capturedMtf, false,
+        reason: 'PR-100 CR: the overlay must not be requested unless the '
+            'caller explicitly opts in (entitlement-gated)');
   });
 
   test('GetRankingsImpl_hasMoreWhenPageLessThanTotalPages', () async {
@@ -133,6 +162,7 @@ class _FakeRankingsApi implements RankingsApi {
   String? capturedSort;
   int? capturedPage;
   int? capturedPageSize;
+  bool? capturedMtf;
 
   _FakeRankingsApi(this.response);
 
@@ -144,11 +174,14 @@ class _FakeRankingsApi implements RankingsApi {
     required int pageSize,
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
   }) async {
     capturedTimeframe = timeframe;
     capturedSort = sort;
     capturedPage = page;
     capturedPageSize = pageSize;
+    capturedMtf = mtf;
     return response;
   }
 }

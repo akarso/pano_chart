@@ -949,10 +949,14 @@ Flip the default only after a scorecard comparison (`badge trend_up` hit rate) o
 2. `MeanReversionScore = clamp((1 − VR(4)) × 1.5, 0, 1)` averaged with `q = 8`.
 3. Sideways V5 gains a config-weighted component `mean_reversion_weight` (default 0.0 → no
    behavior change). Expose in `SidewaysV5Config`.
-4. Also expose `VR` in the setup context (`SetupContext.VarianceRatio`) for PR-110.
+4. Also expose `MeanReversionScore` on `SetupContext` (same Sideways V5
+   trailing window) for PR-110 — Lo–MacKinlay MRS, not channel quality.
 
-**Tests.** Seeded AR(1) with φ = −0.5 → VR(4) < 0.8; seeded random walk → 0.85–1.15; seeded
-trend + noise → > 1.2. Golden `tight_range` mean-reversion score ≥ 0.5.
+**Tests.** Seeded AR(1) with φ = −0.5 → VR(4) < 0.8 and MRS ≥ 0.5; seeded
+random walk → VR(4) ∈ [0.85, 1.15]; seeded momentum AR(1) φ = +0.5 → VR(4) > 1.2
+(constant drift+noise yields VR≈1 under this estimator). Golden `tight_range`
+is a smooth channel (VR ≫ 1) → MRS ≈ 0 — **not** an MRS golden; do not gate
+PR-110 RangeQuality on this metric without amending that PR.
 
 ---
 
@@ -984,8 +988,9 @@ score ≥ 0.7; uniform noise → ≈ 0.5 ± 0.15.
 ### PR-106 — Trend health v2 (true ATR, wider tolerance)
 
 **Layer:** application. **Depends on:** PR-088. **Note:** PR-115 (hotfix) pulls items 1–3
-forward for the tape and removes dampening from `ScoreMarketTape` entirely; after PR-115 this
-slice applies to the participation fallback only and item 4 is moot.
+forward for the tape and removes dampening from `ScoreMarketTape` entirely; after PR-115 the
+remaining work is participation fallback V2 + `DampenTrendByHealth` floor (item 4 applies
+only to participation dampening).
 
 **Context.** `health.go` → `ComputeTrendHealth`: health = `1 − (high − price)/atr` clamped;
 `atr` is mean |Δclose| (from `EnrichFromSparkline` / `sparklineStats`). One average bar below
@@ -1000,12 +1005,15 @@ the window high = health 0. Real uptrends spend most of their life 1–3 ATR und
    - health `= ddScore × staleScore`
 2. `atr14` = true ATR (Wilder, 14) — add `TrueATR(candles, 14)` in `domain/scoring/stats.go`
    (reuse `rollingATR` from compression if signature fits).
-3. `ScoreMarketTape` uses V2 (it has the full OHLC series). Participation fallback keeps V1.
+3. `ScoreMarketTape` uses V2 (it has the full OHLC series). Participation fallback
+   also uses V2 via `TrendHealthFromSnapshot` (PR-106; PR-115 left this on V1).
 4. `DampenTrendByHealth`: change floor from 0.1 to 0.35 — dampening should never turn a
-   dominant trend into a 5% bar by itself.
+   dominant trend into a 5% bar by itself. Participation captions (`BuildMarketLabel`)
+   use the same V2 effectiveTrend thresholds as the tape (strong > 0.75, weakening > 0.4).
 
-**Tests.** Price 2 ATR under high → health ≈ 0.6 (not 0). Golden `messy_uptrend` tape:
-`Structure.Trend` after dampening ≥ 0.8 × before dampening.
+**Tests.** Price 2 ATR under high → health ≈ 0.6 (not 0). Participation sparkline path
+and positive V2 breakdownRate covered in `health_test.go`. (Tape dampening ratio on
+`messy_uptrend` is N/A after PR-115 removed tape dampening.)
 
 ---
 
@@ -1024,12 +1032,17 @@ periods with durations.
    func BuildMatrix(periods []mkt.RegimePeriod) Matrix // Matrix[from][ageBucket][to] = P
    ```
    Count transitions `from → to` grouped by the age bucket the `from` period had when it
-   ended. Laplace smoothing `+1` per cell. Need ≥ 30 transitions per `from` row to be
-   "confident"; else mark row as low-confidence.
+   ended. Laplace smoothing `+1` per cell **only when the bucket has raw counts**; empty
+   buckets fall back to a pooled all-age row. Blend only when the row used has ≥ 30 samples;
+   `sampleSize` / `w` come from that row (bucket or pooled), not global `n_from`.
+   Remap silent/indecisive → sideways and merge adjacent equals before counting.
 2. Blend: `P = w × P_empirical + (1 − w) × P_heuristic` with
-   `w = clamp(n_from / 100, 0, 0.7)` (never fully trust history).
+   `w = clamp(n_row / 100, 0, 0.7)` where `n_row` is the sample count of the
+   age bucket or pooled all-age row actually used (never fully trust history).
+   Blend only when `n_row ≥ 30`.
 3. `TransitionService.Calculate` uses the blend; response adds `"source":"blend"`,
-   `"empiricalWeight": w`, `"sampleSize": n_from`.
+   `"empiricalWeight": w`, `"sampleSize": n_row`, `"pooled": true|false`
+   (`pooled` when the all-age row was used).
 4. Rebuild matrix every 15 min per timeframe (cache in memory).
 
 **Tests.** 40 synthetic periods `compression → expansion` (all) → P(expansion | compression)
@@ -1040,13 +1053,15 @@ periods with durations.
 ### PR-108 — Volatility seasonality per sector
 
 **Layer:** infrastructure + application. **Depends on:** PR-098, PR-082.
+**Spec file:** `backend/docs/v2/PR-108.md`.
 
 **Spec.**
-1. `cmd/vol_aggregate` accepts `--symbols` (comma list) and `--out` prefix; produce one result
-   file per sector (`vol_l1.json`, `vol_defi.json`, …) plus the existing market-wide BTC file.
+1. `cmd/vol_aggregate` accepts `--symbols` (comma list) and `--out` path **stem** (same as
+   `VOL_SECTOR_PREFIX`); produce one result file per sector via `SectorProfilePath`
+   (`/data/vol` → `/data/vol_l1.json`) plus the market-wide `--market-symbol` file (default `BTCUSDT`).
 2. `SeasonalityProvider` gains `CurrentSpikeProbabilityFor(ctx, sector, tf string)`; falls back
-   to market-wide when the sector file is missing.
-3. `SetupService.buildContext` resolves the symbol's sector (PR-098 config) and uses it.
+   to market-wide when the sector file is missing (negative-cached; reloaded hourly).
+3. `SetupService` resolves the symbol's sector (PR-098 config) and uses it.
 
 **Tests.** Missing sector file → fallback value equals market-wide value.
 
@@ -1056,25 +1071,27 @@ periods with durations.
 
 **Layer:** tooling + domain. **Depends on:** PR-090–092 (≥ 4 weeks of outcomes), PR-088.
 
+**Spec file:** `backend/docs/v2/PR-109.md`.
+
 **Spec.**
-1. Export tool `cmd/export_dataset`: joins `signals` + `outcomes` + the `EvaluationSnapshot`
-   fields at emission into a CSV: features = the four raw scores, ER, VR, ATR pct, RS,
-   alignment; label = `Success`.
-2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`:
-   ```yaml
-   model: logistic
-   features: [trend, sideways, compression, expansion, er, vr, atr_pct]
-   weights: {...}
-   bias: -1.23
-   ```
-3. `domain/scoring/logistic.go`: `Predict(features map[string]float64, model Model) float64`.
-4. `ScoreMarketTape` and per-symbol classification gain an optional `Model`; when present, the
-   dominant regime is the class with highest predicted success probability among the four; the
-   four probabilities normalized become `Structure`. Flag `scoring.regime_model: heuristic|learned`.
+1. Export tool `cmd/export_dataset`: resolved **setup** signals (default); features from
+   `signal.Context` at emission (four raw scores, ER, VR, ATR pct);
+   `regime_label` is the raw-score structure argmax (independent of
+   `regime_model`); `success` is a separate outcome column.
+   Query is paged; `-max-rows` caps eligible written rows.
+2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`
+   with one-vs-rest `classes` (plus optional binary `weights`/`bias` for success-only
+   notebooks). Shipped stub is `placeholder: true` (not usable for inference).
+3. `domain/scoring/logistic.go`: `Predict` (binary head); `ClassifyStructure` (OVR
+   `classes` → Structure).
+4. `ScoreMarketTape` / setup `dominantRegime` use an optional Model for **Structure**;
+   tape **State** still applies PR-115 trend gate + indecisive margins. Flag
+   `scoring.regime_model: heuristic|learned` — `learned` fails startup if the model
+   file is missing, placeholder, or incomplete.
 5. Never ship `learned` as default without a scorecard A/B showing ≥ +5pp hit rate.
 
 **Tests.** `Predict` matches hand-computed sigmoid; classifier falls back to heuristic when
-model file is absent.
+model is absent / placeholder; learned Structure keeps trend gate; export Query unlimited.
 
 ---
 
@@ -1083,6 +1100,8 @@ model file is absent.
 ### PR-110 — Range trade planner (backend)
 
 **Layer:** application + adapters. **Depends on:** PR-104, setups service.
+
+**Spec file:** `backend/docs/v2/PR-110.md`.
 
 **Spec.**
 1. `application/plan/range_planner.go`:
@@ -1094,14 +1113,20 @@ model file is absent.
        LongEntry, LongStop, LongTarget    float64 // entry = Low + 0.25×ATR, stop = Low − 1.0×ATR, target = Mid (conservative) and High − 0.25×ATR (full)
        ShortEntry, ShortStop, ShortTarget float64 // mirror
        RiskReward        float64   // (target − entry)/(entry − stop) for the conservative target
-       RangeQuality      float64   // sideways score × mean-reversion score (PR-104)
-       Position          float64   // (price − Low)/(High − Low): 0 = at support, 1 = at resistance
-       Valid             bool      // RangeQuality ≥ 0.5 && RiskReward ≥ 1.2 && (High−Low)/ATR ≥ 3
+       RangeQuality      float64   // Sideways V5 (channel-aligned; not LM MRS — PR-104)
+       Position          float64   // clamp01((price − Low)/(High − Low)): 0 = at support, 1 = at resistance
+       Valid             bool      // RangeQuality ≥ 0.5 && (High−Low)/ATR ≥ 3.5 (implies Mid RR ≥ 1.2)
        Reason            string    // why invalid, if !Valid
    }
    ```
-   Channel: `Low` = median of the 3 lowest swing lows, `High` = median of the 3 highest swing
-   highs (3-bar pivot rule); if < 3 swings on a side use min/max of that side.
+   **PR-104 caveat:** Lo–MacKinlay MRS ≠ channel quality (`tight_range` MRS≈0). Use
+   Sideways V5 as the quality gate, not LM MRS.
+   Channel Low/High come from confirmed 3-bar swing pivots (shared
+   plateau-tolerant `scoring.IsPivotHighAllowEqual`/`IsPivotLowAllowEqual`;
+   not raw min/max). Width≥3.5 is the
+   binding geometry gate for Mid targets — RR is reported but not a separate
+   public reason. When `!Valid`, entry/stop/target fields are zeroed;
+   `riskReward` may remain for diagnostics.
 2. Position sizing helper (pure): `Size(accountRisk, entry, stop float64) float64 =
    accountRisk / |entry − stop|` — the client passes `accountRisk` in quote currency.
 3. Endpoint `GET /api/symbol/{symbol}/plan?timeframe=&risk=100` → plan + `size`.
@@ -1116,10 +1141,12 @@ LongStop 99, conservative target 105, RR ≈ 3.8, Valid. Trending series → `Va
 
 **Layer:** frontend. **Depends on:** PR-110.
 
+**Spec file:** `frontend/docs/PR-111.md`.
+
 **Spec.**
 1. Symbol detail: "Plan" tab/section. Draw `Low/Mid/High` as horizontal lines on the existing
-   candle chart (`features/detail/candle_series_chart_renderer.dart`) with entry/stop/target
-   ticks on the right axis (`sticky_price_labels.dart`).
+   candle chart (`features/detail/chart/interactive_chart.dart` + `plan_levels_painter.dart`) with entry/stop/target
+   ticks on the right axis.
 2. Panel: Long / Short toggle, entry/stop/target values, R:R, "Position in range" bar, quality
    dots. Account-risk input (persisted in `SharedPreferences`, default 100 USDT) → size.
 3. When `Valid=false` show the `Reason` and no levels.
@@ -1134,10 +1161,11 @@ change.
 ### PR-112a — Replay mode (backend `asOf`)
 
 **Layer:** application + adapters. **Depends on:** PR-089b.
+**Spec:** `backend/docs/v2/PR-112a.md`. **Contract:** `COMMON.md` (Replay `asOf`).
 
 **Spec.**
-1. `GET /api/rankings`, `/api/market/regime`, `/api/market/composite`, `/api/market/transition`
-   accept `asOf=<unix seconds>`. When present:
+1. `GET /api/rankings`, `/api/market/regime`, `/api/market/composite`, `/api/market/transition`,
+   `/api/market/regime/history` accept `asOf=<unix seconds>`. When present:
    - candle fetches use `GetSeries(symbol, tf, asOf − N×tf, asOf)` instead of `GetLastNCandles`
    - caches are bypassed (or keyed by `asOf` rounded to the bar)
    - regime history returns only periods ending before `asOf`
@@ -1152,17 +1180,21 @@ change.
 
 ### PR-112b — Replay mode (frontend scrubber)
 
-**Layer:** frontend. **Depends on:** PR-112a.
+**Layer:** frontend. **Depends on:** PR-112a (must ship first — UI gated by
+`kReplayUiEnabled`, default off, until `?asOf=` is live).
+
+**Spec file:** `frontend/docs/v2/PR-112b.md`.
 
 **Spec.**
 1. Market Pulse and grid get a "Replay" toggle (Pro). When on, a bottom scrubber with a date
    picker and step buttons (−1 bar / +1 bar / −1 day / +1 day) sets `asOf`.
-2. All API calls carry `asOf`; a persistent banner "Replay: Sep 16 08:30 UTC" with an Exit
-   button. Auto-refresh paused while in replay.
-3. If PR-093 is present, show the scorecard chip for the replayed signal as it would have been
-   known **then** (`since` ≤ `asOf`).
+2. Capable API calls carry TF-aligned `asOf`; a persistent banner "Replay: Sep 16 08:30 UTC" with an Exit
+   button. Auto-refresh paused while in replay and restarted on exit.
+3. If PR-093 is present, scorecard chips use `since = asOf − 30d` as a **window start**
+   (full “known then” needs backend `until=asOf`, deferred). Live-only Pulse cards are hidden in replay.
 
-**Tests.** Scrubber emits `asOf` aligned to the bar; auto-refresh timer is paused in replay.
+**Tests.** Scrubber emits `asOf` aligned to the bar; auto-refresh timer is paused in replay;
+Overview TF change under replay reloads; rankings cache skipped under `asOf`.
 
 ---
 

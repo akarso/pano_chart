@@ -11,10 +11,17 @@ import (
 // enriching each from its sparkline. Deduplicates by symbol (last wins).
 // When computedAt is zero, ComputedAt stays 0 and Timestamp is left zero —
 // used by on-demand providers that are not writing to the store.
-func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time) []domain.EvaluationSnapshot {
+// trendAlgo / compressionAlgo are stamped on each row (empty → defaults).
+func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, computedAt time.Time, trendAlgo, compressionAlgo string) []domain.EvaluationSnapshot {
 	var atUnix int64
 	if !computedAt.IsZero() {
 		atUnix = computedAt.Unix()
+	}
+	if trendAlgo == "" {
+		trendAlgo = domain.DefaultTrendAlgo
+	}
+	if compressionAlgo == "" {
+		compressionAlgo = domain.DefaultCompressionAlgo
 	}
 
 	bySym := make(map[string]domain.EvaluationSnapshot, len(results))
@@ -33,8 +40,12 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 			BreakoutDownScore: r.Scores["Breakout Down"],
 			Volume:            r.Volume,
 			Sparkline:         spark,
+			TotalScore:        float64Ptr(r.TotalScore),
+			RelativeStrength:  cloneFloatPtr(r.RelativeStrength),
 			ComputedAt:        atUnix,
 			AlgoVersion:       domain.AlgoVersion,
+			TrendAlgo:         trendAlgo,
+			CompressionAlgo:   compressionAlgo,
 		}
 		EnrichFromSparkline(&snap, spark)
 		if _, seen := bySym[sym]; !seen {
@@ -48,4 +59,17 @@ func SnapshotsFromRankings(results []usecases.RankedResult, timeframe string, co
 		out = append(out, bySym[sym])
 	}
 	return out
+}
+
+func float64Ptr(v float64) *float64 {
+	x := v
+	return &x
+}
+
+func cloneFloatPtr(v *float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	x := *v
+	return &x
 }

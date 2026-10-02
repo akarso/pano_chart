@@ -1,3 +1,10 @@
+# PR-103 / PR-105: optional scoring engine variants (defaults unchanged).
+scoring:
+  trend_algo: predictability       # or strength
+  compression_algo: absolute       # or percentile (PR-105; needs 500-bar fetch)
+  regime_model: heuristic          # or learned (PR-109; needs regime_model.yaml + A/B)
+  # regime_model_path: config/regime_model.yaml
+
 sideways:
   extrema_window: 3
   candle_count: 110
@@ -23,6 +30,7 @@ sideways:
     oscillation_quality: 2.0   # OQS
     drift_control: 1.0         # DCS
     volatility_score: 1.0      # VOS
+    mean_reversion_weight: 0.0 # MRS (PR-104); 0 keeps Sideways V5 unchanged
 
 
 compression:

@@ -6,12 +6,14 @@ import (
 	"log"
 	"math"
 	"sort"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring" // also used for structural regime detection (compression/breakout)
@@ -104,6 +106,8 @@ type GetRankingsRequest struct {
 	Timeframe    domain.Timeframe
 	Sort         SortMode
 	SidewaysAlgo SidewaysAlgoMode // empty = use default
+	// AsOf, when set, scores against candles ending at this instant (PR-112a).
+	AsOf *time.Time
 }
 
 // RankedResult represents a single symbol in the rankings output.
@@ -155,10 +159,14 @@ type GetRankings struct {
 	exchangeInfoURL string
 	tickerURL       string
 
-	snapshotLogger ports.SnapshotLogger  // optional; nil = no logging
-	signalEmitter  ports.SignalEmitter   // optional; nil = no signal log (PR-090)
-	tape           CompositeTapeProvider // optional; nil → RS unavailable (PR-096)
-	rsFilter       symbolSkipper         // optional; composite.exclude names skip RS
+	snapshotLogger  ports.SnapshotLogger          // optional; nil = no logging
+	signalEmitter   ports.SignalEmitter           // optional; nil = no signal log (PR-090)
+	tape            CompositeTapeProvider         // optional; nil → RS unavailable (PR-096)
+	rsFilter        symbolSkipper                 // optional; composite.exclude names skip RS
+	trendAlgo       string                        // stamped on evaluation log snapshots (PR-103)
+	compressionAlgo CompressionAlgoMode           // absolute (default) | percentile (PR-105)
+	compCalc        scoring.SymbolScoreCalculator // cached for Scores["Compression"] (percentile)
+	candleFetchN    int                           // max(precision, WindowHint); cached
 }
 
 // NewGetRankings constructs the use case.
@@ -185,7 +193,7 @@ func NewGetRankings(
 	if wl <= 0 {
 		wl = 12
 	}
-	return &GetRankings{
+	g := &GetRankings{
 		universe:        universe,
 		ranker:          ranker,
 		volumes:         volumes,
@@ -197,12 +205,48 @@ func NewGetRankings(
 		exchangeInfoURL: exchangeInfoURL,
 		tickerURL:       tickerURL,
 		snapshotLogger:  snapshotLogger,
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: CompressionAlgoAbsolute,
 	}
+	g.refreshCompressionCache()
+	return g
 }
 
 // SetSignalEmitter attaches an optional signal logger (PR-090).
 func (g *GetRankings) SetSignalEmitter(e ports.SignalEmitter) {
 	g.signalEmitter = e
+}
+
+// SetTrendAlgo stamps EvaluationSnapshot.TrendAlgo on optional snapshot logs.
+func (g *GetRankings) SetTrendAlgo(algo string) {
+	mode, _ := ParseTrendAlgo(algo)
+	g.trendAlgo = string(mode)
+}
+
+// SetCompressionAlgo selects absolute vs percentile compression (PR-105).
+func (g *GetRankings) SetCompressionAlgo(algo string) {
+	mode, _ := ParseCompressionAlgo(algo)
+	g.compressionAlgo = mode
+	g.refreshCompressionCache()
+}
+
+// refreshCompressionCache rebuilds the selected/absolute calculators and the
+// candle fetch window (PR-105). Only compression receives a longer fetch
+// (percentile WindowHint); Rank always scores the precision-trimmed series,
+// so weighted calculators are not consulted for WindowHint.
+func (g *GetRankings) refreshCompressionCache() {
+	g.compCalc = CompressionCalcFor(g.compressionAlgo)
+	g.candleFetchN = scoring.MaxWindowHint(g.precision, g.compCalc)
+}
+
+// trimSeriesTail returns the last n candles (or the whole series when shorter).
+func trimSeriesTail(series domain.CandleSeries, n int) (domain.CandleSeries, error) {
+	if n <= 0 || series.Len() <= n {
+		return series, nil
+	}
+	all := series.All()
+	tail := all[len(all)-n:]
+	return domain.NewCandleSeries(series.Symbol(), series.Timeframe(), tail)
 }
 
 // SetTapeProvider attaches an optional composite tape source for RS/Beta/RSRank.
@@ -220,6 +264,13 @@ func (g *GetRankings) SetRSFilter(f symbolSkipper) {
 // Execute computes the full ranking for the requested sort mode.
 func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error) {
 	empty := RankingsResult{Sort: req.Sort, RequestedSort: req.Sort}
+	if req.AsOf == nil {
+		if t, ok := replay.AsOf(ctx); ok {
+			req.AsOf = &t
+		}
+	} else {
+		ctx = replay.WithAsOf(ctx, *req.AsOf)
+	}
 
 	symbols, err := g.universe.Symbols(ctx, g.exchangeInfoURL, g.tickerURL)
 	if err != nil {
@@ -234,10 +285,16 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		}, nil
 	}
 
-	volMap, err := g.volumes.Volumes(ctx)
-	if err != nil {
-		return empty, fmt.Errorf("volume fetch failed: %w", err)
+	var volMap map[string]float64
+	if req.AsOf == nil {
+		var err error
+		volMap, err = g.volumes.Volumes(ctx)
+		if err != nil {
+			return empty, fmt.Errorf("volume fetch failed: %w", err)
+		}
 	}
+	// Replay has no historical 24h ticker — leave volume unset (0) rather than
+	// pairing today's activity with as-of scores (PR-112a).
 
 	scored, err := g.fetchAndScoreSymbols(ctx, symbols, req)
 	if err != nil {
@@ -278,34 +335,55 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		grp.Go(func() error {
 			defer sem.Release(1)
 
-			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.precision)
+			cs, err := replay.FetchCandles(gCtx, g.candleRepo, sym, req.Timeframe, g.candleFetchN)
 			if err != nil {
 				return nil // skip symbols with fetch errors
 			}
 
-			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: cs}
+			// Precision window for Rank / sparkline / breakout / absolute boost.
+			// Percentile compression alone may use the longer fetch (PR-105 CR).
+			precisionSeries, err := trimSeriesTail(cs, g.precision)
+			if err != nil {
+				return nil
+			}
+
+			singleSeries := map[domain.Symbol]domain.CandleSeries{sym: precisionSeries}
 			ranked, err := ranker.Rank(gCtx, singleSeries)
 			if err != nil || len(ranked) == 0 {
 				return nil // skip on scoring error
 			}
 
-			candles := cs.All()
-			compResult := scoring.DetectCompression(candles, scoring.DefaultCompressionConfig())
-			breakResult := scoring.DetectBreakout(candles, scoring.DefaultBreakoutConfig(), compResult.Score)
-			ranked[0].Scores["Compression"] = compResult.Score
+			compScore, err := g.scoreCompression(cs, precisionSeries)
+			if err != nil {
+				return nil
+			}
+			// Breakout boost stays on absolute compression over the full
+			// precision window (pre-PR-105 DetectCompression parity). Absolute
+			// mode already computed that via scoreCompression; percentile must
+			// recompute DetectCompression (do not reuse the percentile score).
+			absBoost := compScore
+			if g.compressionAlgo == CompressionAlgoPercentile {
+				absBoost = scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score
+			}
+			breakResult := scoring.DetectBreakout(precisionSeries.All(), scoring.DefaultBreakoutConfig(), absBoost)
+			ranked[0].Scores["Compression"] = compScore
 			ranked[0].Scores["Breakout Up"] = breakResult.UpScore
 			ranked[0].Scores["Breakout Down"] = breakResult.DownScore
 
 			slots[i] = slot{
 				symbol:    sym,
-				series:    cs,
+				series:    precisionSeries,
 				ranked:    ranked[0],
 				hasSeries: true,
 			}
 
 			if g.snapshotLogger != nil {
-				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, cs, 0, domain.AlgoVersion)
-				_ = g.snapshotLogger.Log(snap)
+				if _, replay := replay.AsOf(gCtx); !replay {
+					snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
+					snap.TrendAlgo = g.trendAlgo
+					snap.CompressionAlgo = string(g.compressionAlgo)
+					_ = g.snapshotLogger.Log(snap)
+				}
 			}
 			return nil
 		})
@@ -323,6 +401,16 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		out = append(out, scoredSymbol{symbol: s.symbol, series: s.series, ranked: s.ranked})
 	}
 	return out, nil
+}
+
+// scoreCompression returns Scores["Compression"]. Absolute mode runs
+// DetectCompression on the full precision series (historical GetRankings
+// window). Percentile scores the longer fetch via WindowHint.
+func (g *GetRankings) scoreCompression(fetched, precisionSeries domain.CandleSeries) (float64, error) {
+	if g.compressionAlgo == CompressionAlgoPercentile {
+		return g.compCalc.Score(fetched)
+	}
+	return scoring.DetectCompression(precisionSeries.All(), scoring.DefaultCompressionConfig()).Score, nil
 }
 
 // buildRankedRows annotates scored symbols with volume, sparkline, and signal fields.
@@ -359,6 +447,10 @@ func buildRankedRows(scored []scoredSymbol, volMap map[string]float64) []RankedR
 func (g *GetRankings) finalizeRankings(ctx context.Context, req GetRankingsRequest, results []RankedResult, universeN int) RankingsResult {
 	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, universeN)
 	sortMode := effectiveSort(req.Sort, rs.available)
+	// Replay volumes are unset — do not pretend to sort by today's ticker.
+	if req.AsOf != nil && sortMode == SortByVolume {
+		sortMode = SortByTotal
+	}
 
 	sortResults(results, sortMode)
 	assignPositionPercentiles(results)
@@ -520,6 +612,9 @@ func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, re
 // on cache miss.
 func EmitBadgeSignals(ctx context.Context, emitter ports.SignalEmitter, timeframe string, results []RankedResult) {
 	if emitter == nil {
+		return
+	}
+	if _, ok := replay.AsOf(ctx); ok {
 		return
 	}
 	for _, r := range results {

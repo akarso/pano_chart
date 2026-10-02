@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui' show VoidCallback;
 
 import 'package:flutter/foundation.dart';
 
@@ -25,6 +24,18 @@ class OverviewViewModel {
   final GetOverview _getOverview;
 
   VoidCallback? onChanged;
+
+  /// Gates the `?mtf=1` alignment overlay (PR-100) — widget-owned
+  /// entitlement, kept in sync via direct assignment (same pattern as
+  /// [attachPrefs]) since it can change mid-lifetime (purchase/restore).
+  /// Defaults false so a caller that never sets it doesn't pay for an
+  /// overlay it can't show.
+  bool isProUser = false;
+
+  /// Replay cutoff (unix seconds) for rankings `?asOf=` (PR-112b).
+  /// Null = live. Widget syncs from [ReplayController.asOfUnixFor].
+  /// When set, rankings are never written to or read from the offline cache.
+  int? asOfUnix;
 
   int _generation = 0;
 
@@ -107,6 +118,14 @@ class OverviewViewModel {
               (a, b) => b.breakoutDownScore.compareTo(a.breakoutDownScore));
         }
         break;
+      case 'aligned':
+        // Alignment desc, then total score desc (PR-100) — fixed order, no
+        // up/down toggle (not in kDirectionalSorts).
+        sorted.sort((a, b) {
+          final c = (b.alignment ?? 0.0).compareTo(a.alignment ?? 0.0);
+          return c != 0 ? c : b.totalScore.compareTo(a.totalScore);
+        });
+        break;
       default:
         sorted.sort((a, b) => b.totalScore.compareTo(a.totalScore));
     }
@@ -161,6 +180,8 @@ class OverviewViewModel {
                 'rs': e.rs,
                 'beta': e.beta,
                 'rsRank': e.rsRank,
+                'alignment': e.alignment,
+                'alignedState': e.alignedState,
               })
           .toList(),
       'hasMore': result.hasMore,
@@ -172,7 +193,8 @@ class OverviewViewModel {
     };
   }
 
-  /// Writes [cache] only if [gen] is still the active generation.
+  /// Writes [cache] only if [gen] is still the active generation and
+  /// we are not in replay (`asOfUnix == null`).
   /// A slower SET that lands after a newer write may clobber disk; the payload
   /// is still sort-tagged, so offline restore ignores a sort mismatch.
   Future<void> _writeRankingsCacheIfCurrent(
@@ -180,7 +202,7 @@ class OverviewViewModel {
     int gen,
     Map<String, dynamic> cache,
   ) async {
-    if (_prefs == null) return;
+    if (_prefs == null || asOfUnix != null) return;
     if (gen != _generation) return;
     final payload = jsonEncode(cache);
     final gate = cacheWriteGate;
@@ -209,6 +231,8 @@ class OverviewViewModel {
       rs: (e['rs'] as num?)?.toDouble(),
       beta: (e['beta'] as num?)?.toDouble(),
       rsRank: (e['rsRank'] as num?)?.toDouble(),
+      alignment: (e['alignment'] as num?)?.toDouble(),
+      alignedState: e['alignedState'] as String?,
     );
   }
 
@@ -230,6 +254,8 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
       if (currentGen != _generation) return;
 
@@ -256,6 +282,7 @@ class OverviewViewModel {
               : _state.effectiveSort,
         ),
       );
+      _completeUniverseForAlignedSort(timeframe, currentGen);
       try {
         await _writeRankingsCacheIfCurrent(timeframe, currentGen, cache);
       } catch (_) {
@@ -263,6 +290,12 @@ class OverviewViewModel {
       }
     } catch (e) {
       if (currentGen != _generation) return;
+
+      // Replay must not paint live offline cache under a Replay banner.
+      if (asOfUnix != null) {
+        _setState(_state.copyWith(isLoading: false, error: e.toString()));
+        return;
+      }
 
       if (_prefs != null) {
         final cacheStr = _prefs!.getRankingsCache(timeframe);
@@ -320,6 +353,8 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;
@@ -347,6 +382,7 @@ class OverviewViewModel {
               : _state.effectiveSort,
         ),
       );
+      _completeUniverseForAlignedSort(timeframe, currentGen);
       try {
         await _writeRankingsCacheIfCurrent(timeframe, currentGen, cache);
       } catch (_) {
@@ -355,6 +391,40 @@ class OverviewViewModel {
     } catch (e) {
       if (currentGen != _generation) return;
       _setState(_state.copyWith(isLoading: false, error: e.toString()));
+    }
+  }
+
+  /// The `aligned` sort is client-only — the backend doesn't recognize
+  /// `sort=aligned` and falls back to its own default before paginating
+  /// (PR-100 CR), so pagination order has nothing to do with alignment.
+  /// Re-sorting only the page(s) fetched so far can silently drop a
+  /// highly-aligned symbol that landed on a later, not-yet-fetched page.
+  /// Auto-fetches every remaining page (fire-and-forget: the first page
+  /// already renders immediately, this just keeps extending [_state.items]
+  /// via [loadNext]'s own notify) so the local sort always ends up
+  /// operating over the complete result set. No-ops once [sort] changes
+  /// away from `aligned`, a newer load/refresh starts, or one is already
+  /// in flight.
+  ///
+  /// Stops (rather than looping forever) on a page fetch failure:
+  /// [loadNext]'s catch path resets `isLoading` but leaves `page`/`hasMore`
+  /// unchanged, so without this check the loop would immediately re-request
+  /// the identical page — hammering the backend indefinitely on a
+  /// persistent failure instead of backing off. The user's own retry paths
+  /// (pull-to-refresh, scrolling to trigger [loadNext] again) pick this
+  /// back up later; the ranking is left incomplete in the meantime, same
+  /// as it would be for any other sort whose pagination stalls.
+  Future<void> _completeUniverseForAlignedSort(
+    String timeframe,
+    int generation,
+  ) async {
+    while (_state.sort == 'aligned' &&
+        _state.hasMore &&
+        !_state.isLoading &&
+        generation == _generation) {
+      await loadNext(timeframe);
+      if (generation != _generation) return;
+      if (_state.error != null) return;
     }
   }
 
@@ -372,6 +442,8 @@ class OverviewViewModel {
         sort: _state.sort,
         snapshot: _state.snapshot,
         sidewaysAlgo: _state.sidewaysAlgo,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;
@@ -482,6 +554,8 @@ class OverviewViewModel {
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
         symbols: missing.toList(),
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;

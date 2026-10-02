@@ -80,7 +80,7 @@ GetCandleSeriesInput buildDetailChartInput({
   DateTime? now,
 }) {
   final end = now ?? DateTime.now().toUtc();
-  final totalCandles = kChartCandles + kIndicatorWarmup;
+  const totalCandles = kChartCandles + kIndicatorWarmup;
   final from = end.subtract(candleDuration(timeframe) * totalCandles);
   return GetCandleSeriesInput(
     symbol: symbol,

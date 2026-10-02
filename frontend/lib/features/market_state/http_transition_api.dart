@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../replay/replay_asof.dart';
 import 'transition_data.dart';
 
 /// Fetches market transition probabilities from the backend.
 abstract class TransitionApi {
-  Future<TransitionData> fetch({String timeframe});
+  Future<TransitionData> fetch({String timeframe, int? asOf});
 }
 
 class HttpTransitionApi implements TransitionApi {
@@ -14,9 +15,10 @@ class HttpTransitionApi implements TransitionApi {
   HttpTransitionApi({required this.client, required this.baseUrl});
 
   @override
-  Future<TransitionData> fetch({String timeframe = '4h'}) async {
-    final uri =
+  Future<TransitionData> fetch({String timeframe = '4h', int? asOf}) async {
+    var uri =
         Uri.parse('$baseUrl/api/market/transition?timeframe=$timeframe');
+    uri = uriWithAsOf(uri, asOf);
     final response =
         await client.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) {

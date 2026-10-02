@@ -6,12 +6,12 @@ void main() {
   group('BubblePainter.colorForChange', () {
     test('positive change returns green-ish colour', () {
       final c = BubblePainter.colorForChange(5.0);
-      expect(c.green, greaterThan(c.red));
+      expect(c.g, greaterThan(c.r));
     });
 
     test('negative change returns red-ish colour', () {
       final c = BubblePainter.colorForChange(-5.0);
-      expect(c.red, greaterThan(c.green));
+      expect(c.r, greaterThan(c.g));
     });
 
     test('near-zero change returns grey', () {

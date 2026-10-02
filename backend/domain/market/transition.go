@@ -15,4 +15,15 @@ type MarketTransition struct {
 	CurrentRegime Regime
 	Probabilities TransitionProbabilities
 	Horizon       string // e.g. "12 candles"
+
+	// Source is "heuristic" when no empirical samples apply, else "blend" (PR-107).
+	Source string
+	// EmpiricalWeight is the blend weight w ∈ [0, 0.7] applied to history.
+	EmpiricalWeight float64
+	// SampleSize is the raw transition count for the row actually used
+	// (age bucket or pooled all-age).
+	SampleSize int
+	// Pooled is true when sampleSize / probs came from the all-age row
+	// rather than the age bucket for the current regime age.
+	Pooled bool
 }

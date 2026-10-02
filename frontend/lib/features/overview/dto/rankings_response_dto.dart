@@ -52,6 +52,11 @@ class RankingItemDto {
   final double? beta;
   final double? rsRank;
 
+  /// Multi-timeframe alignment (PR-099/100). Null when unrequested or the
+  /// store had no fresh frames — distinct from a real reading.
+  final double? alignment;
+  final String? alignedState;
+
   const RankingItemDto({
     required this.symbol,
     required this.totalScore,
@@ -63,6 +68,8 @@ class RankingItemDto {
     this.rs,
     this.beta,
     this.rsRank,
+    this.alignment,
+    this.alignedState,
   });
 
   factory RankingItemDto.fromJson(Map<String, dynamic> json) {
@@ -81,6 +88,8 @@ class RankingItemDto {
       rs: (json['rs'] as num?)?.toDouble(),
       beta: (json['beta'] as num?)?.toDouble(),
       rsRank: (json['rsRank'] as num?)?.toDouble(),
+      alignment: (json['alignment'] as num?)?.toDouble(),
+      alignedState: json['alignedState'] as String?,
     );
   }
 }

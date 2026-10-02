@@ -4,13 +4,21 @@ import 'http_scorecard_api.dart';
 import 'reliability_chip.dart';
 import 'scorecard_data.dart';
 
-/// List of `(kind, label)` reliability rows for the last 30 days.
+/// List of `(kind, label)` reliability rows for a scorecard window.
 /// Tap a row to open its score-decile chart.
 class ScorecardsScreen extends StatefulWidget {
   final ScorecardApi api;
   final String timeframe;
 
-  const ScorecardsScreen({super.key, required this.api, this.timeframe = '1h'});
+  /// Scorecard window (`30d` live, or absolute RFC3339 under replay).
+  final String since;
+
+  const ScorecardsScreen({
+    super.key,
+    required this.api,
+    this.timeframe = '1h',
+    this.since = '30d',
+  });
 
   @override
   State<ScorecardsScreen> createState() => _ScorecardsScreenState();
@@ -35,7 +43,7 @@ class _ScorecardsScreenState extends State<ScorecardsScreen> {
     try {
       final summary = await widget.api.summary(
         timeframe: widget.timeframe,
-        since: '30d',
+        since: widget.since,
       );
       if (!mounted) return;
       setState(() {
@@ -120,6 +128,7 @@ class _ScorecardsScreenState extends State<ScorecardsScreen> {
                   kind: item.kind,
                   label: item.label,
                   timeframe: widget.timeframe,
+                  since: widget.since,
                 ),
               ),
             );
@@ -136,6 +145,7 @@ class ScorecardDecilesScreen extends StatefulWidget {
   final String kind;
   final String label;
   final String timeframe;
+  final String since;
 
   const ScorecardDecilesScreen({
     super.key,
@@ -143,6 +153,7 @@ class ScorecardDecilesScreen extends StatefulWidget {
     required this.kind,
     required this.label,
     required this.timeframe,
+    this.since = '30d',
   });
 
   @override
@@ -170,7 +181,7 @@ class _ScorecardDecilesScreenState extends State<ScorecardDecilesScreen> {
         kind: widget.kind,
         label: widget.label,
         timeframe: widget.timeframe,
-        since: '30d',
+        since: widget.since,
       );
       if (!mounted) return;
       setState(() {

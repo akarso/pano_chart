@@ -94,8 +94,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               enabled: _settings.uptrend,
               onToggle: (v) => _update(() => _settings.uptrend = v),
               timeframe: _settings.uptrendTimeframe,
-              onTimeframe: (v) =>
-                  _update(() => _settings.uptrendTimeframe = v),
+              onTimeframe: (v) => _update(() => _settings.uptrendTimeframe = v),
             ),
             _slider(
               'min. dominance',
@@ -134,8 +133,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               enabled: _settings.setupOfDay,
               onToggle: (v) => _update(() => _settings.setupOfDay = v),
               timeframe: _settings.setupTimeframe,
-              onTimeframe: (v) =>
-                  _update(() => _settings.setupTimeframe = v),
+              onTimeframe: (v) => _update(() => _settings.setupTimeframe = v),
             ),
             _slider(
               'min. quality score',
@@ -153,6 +151,17 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               _settings.macroModerate,
               (v) => _update(() => _settings.macroModerate = v),
             ),
+            _sectionTitle('Watchlist'),
+            _regimeRow(
+              label: 'Regime change alerts',
+              enabled: _settings.watchlistTransitions,
+              onToggle: (v) =>
+                  _update(() => _settings.watchlistTransitions = v),
+              timeframe: _settings.watchlistTimeframe,
+              onTimeframe: (v) =>
+                  _update(() => _settings.watchlistTimeframe = v),
+              timeframes: kWatchlistTimeframes,
+            ),
           ],
 
           // ── Upgrade prompt for free users ──
@@ -160,11 +169,9 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 24, 16, 16),
               child: Text(
-                'Upgrade to Pro for market, setup, macro, and social notifications.',
-                style: TextStyle(
-                  color: Colors.grey[400],
-                  fontSize: 13,
-                ),
+                'Upgrade to Pro for market, setup, macro, social, and '
+                'watchlist notifications.',
+                style: TextStyle(color: Colors.grey[400], fontSize: 13),
               ),
             ),
         ],
@@ -186,7 +193,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     return SwitchListTile(
       title: Text(label),
       value: value,
-      activeColor: const Color(0xFF42A5F5),
+      activeThumbColor: const Color(0xFF42A5F5),
       onChanged: onChanged,
     );
   }
@@ -198,6 +205,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     required ValueChanged<bool> onToggle,
     required String timeframe,
     required ValueChanged<String> onTimeframe,
+    List<String> timeframes = kTimeframes,
   }) {
     return Padding(
       padding: const EdgeInsets.only(right: 8),
@@ -207,11 +215,11 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             child: SwitchListTile(
               title: Text(label),
               value: enabled,
-              activeColor: const Color(0xFF42A5F5),
+              activeThumbColor: const Color(0xFF42A5F5),
               onChanged: onToggle,
             ),
           ),
-          _timeframeDropdown(timeframe, onTimeframe),
+          _timeframeDropdown(timeframe, onTimeframe, timeframes: timeframes),
         ],
       ),
     );
@@ -219,12 +227,13 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   Widget _timeframeDropdown(
     String value,
-    ValueChanged<String> onChanged,
-  ) {
+    ValueChanged<String> onChanged, {
+    List<String> timeframes = kTimeframes,
+  }) {
     return DropdownButton<String>(
       value: value,
       underline: const SizedBox.shrink(),
-      items: kTimeframes
+      items: timeframes
           .map((tf) => DropdownMenuItem(value: tf, child: Text(tf)))
           .toList(),
       onChanged: (v) {
@@ -233,11 +242,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     );
   }
 
-  Widget _slider(
-    String label,
-    double value,
-    ValueChanged<double> onChanged,
-  ) {
+  Widget _slider(String label, double value, ValueChanged<double> onChanged) {
     final pct = (value * 100).round();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -248,10 +253,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  '$label: $pct%',
-                  style: const TextStyle(fontSize: 12),
-                ),
+                Text('$label: $pct%', style: const TextStyle(fontSize: 12)),
                 Slider(
                   value: value,
                   min: 0.50,

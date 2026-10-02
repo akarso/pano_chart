@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	h "pano_chart/backend/adapters/http"
+	"pano_chart/backend/application/mtf"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+	mkt "pano_chart/backend/domain/market"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -104,6 +108,41 @@ func TestRankingsV2Handler_InvalidTimeframe(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	assert.Equal(t, "invalid timeframe", body["error"])
 	uc.AssertNotCalled(t, "Execute")
+}
+
+func TestRankingsV2Handler_InvalidAsOf(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&asOf=nope", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var body map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	assert.Equal(t, "invalid asOf", body["error"])
+	uc.AssertNotCalled(t, "Execute")
+}
+
+func TestRankingsV2Handler_AsOfPassedToUseCase(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	tf, _ := domain.NewTimeframe("1h")
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+		AsOf:      &asOf,
+	}).Return(rankingsOut(nil, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&asOf=1700000000", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	uc.AssertExpectations(t)
 }
 
 func TestRankingsV2Handler_InternalError(t *testing.T) {
@@ -438,6 +477,268 @@ func TestRankingsV2Handler_SymbolsFilter_NoMatch(t *testing.T) {
 	assert.Len(t, body.Results, 0)
 
 	uc.AssertExpectations(t)
+}
+
+// --- Multi-timeframe overlay tests (PR-099) ---
+
+type fakeMTFCalc struct {
+	bySymbol map[string]mtf.Stack
+	errFor   map[string]error
+}
+
+func (f *fakeMTFCalc) Calculate(_ context.Context, symbol string) (mtf.Stack, error) {
+	if err, ok := f.errFor[symbol]; ok {
+		return mtf.Stack{}, err
+	}
+	if s, ok := f.bySymbol[symbol]; ok {
+		return s, nil
+	}
+	return mtf.Stack{}, errors.New("no stack for symbol")
+}
+
+// stackWithFrame builds a Stack that has real data (a non-empty Frames),
+// distinct from a genuinely empty mtf.Stack{} (no fresh frames — cold
+// start / store outage), which the handler must treat as "no data" and
+// omit rather than reporting alignment/alignedState from.
+func stackWithFrame(alignment float64, state mkt.State) mtf.Stack {
+	return mtf.Stack{
+		Frames:       []mtf.TFRegime{{Timeframe: "1h", Dominant: state}},
+		Alignment:    alignment,
+		AlignedState: state,
+	}
+}
+
+func TestRankingsV2Handler_MTFOverlay_AddsFieldsWhenRequested(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(&fakeMTFCalc{
+		bySymbol: map[string]mtf.Stack{
+			"BTCUSDT": stackWithFrame(1.0, mkt.StateTrend),
+		},
+	})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	assert.InDelta(t, 1.0, row["alignment"], 1e-9)
+	assert.Equal(t, "trend", row["alignedState"])
+}
+
+func TestRankingsV2Handler_MTFOverlay_EmptyStackOmitsFields(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(&fakeMTFCalc{
+		bySymbol: map[string]mtf.Stack{
+			// Calculate succeeds (no error) but has zero fresh frames — a
+			// cold start or store outage, not a real reading.
+			"BTCUSDT": {},
+		},
+	})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	_, hasAlignment := row["alignment"]
+	_, hasAlignedState := row["alignedState"]
+	assert.False(t, hasAlignment, "alignment must be omitted when the stack has no frames, not stamped 0")
+	assert.False(t, hasAlignedState, "alignedState must be omitted when the stack has no frames, not stamped indecisive")
+}
+
+func TestRankingsV2Handler_MTFOverlay_OmittedWithoutQueryParam(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(&fakeMTFCalc{
+		bySymbol: map[string]mtf.Stack{
+			"BTCUSDT": stackWithFrame(1.0, mkt.StateTrend),
+		},
+	})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	// No ?mtf=1 — the calculator is wired but must not be consulted.
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	_, hasAlignment := row["alignment"]
+	_, hasAlignedState := row["alignedState"]
+	assert.False(t, hasAlignment, "alignment must be omitted without ?mtf=1")
+	assert.False(t, hasAlignedState, "alignedState must be omitted without ?mtf=1")
+}
+
+func TestRankingsV2Handler_MTFOverlay_CalculatorErrorLeavesRowUnaffected(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(&fakeMTFCalc{
+		errFor: map[string]error{"BTCUSDT": errors.New("store unavailable")},
+	})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	// A calculator failure must not fail the row or the request.
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "BTCUSDT", row["symbol"])
+	_, hasAlignment := row["alignment"]
+	assert.False(t, hasAlignment, "alignment must be omitted when the calculator errors")
+}
+
+func TestRankingsV2Handler_MTFOverlay_IgnoredWhenNoCalculatorWired(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc) // SetMTFCalculator never called
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestRankingsV2Handler_MTFOverlay_PageSizeCap_AllRowsIndexAligned(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+
+	const n = 200 // the handler's pageSize clamp — the real worst case for the overlay
+	results := make([]usecases.RankedResult, n)
+	stacks := make(map[string]mtf.Stack, n)
+	for i := 0; i < n; i++ {
+		symbol := fmt.Sprintf("SYM%03dUSDT", i)
+		results[i] = usecases.RankedResult{Symbol: mustSymbol(t, symbol), TotalScore: float64(n - i)}
+		// A distinct value per row so a concurrency bug that mixes up which
+		// goroutine writes which resp[i] would show up as a mismatch below.
+		stacks[symbol] = stackWithFrame(float64(i)/float64(n), mkt.StateTrend)
+	}
+	handler.SetMTFCalculator(&fakeMTFCalc{bySymbol: stacks})
+
+	tf, _ := domain.NewTimeframe("1h")
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&pageSize=500&mtf=1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.InDelta(t, float64(n), body["pageSize"], 0, "pageSize must clamp to 200")
+
+	rows := body["results"].([]any)
+	if assert.Len(t, rows, n) {
+		for i, raw := range rows {
+			row := raw.(map[string]any)
+			symbol := fmt.Sprintf("SYM%03dUSDT", i)
+			assert.Equal(t, symbol, row["symbol"], "row %d out of order", i)
+			want := stacks[symbol]
+			assert.InDelta(t, want.Alignment, row["alignment"], 1e-9, "row %d alignment not index-aligned under concurrency", i)
+		}
+	}
+	uc.AssertExpectations(t)
+}
+
+// blockingMTFCalc never resolves on its own — it only returns once ctx is
+// done, simulating a hung store connection.
+type blockingMTFCalc struct{}
+
+func (blockingMTFCalc) Calculate(ctx context.Context, _ string) (mtf.Stack, error) {
+	<-ctx.Done()
+	return mtf.Stack{}, ctx.Err()
+}
+
+func TestRankingsV2Handler_MTFOverlay_HungStoreBoundedBySharedBudget(t *testing.T) {
+	uc := &rankingsUseCaseMock{}
+	handler := h.NewRankingsV2Handler(uc)
+	handler.SetMTFCalculator(blockingMTFCalc{})
+
+	tf, _ := domain.NewTimeframe("1h")
+	results := []usecases.RankedResult{
+		{Symbol: mustSymbol(t, "BTCUSDT"), TotalScore: 1},
+	}
+	uc.On("Execute", mock.Anything, usecases.GetRankingsRequest{
+		Timeframe: tf,
+		Sort:      usecases.ParseSortMode("total"),
+	}).Return(rankingsOut(results, usecases.ParseSortMode("total"), false), nil)
+
+	r := httptest.NewRequest(http.MethodGet, "/api/rankings?timeframe=1h&mtf=1", nil)
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	handler.ServeHTTP(w, r)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Less(t, elapsed, 2*time.Second,
+		"a hung store must not stall the response past the shared overlay budget")
+
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	row := body["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "BTCUSDT", row["symbol"])
+	_, hasAlignment := row["alignment"]
+	assert.False(t, hasAlignment, "alignment must be omitted when the store never responds")
 }
 
 // --- Unit tests for helpers ---

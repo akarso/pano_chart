@@ -41,8 +41,19 @@ type FragilityProvider interface {
 // (5m/15m/1h/4h) group 1-minute buckets by array position, not by an
 // explicit time range each bucket covers, so matching "the bucket
 // containing right now" is unambiguous only at 1-minute granularity.
+//
+// CurrentSpikeProbabilityFor (PR-108) prefers a per-sector profile when
+// available and falls back to the market-wide curve when the sector file
+// is missing or sector is empty/"other".
 type SeasonalityProvider interface {
 	CurrentSpikeProbability(ctx context.Context, timeframe string) (float64, error)
+	CurrentSpikeProbabilityFor(ctx context.Context, sector, timeframe string) (float64, error)
+}
+
+// SectorResolver maps a symbol to a sector id (PR-098 catalog).
+// Optional on SetupService; nil → seasonality uses the market-wide curve.
+type SectorResolver interface {
+	ForSymbol(sym string) string
 }
 
 // SetupService orchestrates candle retrieval, score computation, and setup
@@ -54,9 +65,15 @@ type SetupService struct {
 	marketProvider      MarketProvider        // optional; nil means no market modifier
 	fragilityProvider   FragilityProvider     // optional; nil means crowding = 0
 	seasonalityProvider SeasonalityProvider   // optional; nil means SeasonalityFit = neutral 0.5
+	sectorResolver      SectorResolver        // optional; nil → market-wide seasonality only
 	evalStore           ports.EvaluationStore // optional; nil → always re-score
 	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
-	now                 func() time.Time
+	// trendDir recovers trend magnitude+bias for overlay / dominantRegime.
+	// Must match the rankings / WeightedSymbolScorer trend engine (PR-103).
+	trendDir        scoring.DirectedScoreCalculator
+	trendAlgo       string // expected EvaluationSnapshot.TrendAlgo for store hits
+	compressionAlgo string // expected EvaluationSnapshot.CompressionAlgo for store hits
+	now             func() time.Time
 }
 
 const candleLimit = 200
@@ -70,11 +87,38 @@ const storeTrendOverlayBars = 110
 // NewSetupService constructs the service.
 func NewSetupService(repo ports.CandleRepositoryPort, scorer usecases.SymbolScorer, eng *Engine) *SetupService {
 	return &SetupService{
-		candleRepo: repo,
-		scorer:     scorer,
-		engine:     eng,
-		now:        time.Now,
+		candleRepo:      repo,
+		scorer:          scorer,
+		engine:          eng,
+		trendDir:        &scoring.TrendPredictabilityScoreCalculator{},
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: domain.DefaultCompressionAlgo,
+		now:             time.Now,
 	}
+}
+
+// SetTrendDirectionCalc sets the engine used for store-trend overlay and
+// dominantRegime direction (PR-103). Must match the WeightedSymbolScorer
+// trend calculator; default is Trend Predictability.
+func (s *SetupService) SetTrendDirectionCalc(c scoring.DirectedScoreCalculator) {
+	if c == nil {
+		return
+	}
+	s.trendDir = c
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits
+// (PR-103). Independent of SetTrendDirectionCalc (live overlay engine).
+func (s *SetupService) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	s.trendAlgo = string(mode)
+}
+
+// SetCompressionAlgo sets the expected EvaluationSnapshot.CompressionAlgo for
+// store hits (PR-105).
+func (s *SetupService) SetCompressionAlgo(algo string) {
+	mode, _ := usecases.ParseCompressionAlgo(algo)
+	s.compressionAlgo = string(mode)
 }
 
 // SetMarketProvider injects the market state provider (optional).
@@ -91,6 +135,13 @@ func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
 // (optional).
 func (s *SetupService) SetSeasonalityProvider(sp SeasonalityProvider) {
 	s.seasonalityProvider = sp
+}
+
+// SetSectorResolver injects the symbol→sector map used for per-sector
+// seasonality (PR-108). Optional; without it, setups always use the
+// market-wide spike curve.
+func (s *SetupService) SetSectorResolver(r SectorResolver) {
+	s.sectorResolver = r
 }
 
 // SetEvaluationStore injects the shared evaluation store (optional, PR-089b).
@@ -141,7 +192,7 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 		return setup.SetupScores{}, err
 	}
 
-	setupCtx := buildContext(sym.String(), series, stats)
+	setupCtx := buildContext(sym.String(), series, stats, s.trendDir)
 	result := s.engine.Evaluate(setupCtx)
 	result.Timeframe = timeframe
 
@@ -163,7 +214,11 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 	// ctx.Err() check below does for Crowding — see PR-082.
 	result.SeasonalityFit = 0.5
 	if s.seasonalityProvider != nil {
-		if spikeProb, err := s.seasonalityProvider.CurrentSpikeProbability(ctx, timeframe); err == nil {
+		sector := ""
+		if s.sectorResolver != nil {
+			sector = s.sectorResolver.ForSymbol(symbol)
+		}
+		if spikeProb, serr := s.seasonalityProvider.CurrentSpikeProbabilityFor(ctx, sector, timeframe); serr == nil {
 			result.SeasonalityFit = SeasonalityFit(spikeProb)
 		}
 	}
@@ -194,11 +249,11 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 		stats.Scores["Breakout Down"],
 	)
 
-	s.emitSetupSignal(ctx, result, series)
+	s.emitSetupSignal(ctx, result, series, stats)
 	return result, nil
 }
 
-func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupScores, series domain.CandleSeries) {
+func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupScores, series domain.CandleSeries, stats usecases.SymbolStats) {
 	if s.signalEmitter == nil || result.Confidence < 0.5 {
 		return
 	}
@@ -214,6 +269,16 @@ func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupSc
 		"seasonality_fit":  result.SeasonalityFit,
 		"market_effective": result.MarketEffective,
 	}
+	// Same feature builder as dominantRegimeLearned (PR-109 train/serve parity).
+	feats := setupRegimeFeatures(stats.Scores, series)
+	for k, v := range feats {
+		ctxNums[k] = v
+	}
+	// Structure-training label from four-way raw-score argmax (includes
+	// expansion). Distinct from result.Regime, which folds expansion→sideways.
+	ctxNums["regime_code"] = structureRegimeCode(
+		feats["trend"], feats["sideways"], feats["compression"], feats["expansion"],
+	)
 	if label == "range" || label == "compression" {
 		hi, lo := recentExtremes(series)
 		ctxNums["range_low"] = lo
@@ -231,6 +296,49 @@ func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupSc
 	})
 }
 
+// setupRegimeFeatures builds the PR-109 feature map shared by emit and
+// dominantRegimeLearned. Uses raw score keys (not confidence-adjusted
+// breakouts) and Wilder TrueATR(14) so CSV rows match live classification.
+func setupRegimeFeatures(scores map[string]float64, series domain.CandleSeries) map[string]float64 {
+	trend := scores["Trend Predictability"]
+	compression := scores["Compression"]
+	sideways := scores["Sideways Consistency"]
+	expansion := scores["Breakout Up"]
+	if down := scores["Breakout Down"]; down > expansion {
+		expansion = down
+	}
+	candles := series.All()
+	closes := scoring.ClosesFromCandles(candles)
+	atr := scoring.TrueATR(candles, 14)
+	price := 0.0
+	if n := len(closes); n > 0 {
+		price = closes[n-1]
+	}
+	return scoring.BuildRegimeFeatures(trend, sideways, compression, expansion, closes, atr, price)
+}
+
+// structureRegimeCode encodes the four-way argmax of raw scores for export
+// training (0=sideways, 1=trend, 2=compression, 3=expansion). Independent of
+// result.Regime, which folds expansion into sideways for setup labels.
+// Strict `>` so ties (including all-zero) keep the earlier class / sideways
+// instead of inventing an expansion (or compression) training label.
+func structureRegimeCode(trend, sideways, compression, expansion float64) float64 {
+	code := 0.0
+	best := sideways
+	if trend > best {
+		best = trend
+		code = 1
+	}
+	if compression > best {
+		best = compression
+		code = 2
+	}
+	if expansion > best {
+		code = 3
+	}
+	return code
+}
+
 func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
 	n := series.Len()
 	if n == 0 {
@@ -241,7 +349,12 @@ func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
 		return 0, 0
 	}
 	price = last.Close()
-	atr = usecases.SimpleATR(series, 14)
+	// Prefer Wilder TrueATR(14) when the series is long enough; fall back to
+	// SimpleATR so short series (2–14 bars) still grade with a positive ATR.
+	atr = scoring.TrueATR(series.All(), 14)
+	if atr <= 0 {
+		atr = usecases.SimpleATR(series, 14)
+	}
 	return price, atr
 }
 
@@ -255,7 +368,7 @@ func (s *SetupService) resolveScores(ctx context.Context, sym domain.Symbol, tf 
 	if stats, ok, err := s.scoresFromStore(ctx, sym, tf); err != nil {
 		return usecases.SymbolStats{}, err
 	} else if ok {
-		if overlaid, ok := overlayLiveTrend(stats, series); ok {
+		if overlaid, ok := s.overlayLiveTrend(stats, series); ok {
 			return overlaid, nil
 		}
 		log.Printf("[eval] setup reason=overlay symbol=%s tf=%s", sym.String(), tf.String())
@@ -288,8 +401,10 @@ func (s *SetupService) scoresFromStore(ctx context.Context, sym domain.Symbol, t
 		}
 		return usecases.SymbolStats{}, false, nil
 	}
-	if snap.AlgoVersion != domain.AlgoVersion {
-		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q want=%q", symbol, timeframe, snap.AlgoVersion, domain.AlgoVersion)
+	if !domain.EvaluationIdentityOK(snap.AlgoVersion, snap.TrendAlgo, s.trendAlgo, snap.CompressionAlgo, s.compressionAlgo) {
+		log.Printf("[eval] setup reason=algo symbol=%s tf=%s got=%q/%q/%q want=%q/%q/%q",
+			symbol, timeframe, snap.AlgoVersion, snap.TrendAlgo, snap.CompressionAlgo,
+			domain.AlgoVersion, s.trendAlgo, s.compressionAlgo)
 		return usecases.SymbolStats{}, false, nil
 	}
 	now := s.now
@@ -322,12 +437,16 @@ func statsFromSnapshot(snap domain.EvaluationSnapshot) usecases.SymbolStats {
 // (storeTrendOverlayBars), so warm-path dominance uses the same bar count as
 // the store scores. Full setup series still drives volume/volatility.
 // ok=false → miss.
-func overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (usecases.SymbolStats, bool) {
+func (s *SetupService) overlayLiveTrend(stats usecases.SymbolStats, series domain.CandleSeries) (usecases.SymbolStats, bool) {
 	window, err := trailingWindow(series, storeTrendOverlayBars)
 	if err != nil {
 		return usecases.SymbolStats{}, false
 	}
-	recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(window)
+	trendDir := s.trendDir
+	if trendDir == nil {
+		trendDir = &scoring.TrendPredictabilityScoreCalculator{}
+	}
+	recomputed, bias, err := trendDir.ScoreWithDirection(window)
 	if err != nil {
 		return usecases.SymbolStats{}, false
 	}
@@ -357,8 +476,11 @@ func trailingWindow(series domain.CandleSeries, n int) (domain.CandleSeries, err
 }
 
 // buildContext converts raw scoring output and candle data into a SetupContext.
-func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats) SetupContext {
-	regime, trendHealth := computeRegimeAndHealth(series, stats)
+// MeanReversionScore is left at 0: no setup evaluator reads it today, and
+// production Sideways MRS weight is 0. Call meanReversionFromSeries when a
+// consumer (PR-110) needs it — avoid per-symbol allocations on notify scans.
+func buildContext(symbol string, series domain.CandleSeries, stats usecases.SymbolStats, trendDir scoring.DirectedScoreCalculator) SetupContext {
+	regime, trendHealth := computeRegimeAndHealth(series, stats, trendDir)
 	return SetupContext{
 		Symbol:           symbol,
 		CompressionScore: stats.Scores["Compression"],
@@ -371,14 +493,45 @@ func buildContext(symbol string, series domain.CandleSeries, stats usecases.Symb
 	}
 }
 
+// meanReversionFromSeries returns Lo–MacKinlay MRS on the same trailing
+// window Sideways V5 uses (sideways candle_count, default 110).
+func meanReversionFromSeries(series domain.CandleSeries) float64 {
+	window, err := trailingWindow(series, sidewaysCandleCount())
+	if err != nil || window.Len() < 2 {
+		return 0
+	}
+	closes := make([]float64, window.Len())
+	for i := 0; i < window.Len(); i++ {
+		c, err := window.At(i)
+		if err != nil {
+			return 0
+		}
+		closes[i] = c.Close()
+	}
+	return scoring.MeanReversionScore(closes)
+}
+
+// sidewaysCandleCount is Sideways V5's CandleCount without building a full
+// SidewaysV5Config (MRS window must match DetectSidewaysV5).
+func sidewaysCandleCount() int {
+	app := scoring.GetConfig()
+	if app == nil {
+		app = scoring.DefaultAppConfig()
+	}
+	if app.Sideways.CandleCount > 0 {
+		return app.Sideways.CandleCount
+	}
+	return 110
+}
+
 // computeRegimeAndHealth determines the dominant regime and computes health.
-func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolStats) (string, float64) {
+func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolStats, trendDir scoring.DirectedScoreCalculator) (string, float64) {
 	n := series.Len()
 	if n < 2 {
 		return "sideways", 0
 	}
 
-	regime := dominantRegime(stats.Scores, series, stats.DirectionBias)
+	regime := dominantRegime(stats.Scores, series, stats.DirectionBias, trendDir)
 
 	if regime != "uptrend" && regime != "downtrend" {
 		return regime, 0
@@ -394,11 +547,6 @@ func computeRegimeAndHealth(series domain.CandleSeries, stats usecases.SymbolSta
 	health := market.ComputeTrendHealth(regime, price, recentHigh, recentLow, atr, recentReturn)
 	return regime, health
 }
-
-// trendDirectionCalc is the single instance used to recover trend direction
-// in dominantRegime — package-level so it's an explicit, visible
-// dependency and not reallocated on every call.
-var trendDirectionCalc = &scoring.TrendPredictabilityScoreCalculator{}
 
 // scoresAgree reports whether two independently-obtained scores for what
 // should be the same computation are close enough to trust — see
@@ -425,9 +573,19 @@ func scoresAgree(a, b float64) bool {
 // ScoreWithDirection + scoresAgree — see that method's doc for why this is
 // the canonical direction source.
 //
+// trendDir must be the same engine that produced scores["Trend Predictability"]
+// (PR-103: predictability or strength).
+//
 // EvaluationSnapshot.Bias stays the sparkline first/last signal for Market
 // Pulse and is not used here.
-func dominantRegime(scores map[string]float64, series domain.CandleSeries, directionBias string) string {
+func dominantRegime(scores map[string]float64, series domain.CandleSeries, directionBias string, trendDir scoring.DirectedScoreCalculator) string {
+	if label, ok := dominantRegimeLearned(scores, series); ok {
+		if label != "trend" {
+			return label
+		}
+		return resolveTrendDirection(scores["Trend Predictability"], series, directionBias, trendDir)
+	}
+
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -446,39 +604,59 @@ func dominantRegime(scores map[string]float64, series domain.CandleSeries, direc
 		return "compression"
 	}
 	if trend > sideways {
-		if directionBias != "" {
-			return regimeFromDirectionBias(directionBias)
-		}
-		recomputed, bias, err := trendDirectionCalc.ScoreWithDirection(series)
-		switch {
-		case err != nil:
-			// Not expected to happen here — computeRegimeAndHealth already
-			// guards series.Len() < 2, and a regression over >= 2 distinct
-			// indices can't hit ScoreWithDirection's other error path
-			// (zero denominator). Logged because a masked error here would
-			// otherwise be undiagnosable in the field.
-			log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
-			return "sideways"
-		case bias == "neutral":
-			// No reliable direction (flat, clustered, or too little data)
-			// despite a nonzero trend score from other calculators —
-			// don't guess a direction that isn't there.
-			return "sideways"
-		case !scoresAgree(recomputed, trend):
-			// The recomputed score doesn't match what was already scored —
-			// series/scorer diverged somewhere; don't trust the bias. Logged
-			// since this is the one branch scoresAgree's doc comment flags
-			// as "should never happen today" — if it ever fires, that
-			// assumption broke somewhere and needs investigating.
-			log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
-			return "sideways"
-		case bias == "up":
-			return "uptrend"
-		default:
-			return "downtrend"
-		}
+		return resolveTrendDirection(trend, series, directionBias, trendDir)
 	}
 	return "sideways"
+}
+
+// resolveTrendDirection maps a trend-dominant call to uptrend/downtrend/sideways.
+func resolveTrendDirection(trend float64, series domain.CandleSeries, directionBias string, trendDir scoring.DirectedScoreCalculator) string {
+	if directionBias != "" {
+		return regimeFromDirectionBias(directionBias)
+	}
+	if trendDir == nil {
+		trendDir = &scoring.TrendPredictabilityScoreCalculator{}
+	}
+	recomputed, bias, err := trendDir.ScoreWithDirection(series)
+	switch {
+	case err != nil:
+		log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
+		return "sideways"
+	case bias == "neutral":
+		return "sideways"
+	case !scoresAgree(recomputed, trend):
+		log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
+		return "sideways"
+	case bias == "up":
+		return "uptrend"
+	default:
+		return "downtrend"
+	}
+}
+
+// dominantRegimeLearned maps a one-vs-rest model to setup regime labels.
+// Expansion is folded into sideways (setups have no expansion regime string).
+// ok is false when no model is installed or classification fails.
+func dominantRegimeLearned(scores map[string]float64, series domain.CandleSeries) (string, bool) {
+	model := scoring.ActiveRegimeModel()
+	if model == nil {
+		return "", false
+	}
+	features := setupRegimeFeatures(scores, series)
+	_, _, _, _, dominant, ok := scoring.ClassifyStructure(features, *model)
+	if !ok {
+		return "", false
+	}
+	switch dominant {
+	case scoring.ClassTrend:
+		return "trend", true // caller resolves up/down
+	case scoring.ClassCompression:
+		return "compression", true
+	case scoring.ClassExpansion, scoring.ClassSideways:
+		return "sideways", true
+	default:
+		return "sideways", true
+	}
 }
 
 func regimeFromDirectionBias(bias string) string {

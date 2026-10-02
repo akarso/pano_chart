@@ -183,7 +183,7 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	if err != nil {
 		return fmt.Errorf("read signals_old: %w", err)
 	}
-	defer oldRows.Close()
+	defer func() { _ = oldRows.Close() }()
 	for oldRows.Next() {
 		var (
 			s                      domainsignal.Signal
@@ -220,7 +220,7 @@ func (r *SQLiteRepository) migrateTimestampsToUnixNano() error {
 	if err != nil {
 		return fmt.Errorf("read outcomes_old: %w", err)
 	}
-	defer outRows.Close()
+	defer func() { _ = outRows.Close() }()
 	for outRows.Next() {
 		var (
 			id, resolved, rule string
@@ -310,7 +310,7 @@ func (r *SQLiteRepository) Unresolved(ctx context.Context, before time.Time, lim
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -345,7 +345,7 @@ func (r *SQLiteRepository) UnresolvedReady(ctx context.Context, now time.Time, l
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved ready: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -366,7 +366,7 @@ func (r *SQLiteRepository) UnresolvedInvalidTF(ctx context.Context, limit int) (
 	if err != nil {
 		return nil, fmt.Errorf("query unresolved invalid tf: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanSignals(rows)
 }
 
@@ -443,11 +443,26 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 500
+	order := "DESC"
+	if filter.OldestFirst {
+		order = "ASC"
 	}
-	args = append(args, limit)
+	// Limit < 0 → unlimited (no LIMIT/OFFSET). Limit == 0 → scorecard default 500.
+	limitSQL := ""
+	if filter.Limit < 0 {
+		// no LIMIT clause
+	} else {
+		limit := filter.Limit
+		if limit == 0 {
+			limit = 500
+		}
+		limitSQL = " LIMIT ?"
+		args = append(args, limit)
+		if filter.Offset > 0 {
+			limitSQL += " OFFSET ?"
+			args = append(args, filter.Offset)
+		}
+	}
 
 	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
 		 s.context, s.emitted_at, s.horizon_bars,
@@ -455,15 +470,13 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 		 FROM signals s
 		 LEFT JOIN outcomes o ON o.signal_id = s.id
 		 %s
-		 ORDER BY s.emitted_at DESC
-		 LIMIT ?`, where)
+		 ORDER BY s.emitted_at %s%s`, where, order, limitSQL)
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query signals: %w", err)
 	}
-	defer rows.Close()
-
+	defer func() { _ = rows.Close() }()
 	var out []domainsignal.SignalWithOutcome
 	for rows.Next() {
 		var (

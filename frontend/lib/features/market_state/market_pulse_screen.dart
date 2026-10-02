@@ -13,18 +13,25 @@ import 'http_composite_index_api.dart';
 import 'http_market_state_api.dart';
 import 'http_regime_api.dart';
 import 'http_regime_history_api.dart';
+import 'http_sector_rotation_api.dart';
 import 'http_transition_api.dart';
 import 'market_pulse_selection.dart';
 import 'market_state_data.dart';
 import 'participation_counts.dart';
+import 'regime_colors.dart';
 import 'regime_data.dart';
 import 'regime_history_data.dart';
+import 'sector_rotation_data.dart';
+import 'sector_rotation_presentation.dart';
 import 'transition_data.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/reliability_chip.dart';
 import '../scorecards/scorecard_catalog.dart';
 import '../scorecards/scorecard_data.dart';
 import '../scorecards/scorecards_screen.dart';
+import '../replay/replay_asof.dart';
+import '../replay/replay_controller.dart';
+import '../replay/replay_widgets.dart';
 
 /// Full-page Market Pulse screen showing market state, participation, and
 /// composite index chart. Designed for extensibility with future stats.
@@ -34,7 +41,9 @@ class MarketPulseScreen extends StatefulWidget {
   final RegimeApi? regimeApi;
   final TransitionApi? transitionApi;
   final RegimeHistoryApi? regimeHistoryApi;
+  final SectorRotationApi? sectorRotationApi;
   final ScorecardApi? scorecardApi;
+  final ReplayController? replayController;
   final String? initialTimeframe;
   final bool isProUser;
 
@@ -45,7 +54,9 @@ class MarketPulseScreen extends StatefulWidget {
     this.regimeApi,
     this.transitionApi,
     this.regimeHistoryApi,
+    this.sectorRotationApi,
     this.scorecardApi,
+    this.replayController,
     this.initialTimeframe,
     this.isProUser = false,
   }) : super(key: key);
@@ -64,6 +75,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   RegimeData? _regimeData;
   TransitionData? _transitionData;
   RegimeHistoryData? _regimeHistoryData;
+  SectorRotationData? _sectorData;
+  /// Sector tapped to overlay its sparkline on the composite chart (PR-098b).
+  String? _selectedSectorId;
+  /// Bumped by every `_loadAll()` call. Main Future.wait and sector fetches
+  /// capture the generation at start; stale responses are dropped so a slow
+  /// scrub response cannot clobber a newer asOf.
+  int _loadGeneration = 0;
   final ScorecardCatalog _scorecards = ScorecardCatalog();
   String? _error;
   bool _loading = true;
@@ -89,7 +107,56 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     if (initial != null && _supportedTimeframes.contains(initial)) {
       _timeframe = initial;
     }
+    _attachReplay(widget.replayController);
+    widget.replayController?.acquirePulseSurface();
     _initializeData();
+  }
+
+  @override
+  void didUpdateWidget(covariant MarketPulseScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.replayController, widget.replayController)) {
+      _detachReplay(oldWidget.replayController);
+      oldWidget.replayController?.releasePulseSurface();
+      _attachReplay(widget.replayController);
+      widget.replayController?.acquirePulseSurface();
+      _syncAutoRefreshWithReplay();
+      _loadAll();
+    }
+  }
+
+  void _attachReplay(ReplayController? c) {
+    c?.addListener(_onReplayUiChanged);
+    c?.addReloadListener(_onReplayReload);
+  }
+
+  void _detachReplay(ReplayController? c) {
+    c?.removeListener(_onReplayUiChanged);
+    c?.removeReloadListener(_onReplayReload);
+  }
+
+  void _onReplayUiChanged() {
+    if (!mounted) return;
+    _syncAutoRefreshWithReplay();
+    setState(() {});
+  }
+
+  void _onReplayReload() {
+    if (!mounted) return;
+    _loadAll();
+  }
+
+  int? get _asOfUnix =>
+      widget.replayController?.asOfUnixFor(_timeframe);
+
+  bool get _replayActive => widget.replayController?.isActive == true;
+
+  void _syncAutoRefreshWithReplay() {
+    if (_replayActive) {
+      _autoRefreshTimer?.stop();
+    } else {
+      _startAutoRefresh();
+    }
   }
 
   Future<void> _initializeData() async {
@@ -124,7 +191,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       if (_lifecycleManager != null) {
         _pausable = Pausable(
           onPause: () => _autoRefreshTimer?.stop(),
-          onResume: () => _autoRefreshTimer?.start(),
+          onResume: () => _syncAutoRefreshWithReplay(),
         );
         _lifecycleManager!.addPausable(_pausable!);
       }
@@ -133,6 +200,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   @override
   void dispose() {
+    // Detach before release so this route's reload listener is not invoked
+    // while the element is already defunct.
+    _detachReplay(widget.replayController);
+    widget.replayController?.releasePulseSurface();
     if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     super.dispose();
@@ -142,6 +213,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     _autoRefreshTimer?.dispose();
     _autoRefreshTimer = null;
     if (!widget.isProUser) return;
+    if (_replayActive) return;
     final interval = kChartRefreshIntervals[_timeframe];
     if (interval == null) return;
     _autoRefreshTimer = AutoRefreshTimer(
@@ -156,6 +228,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       return await widget.compositeIndexApi.fetch(
         timeframe: _timeframe,
         limit: tapeMetricsWindow,
+        asOf: _asOfUnix,
       );
     } catch (_) {
       // Optional scored-window series — must not block market data.
@@ -163,8 +236,26 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
+  Future<SectorRotationData?> _fetchSectorRotation() async {
+    // Sector rotation has no asOf — skip while replaying to avoid mixed eras.
+    if (_replayActive) return null;
+    final api = widget.sectorRotationApi;
+    if (api == null) return null;
+    try {
+      return await api.fetch(timeframe: _timeframe);
+    } catch (_) {
+      // Optional card — must not block market data (same as the tape fetch).
+      return null;
+    }
+  }
+
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
+    if (_replayActive) return;
+    // Capture before awaits so an intervening `_loadAll()` (e.g. enter
+    // replay) bumps `_loadGeneration` and this live response is dropped.
+    final generation = _loadGeneration;
+    _applySectorRotation(_fetchSectorRotation(), generation);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
@@ -172,17 +263,20 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
           limit: compositeChartLimit,
+          asOf: _asOfUnix,
         ),
         if (widget.regimeApi != null)
-          widget.regimeApi!.fetch(timeframe: _timeframe),
+          widget.regimeApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.transitionApi != null)
-          widget.transitionApi!.fetch(timeframe: _timeframe),
+          widget.transitionApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.regimeHistoryApi != null)
-          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
+          widget.regimeHistoryApi!
+              .fetch(timeframe: _timeframe, asOf: _asOfUnix),
       ];
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
       if (!mounted) return;
+      if (generation != _loadGeneration) return;
       int idx = 2;
       RegimeData? regime;
       TransitionData? trans;
@@ -197,6 +291,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       }
       if (widget.regimeHistoryApi != null) {
         history = results[idx] as RegimeHistoryData;
+        idx++;
       }
       setState(() {
         _stateData = results[0] as MarketStateData;
@@ -212,62 +307,128 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  Future<void> _loadAll() async {
-    setState(() {
-      _loading = true;
-      _error = null;
+  /// Applies a resolved (possibly null, on failure or 404) sector rotation
+  /// response whenever it lands — decoupled from the primary load/refresh so
+  /// a slow optional fetch can never delay clearing the loading state or
+  /// applying the rest of the batch (production always wires this API, so
+  /// its up-to-15s timeout would otherwise show on every load). [generation]
+  /// pins the response to the load that started it: if a newer `_loadAll()`
+  /// has since run, this result is stale and is dropped instead of
+  /// overwriting the newer load's (possibly already-applied) sector data.
+  void _applySectorRotation(
+    Future<SectorRotationData?> sectorFuture,
+    int generation,
+  ) {
+    sectorFuture.then((sectors) {
+      if (!mounted) return;
+      if (generation != _loadGeneration) return;
+      setState(() {
+        _sectorData = sectors;
+        _pruneSectorSelectionIfMissing();
+      });
     });
+  }
+
+  Future<void> _loadAll() async {
+    final generation = ++_loadGeneration;
+    final replay = _replayActive;
+    _beginPrimaryLoad(replay: replay);
     _loadScorecards();
+    if (!replay) {
+      _applySectorRotation(_fetchSectorRotation(), generation);
+    }
     try {
       final tapeFuture = _fetchTapeComposite();
-      final futures = <Future>[
-        widget.marketStateApi.fetch(timeframe: _timeframe),
-        widget.compositeIndexApi.fetch(
-          timeframe: _timeframe,
-          limit: compositeChartLimit,
-        ),
-        if (widget.regimeApi != null)
-          widget.regimeApi!.fetch(timeframe: _timeframe),
-        if (widget.transitionApi != null)
-          widget.transitionApi!.fetch(timeframe: _timeframe),
-        if (widget.regimeHistoryApi != null)
-          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
-      ];
+      final futures = _primaryFetchFutures(replay: replay);
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
       if (!mounted) return;
-      int idx = 2;
-      RegimeData? regime;
-      TransitionData? trans;
-      RegimeHistoryData? history;
-      if (widget.regimeApi != null) {
-        regime = results[idx] as RegimeData;
-        idx++;
-      }
-      if (widget.transitionApi != null) {
-        trans = results[idx] as TransitionData;
-        idx++;
-      }
-      if (widget.regimeHistoryApi != null) {
-        history = results[idx] as RegimeHistoryData;
-      }
-      setState(() {
-        _stateData = results[0] as MarketStateData;
-        _compositeData = results[1] as CompositeIndexData;
-        _tapeCompositeData = tape;
-        _regimeData = regime;
-        _transitionData = trans;
-        _regimeHistoryData = history;
-        _loading = false;
-        _syncSeriesToRegimeSourceIfChanged();
-      });
+      if (generation != _loadGeneration) return;
+      _applyPrimaryResults(
+        results: results,
+        tape: tape,
+        replay: replay,
+      );
     } catch (e) {
       if (!mounted) return;
+      if (generation != _loadGeneration) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
     }
+  }
+
+  void _beginPrimaryLoad({required bool replay}) {
+    setState(() {
+      _loading = true;
+      _error = null;
+      // Stale sector data (e.g. from a different timeframe) must not linger
+      // once a fresh load starts — the new fetch below will replace it. The
+      // selection itself is left alone: a plain refresh (same timeframe)
+      // should reinstate the same sector's overlay once the fresh response
+      // lands, not force a re-tap. `_pruneSectorSelectionIfMissing()` (run
+      // once that response arrives) still clears it if the sector is gone
+      // or no longer RS-available.
+      _sectorData = null;
+      if (replay) {
+        // Live-only surfaces must not linger under a Replay banner.
+        _stateData = null;
+      }
+    });
+  }
+
+  List<Future> _primaryFetchFutures({required bool replay}) {
+    return [
+      // /state has no asOf — skip in replay so the screen does not mix eras.
+      if (!replay) widget.marketStateApi.fetch(timeframe: _timeframe),
+      widget.compositeIndexApi.fetch(
+        timeframe: _timeframe,
+        limit: compositeChartLimit,
+        asOf: _asOfUnix,
+      ),
+      if (widget.regimeApi != null)
+        widget.regimeApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
+      if (widget.transitionApi != null)
+        widget.transitionApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
+      if (widget.regimeHistoryApi != null)
+        widget.regimeHistoryApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
+    ];
+  }
+
+  void _applyPrimaryResults({
+    required List<dynamic> results,
+    required CompositeIndexData? tape,
+    required bool replay,
+  }) {
+    MarketStateData? state;
+    var idx = 0;
+    if (!replay) {
+      state = results[idx++] as MarketStateData;
+    }
+    final composite = results[idx++] as CompositeIndexData;
+    RegimeData? regime;
+    TransitionData? trans;
+    RegimeHistoryData? history;
+    if (widget.regimeApi != null) {
+      regime = results[idx++] as RegimeData;
+    }
+    if (widget.transitionApi != null) {
+      trans = results[idx++] as TransitionData;
+    }
+    if (widget.regimeHistoryApi != null) {
+      history = results[idx++] as RegimeHistoryData;
+    }
+    setState(() {
+      _stateData = state;
+      _compositeData = composite;
+      _tapeCompositeData = tape;
+      _regimeData = regime;
+      _transitionData = trans;
+      _regimeHistoryData = history;
+      _loading = false;
+      _syncSeriesToRegimeSourceIfChanged();
+    });
   }
 
   /// Lock the chart series to the tape only when [regimeSource] changes.
@@ -285,8 +446,32 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   String _regimeSource() => selectRegimeSource(_regimeData, _stateData);
 
+  /// Clears the tapped overlay sector once it no longer exists in the
+  /// latest sector rotation response (e.g. it dropped below the
+  /// min-symbols threshold after a refresh or timeframe change), or once it
+  /// flips to `rsAvailable: false` while still present — a selected-but-now
+  /// untappable row would otherwise keep its highlight with no way to clear
+  /// it (the bar's `onTap` is null whenever `rsAvailable` is false).
+  void _pruneSectorSelectionIfMissing() {
+    final id = _selectedSectorId;
+    if (id == null) return;
+    final sectors = _sectorData?.sectors ?? const <SectorIndexData>[];
+    SectorIndexData? match;
+    for (final s in sectors) {
+      if (s.id == id) {
+        match = s;
+        break;
+      }
+    }
+    if (match == null || !match.rsAvailable) {
+      _selectedSectorId = null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final replay = widget.replayController;
+    final asOf = replay?.asOfFor(_timeframe);
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D0D),
       appBar: AppBar(
@@ -298,6 +483,22 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         title: const Text('Market Pulse'),
         centerTitle: true,
         actions: [
+          if (widget.isProUser && replay != null)
+            IconButton(
+              key: const Key('replay-toggle'),
+              tooltip: asOf == null ? 'Replay' : 'Exit replay',
+              icon: Icon(
+                Icons.history,
+                color: asOf != null ? Colors.lightBlueAccent : Colors.white70,
+              ),
+              onPressed: () {
+                if (asOf == null) {
+                  replay.enter(timeframe: _timeframe);
+                } else {
+                  replay.exit();
+                }
+              },
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: DropdownButtonHideUnderline(
@@ -318,7 +519,18 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   if (v != null && v != _timeframe) {
                     setState(() => _timeframe = v);
                     _persistTimeframe(v);
-                    _loadAll();
+                    if (replay?.isActive == true) {
+                      // When setAsOf changes the instant, reload listener
+                      // fetches once; when it no-ops, reload here.
+                      final changed = replay!.setAsOf(
+                        v,
+                        replay.asOf!,
+                        immediateReload: true,
+                      );
+                      if (!changed) _loadAll();
+                    } else {
+                      _loadAll();
+                    }
                     _startAutoRefresh();
                   }
                 },
@@ -327,7 +539,19 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (asOf != null)
+            ReplayBanner(
+              asOf: asOf,
+              onExit: () => replay?.exit(),
+              footnote: kReplayBannerFootnote,
+            ),
+          Expanded(child: _buildBody()),
+          if (asOf != null && replay != null)
+            ReplayScrubber(controller: replay, timeframe: _timeframe),
+        ],
+      ),
     );
   }
 
@@ -382,8 +606,21 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               child: _buildCompositeCard(_compositeData!),
             ),
           if (_compositeData != null) const SizedBox(height: 16),
+          if (!_replayActive &&
+              _sectorData != null &&
+              _sectorData!.sectors.isNotEmpty)
+            KeyedSubtree(
+              key: const Key('mp-sector-rotation'),
+              child: _buildSectorRotationCard(_sectorData!),
+            ),
+          if (!_replayActive &&
+              _sectorData != null &&
+              _sectorData!.sectors.isNotEmpty)
+            const SizedBox(height: 16),
           Builder(
             builder: (context) {
+              // Participation can fall back to live /state — hide in replay.
+              if (_replayActive) return const SizedBox.shrink();
               final participation = ParticipationCardModel.resolve(
                 regime: _regimeData,
                 state: _stateData,
@@ -1084,6 +1321,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                     ),
                   ),
           ),
+          if (_selectedSectorId != null && data.hasVolumeWeighted) ...[
+            const SizedBox(height: 6),
+            const Text(
+              'Sector overlay uses the backend\'s own volume-weighted/'
+              'median path for that sector — it may not match the series '
+              'shown above',
+              style: TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ],
         ],
       ),
     );
@@ -1168,6 +1414,141 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
             view.showRegression ? _headlineChartColor() : Colors.transparent,
         windowBars: view.showRegression ? view.scoredWin : 0,
         solidRegression: view.showRegression && _isTrendHeadline(),
+        overlayPoints: _selectedSectorOverlayPoints() ?? const [],
+        // Distinct from every _headlineChartColor()/lineColor value (teal,
+        // red, green, amber, blueGrey, white, light-steel-blue) so the
+        // overlay never blends into the main line or regression.
+        overlayColor: Colors.purpleAccent,
+      ),
+    );
+  }
+
+  /// Tapped sector's own series, or null when nothing is selected / it has
+  /// too few points to draw a line (PR-098b overlay).
+  List<IndexPoint>? _selectedSectorOverlayPoints() {
+    final id = _selectedSectorId;
+    if (id == null) return null;
+    for (final s in _sectorData?.sectors ?? const <SectorIndexData>[]) {
+      if (s.id == id) return s.points.length >= 2 ? s.points : null;
+    }
+    return null;
+  }
+
+  // ---------- Sector Rotation Card ----------
+
+  Widget _buildSectorRotationCard(SectorRotationData data) {
+    final rows = buildSectorRotationRows(data);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A1A1A),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Sector rotation',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              GestureDetector(
+                key: const Key('mp-sector-rotation-help'),
+                onTap: () => _showInfoDialog(
+                  title: 'Sector rotation',
+                  body:
+                      'Relative strength (RS) — each sector\'s composite '
+                      'return minus the market composite\'s return over '
+                      'their shared bars.\n\n'
+                      'Bars are sized against the strongest mover; sectors '
+                      'without enough shared history show no bar.\n\n'
+                      'Tap a sector to overlay its sparkline on the '
+                      'composite chart above.',
+                ),
+                child: const Icon(
+                  Icons.help_outline,
+                  size: 13,
+                  color: Colors.white30,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${data.marketSymbolCount} market symbols  •  ${data.timeframe}',
+            style: const TextStyle(color: Colors.grey, fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+          for (final row in rows)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _sectorRotationBar(row),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectorRotationBar(SectorRotationRow row) {
+    final selected = row.id == _selectedSectorId;
+    final barColor = !row.rsAvailable
+        ? Colors.white24
+        : ((row.rs ?? 0) < 0 ? Colors.redAccent : Colors.tealAccent);
+    return GestureDetector(
+      key: Key('mp-sector-bar-${row.id}'),
+      onTap: row.rsAvailable
+          ? () => setState(() {
+                _selectedSectorId = selected ? null : row.id;
+              })
+          : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+        decoration: BoxDecoration(
+          color: selected ? Colors.white10 : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 84,
+              child: Text(
+                '${row.name} (${row.symbolCount})',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
+              ),
+            ),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: row.barFraction,
+                  backgroundColor: Colors.white10,
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(barColor.withAlpha(180)),
+                  minHeight: 6,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 48,
+              child: Text(
+                sectorRsLabel(row),
+                style: TextStyle(
+                  fontSize: 11,
+                  color: row.rsAvailable ? Colors.white70 : Colors.white38,
+                ),
+                textAlign: TextAlign.right,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1458,8 +1839,11 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               Navigator.of(dialogContext).pop();
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (_) =>
-                      ScorecardsScreen(api: api, timeframe: _timeframe),
+                  builder: (_) => ScorecardsScreen(
+                    api: api,
+                    timeframe: _timeframe,
+                    since: _scorecardSince,
+                  ),
                 ),
               );
             },
@@ -1502,10 +1886,16 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     return _scorecards.load(
       api: widget.scorecardApi,
       timeframe: _timeframe,
+      since: _scorecardSince,
       notify: () {
         if (mounted) setState(() {});
       },
     );
+  }
+
+  String get _scorecardSince {
+    final asOf = widget.replayController?.asOfFor(_timeframe);
+    return asOf != null ? replayScorecardSince(asOf) : '30d';
   }
 
   void _showInfoDialog({required String title, required String body}) {
@@ -1562,24 +1952,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  Color _regimeColor(String regime) {
-    switch (regime) {
-      case 'compression':
-        return Colors.amber;
-      case 'sideways':
-        return Colors.blueGrey;
-      case 'trend':
-        return Colors.tealAccent;
-      case 'expansion':
-        return Colors.redAccent;
-      case 'silent':
-        return Colors.white;
-      case 'indecisive':
-        return const Color(0xFFB0C4DE);
-      default:
-        return Colors.grey;
-    }
-  }
+  // Delegates to the shared helper (PR-100) so Market Pulse, the overview
+  // grid's aligned badge, and the symbol detail MTF strip can never disagree
+  // about what a regime looks like.
+  Color _regimeColor(String regime) => regimeColor(regime);
 
   IconData _regimeIcon(String regime) {
     switch (regime) {
@@ -1600,27 +1976,9 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     }
   }
 
-  Color _trendBiasColor(String bias) {
-    switch (bias) {
-      case 'up':
-        return Colors.tealAccent;
-      case 'down':
-        return Colors.redAccent;
-      default:
-        return Colors.amber;
-    }
-  }
+  Color _trendBiasColor(String bias) => trendBiasColor(bias);
 
-  IconData _trendBiasIcon(String bias) {
-    switch (bias) {
-      case 'up':
-        return Icons.trending_up;
-      case 'down':
-        return Icons.trending_down;
-      default:
-        return Icons.show_chart;
-    }
-  }
+  IconData _trendBiasIcon(String bias) => trendBiasIcon(bias);
 
   String _regimeLabel(String regime, String bias) {
     if (regime == 'trend') {

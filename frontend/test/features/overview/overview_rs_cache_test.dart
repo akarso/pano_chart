@@ -22,6 +22,8 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
   }) async {
     final i = calls++;
     if (i >= results.length) throw Exception('network error');
@@ -36,11 +38,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = PreferencesService(await SharedPreferences.getInstance());
 
-    final result = OverviewResult(
+    const result = OverviewResult(
       rsAvailable: true,
       effectiveSort: 'leaders',
       hasMore: false,
-      items: const [
+      items: [
         OverviewItem(symbol: 'BTCUSDT', rs: 0.0, beta: 1.0, rsRank: 0.5),
         OverviewItem(symbol: 'ETHUSDT', rs: 0.02, beta: 1.1, rsRank: 1.0),
       ],
@@ -164,11 +166,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = _ThrowingPrefs(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: true,
         effectiveSort: 'leaders',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'BTCUSDT', rs: 0.01)],
+        items: [OverviewItem(symbol: 'BTCUSDT', rs: 0.01)],
       ),
     ]);
     final vm = OverviewViewModel(fake);
@@ -185,17 +187,17 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = PreferencesService(await SharedPreferences.getInstance());
 
-    final first = OverviewResult(
+    const first = OverviewResult(
       rsAvailable: false,
       effectiveSort: 'volume',
       hasMore: false,
-      items: const [OverviewItem(symbol: 'OLDUSDT', volume: 1)],
+      items: [OverviewItem(symbol: 'OLDUSDT', volume: 1)],
     );
-    final refreshed = OverviewResult(
+    const refreshed = OverviewResult(
       rsAvailable: true,
       effectiveSort: 'volume',
       hasMore: false,
-      items: const [
+      items: [
         OverviewItem(symbol: 'NEWUSDT', volume: 2, rs: 0.01, beta: 1.0),
       ],
     );
@@ -215,16 +217,54 @@ void main() {
     expect(offline.state.rsAvailable, true);
   });
 
+  test('replay asOf skips cache write and offline fallback', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = PreferencesService(await SharedPreferences.getInstance());
+    const live = OverviewResult(
+      rsAvailable: true,
+      effectiveSort: 'volume',
+      hasMore: false,
+      items: [OverviewItem(symbol: 'LIVEUSDT', volume: 1, rs: 0.1)],
+    );
+    const historical = OverviewResult(
+      rsAvailable: true,
+      effectiveSort: 'volume',
+      hasMore: false,
+      items: [OverviewItem(symbol: 'PASTUSDT', volume: 2, rs: -0.1)],
+    );
+    final fake = _FakeGetOverview([live, historical]);
+    final vm = OverviewViewModel(fake);
+    vm.attachPrefs(prefs);
+    await vm.loadInitial('1h');
+    expect(prefs.getRankingsCache('1h'), isNotNull);
+
+    vm.asOfUnix = 1726473600;
+    await vm.loadInitial('1h');
+    expect(vm.state.items.single.symbol, 'PASTUSDT');
+    // Live cache must remain untouched by historical rows.
+    final cached = jsonDecode(prefs.getRankingsCache('1h')!) as Map;
+    expect((cached['items'] as List).single['symbol'], 'LIVEUSDT');
+
+    // Offline under replay must fail closed — not paint live cache.
+    final replayOffline = OverviewViewModel(_FakeGetOverview([]));
+    replayOffline.attachPrefs(prefs);
+    replayOffline.asOfUnix = 1726473600;
+    await replayOffline.loadInitial('1h');
+    expect(replayOffline.state.items, isEmpty);
+    expect(replayOffline.state.error, isNotNull);
+    expect(replayOffline.state.error, isNot(contains('Offline')));
+  });
+
   test('cache write snapshots sort when user flips mid-write', () async {
     SharedPreferences.setMockInitialValues({});
     final gate = Completer<void>();
     final prefs = PreferencesService(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: false,
         effectiveSort: 'volume',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
+        items: [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
       ),
     ]);
     final vm = OverviewViewModel(fake);
@@ -256,17 +296,17 @@ void main() {
     final gate = Completer<void>();
     final prefs = PreferencesService(await SharedPreferences.getInstance());
     final fake = _FakeGetOverview([
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: false,
         effectiveSort: 'volume',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
+        items: [OverviewItem(symbol: 'VOLUSDT', volume: 9)],
       ),
-      OverviewResult(
+      const OverviewResult(
         rsAvailable: true,
         effectiveSort: 'leaders',
         hasMore: false,
-        items: const [OverviewItem(symbol: 'LEADUSDT', rs: 0.1)],
+        items: [OverviewItem(symbol: 'LEADUSDT', rs: 0.1)],
       ),
     ]);
     final vm = OverviewViewModel(fake);

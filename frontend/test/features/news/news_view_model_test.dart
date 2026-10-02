@@ -43,7 +43,7 @@ void main() {
     });
 
     test('copyWith clearSelectedArticle', () {
-      final article = const NewsArticle(
+      const article = NewsArticle(
         slug: 'a',
         title: 'A',
         date: '2026-01-01',
@@ -51,9 +51,9 @@ void main() {
         tags: [],
         body: 'Body.',
       );
-      final state = NewsState(
+      const state = NewsState(
         isLoading: false,
-        articles: const [],
+        articles: [],
         selectedArticle: article,
       );
       final next = state.copyWith(clearSelectedArticle: true);

@@ -36,6 +36,34 @@ void main() {
     expect(captured!.queryParameters['sort'], 'total');
     expect(captured!.queryParameters['page'], '2');
     expect(captured!.queryParameters['pageSize'], '20');
+    expect(captured!.queryParameters.containsKey('mtf'), false);
+  });
+
+  test('HttpRankingsApi_appendsMtfParamWhenRequested', () async {
+    Uri? captured;
+    final client = http_testing.MockClient((req) async {
+      captured = req.url;
+      return http.Response(
+        jsonEncode({
+          'timeframe': '1h',
+          'sort': 'total',
+          'page': 1,
+          'pageSize': 30,
+          'totalItems': 0,
+          'totalPages': 0,
+          'precision': 0,
+          'results': [],
+        }),
+        200,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+
+    final api = HttpRankingsApi(client: client, baseUrl: 'https://api.test');
+    await api.fetchRankings(
+        timeframe: '1h', sort: 'total', page: 1, pageSize: 30, mtf: true);
+
+    expect(captured!.queryParameters['mtf'], '1');
   });
 
   test('HttpRankingsApi_parsesSuccessfulResponse', () async {

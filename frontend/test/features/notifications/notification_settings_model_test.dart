@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:pano_chart_frontend/features/detail/mtf_strip_presentation.dart';
 import 'package:pano_chart_frontend/features/notifications/notification_settings_model.dart';
 import 'package:pano_chart_frontend/infrastructure/preferences_service.dart';
 
@@ -23,6 +24,8 @@ void main() {
       expect(s.downtrendTimeframe, '1h');
       expect(s.sidewaysTimeframe, '1h');
       expect(s.setupTimeframe, '1h');
+      expect(s.watchlistTransitions, isTrue);
+      expect(s.watchlistTimeframe, '1h');
     });
 
     test('isEnabled maps types correctly', () {
@@ -44,6 +47,22 @@ void main() {
       expect(s.isEnabled('news'), isTrue);
       // Unknown type defaults to enabled.
       expect(s.isEnabled('unknown'), isTrue);
+      expect(s.isEnabled('watchlist_transition'), isTrue);
+    });
+
+    test('isEnabled reflects watchlistTransitions off', () {
+      final s = NotificationSettings(
+        social: true,
+        macroHigh: true,
+        macroModerate: true,
+        uptrend: true,
+        downtrend: true,
+        sideways: true,
+        setupOfDay: true,
+        news: true,
+        watchlistTransitions: false,
+      );
+      expect(s.isEnabled('watchlist_transition'), isFalse);
     });
 
     test('market disabled when all three regimes off', () {
@@ -78,6 +97,8 @@ void main() {
         'settings.notify.downtrendTf': '4h',
         'settings.notify.sidewaysTf': '1d',
         'settings.notify.setupTf': '5m',
+        'settings.notify.watchlistTransitions': false,
+        'settings.notify.watchlistTf': '4h',
       });
       final prefs = await PreferencesService.create();
       final s = NotificationSettings.fromPrefs(prefs);
@@ -97,6 +118,8 @@ void main() {
       expect(s.downtrendTimeframe, '4h');
       expect(s.sidewaysTimeframe, '1d');
       expect(s.setupTimeframe, '5m');
+      expect(s.watchlistTransitions, isFalse);
+      expect(s.watchlistTimeframe, '4h');
     });
 
     test('save persists all values', () async {
@@ -119,6 +142,8 @@ void main() {
         downtrendTimeframe: '4h',
         sidewaysTimeframe: '1d',
         setupTimeframe: '5m',
+        watchlistTransitions: false,
+        watchlistTimeframe: '4h',
       );
       s.save(prefs);
       expect(prefs.notificationsEnabled, isFalse);
@@ -137,6 +162,8 @@ void main() {
       expect(prefs.downtrendTimeframe, '4h');
       expect(prefs.sidewaysTimeframe, '1d');
       expect(prefs.setupTimeframe, '5m');
+      expect(prefs.notifyWatchlistTransitions, isFalse);
+      expect(prefs.watchlistTimeframe, '4h');
     });
 
     test('fromPrefs uses defaults when no keys set', () async {
@@ -156,6 +183,8 @@ void main() {
       expect(s.setupMinScore, 0.75);
       expect(s.uptrendTimeframe, '1h');
       expect(s.setupTimeframe, '1h');
+      expect(s.watchlistTransitions, isTrue);
+      expect(s.watchlistTimeframe, '1h');
     });
 
     test('toJson produces backend-compatible format', () {
@@ -172,9 +201,13 @@ void main() {
         downtrendMinDominance: 0.65,
         sidewaysMinDominance: 0.70,
         setupMinScore: 0.90,
+        watchlistTransitions: false,
+        watchlistTimeframe: '4h',
       );
       final json = s.toJson('user-1');
       expect(json['user_id'], 'user-1');
+      expect(json['watchlist_transitions'], isFalse);
+      expect(json['watchlist_timeframe'], '4h');
       expect(json['social'], isTrue);
       expect(json['macro_high'], isFalse);
       expect(json['macro_moderate'], isTrue);
@@ -210,6 +243,66 @@ void main() {
       expect(s.sidewaysMinDominance, 0.75);
     });
 
+    test('applyFromJson merges watchlist fields', () {
+      final s = NotificationSettings.defaults();
+      s.applyFromJson({
+        'watchlist_transitions': false,
+        'watchlist_timeframe': '4h',
+      });
+      expect(s.watchlistTransitions, isFalse);
+      expect(s.watchlistTimeframe, '4h');
+    });
+
+    test('applyFromJson leaves watchlist fields at defaults when unset', () {
+      final s = NotificationSettings.defaults();
+      s.applyFromJson({'social': false});
+      expect(s.watchlistTransitions, isTrue);
+      expect(s.watchlistTimeframe, '1h');
+    });
+
+    test('watchlist timeframes are the MTF strip set', () {
+      expect(kWatchlistTimeframes, kMtfStripTimeframes);
+    });
+
+    test('applyFromJson ignores a watchlist timeframe outside the MTF set', () {
+      final s = NotificationSettings.defaults();
+      s.watchlistTimeframe = '4h';
+      s.applyFromJson({
+        'watchlist_transitions': false,
+        'watchlist_timeframe': '1m',
+      });
+      expect(s.watchlistTransitions, isFalse);
+      expect(s.watchlistTimeframe, '4h');
+    });
+
+    test('fromPrefs clamps an unknown watchlist timeframe', () async {
+      SharedPreferences.setMockInitialValues({
+        'settings.notify.watchlistTf': '5m',
+      });
+      final prefs = await PreferencesService.create();
+      final s = NotificationSettings.fromPrefs(prefs);
+      expect(s.watchlistTimeframe, '1h');
+      expect(prefs.watchlistTimeframe, '1h');
+      expect(
+        (await SharedPreferences.getInstance()).getString(
+          'settings.notify.watchlistTf',
+        ),
+        '5m',
+      );
+    });
+
+    test(
+      'watchlistTimeframe setter refuses a value outside the MTF set',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = await PreferencesService.create();
+        prefs.watchlistTimeframe = '1m';
+        expect(prefs.watchlistTimeframe, '1h');
+        prefs.watchlistTimeframe = '4h';
+        expect(prefs.watchlistTimeframe, '4h');
+      },
+    );
+
     test('toJson includes timeframes', () {
       final s = NotificationSettings(
         social: true,
@@ -234,10 +327,7 @@ void main() {
 
     test('applyFromJson merges timeframes', () {
       final s = NotificationSettings.defaults();
-      s.applyFromJson({
-        'uptrend_timeframe': '15m',
-        'setup_timeframe': '4h',
-      });
+      s.applyFromJson({'uptrend_timeframe': '15m', 'setup_timeframe': '4h'});
       expect(s.uptrendTimeframe, '15m');
       expect(s.setupTimeframe, '4h');
       // Unset timeframes keep defaults.

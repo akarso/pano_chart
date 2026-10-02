@@ -55,11 +55,14 @@ class RelativeStrengthChip extends StatelessWidget {
         onTap: () => _showExplanation(context, value, beta),
         child: Padding(
           // Hit slop only — does not force a large painted box.
-          // Narrower pad when compact so 3-col tiles keep room for price %.
-          padding: EdgeInsets.all(compactLabel ? 2 : 6),
+          // Narrower pad when compact so 3-col tiles keep room for the star.
+          padding: EdgeInsets.symmetric(
+            horizontal: compactLabel ? 0 : 6,
+            vertical: compactLabel ? 2 : 6,
+          ),
           child: Container(
             padding: EdgeInsets.symmetric(
-              horizontal: dense ? 4 : 6,
+              horizontal: compactLabel ? 2 : (dense ? 4 : 6),
               vertical: dense ? 2 : 3,
             ),
             decoration: BoxDecoration(
@@ -68,6 +71,8 @@ class RelativeStrengthChip extends StatelessWidget {
             ),
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 color: Colors.white,
                 fontSize: fontSize,

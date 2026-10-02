@@ -10,6 +10,37 @@ int scoredWindowStart(int pointsLength, int windowBars) {
   return pointsLength - windowBars;
 }
 
+/// Fractional index of [timestamp] within the (ascending) [axis] timestamps,
+/// via linear interpolation between the bracketing pair — e.g. `1.5` sits
+/// halfway between `axis[1]` and `axis[2]`. A timestamp outside `axis`'s
+/// range extrapolates using the nearest segment's slope. Requires
+/// `axis.length >= 2`.
+double fractionalIndexFor(List<int> axis, int timestamp) {
+  final n = axis.length;
+  if (timestamp <= axis[0]) {
+    final span = axis[1] - axis[0];
+    return span == 0 ? 0.0 : (timestamp - axis[0]) / span;
+  }
+  if (timestamp >= axis[n - 1]) {
+    final span = axis[n - 1] - axis[n - 2];
+    return span == 0
+        ? (n - 1).toDouble()
+        : (n - 1) + (timestamp - axis[n - 1]) / span;
+  }
+  var lo = 0, hi = n - 1;
+  while (hi - lo > 1) {
+    final mid = (lo + hi) ~/ 2;
+    if (axis[mid] <= timestamp) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  final span = axis[hi] - axis[lo];
+  final frac = span == 0 ? 0.0 : (timestamp - axis[lo]) / span;
+  return lo + frac;
+}
+
 /// Draws the Market Composite Index with optional scored-window dimming and
 /// an OLS regression overlay on the last [windowBars] points (PR-116).
 class CompositeChartPainter extends CustomPainter {
@@ -18,6 +49,11 @@ class CompositeChartPainter extends CustomPainter {
   final Color regressionColor;
   final int windowBars;
   final bool solidRegression;
+  /// Optional second series (e.g. a tapped sector's sparkline, PR-098b),
+  /// plotted on its own min/max range so its shape is comparable even when
+  /// its length or scale differs from [points].
+  final List<IndexPoint> overlayPoints;
+  final Color overlayColor;
 
   CompositeChartPainter({
     required this.points,
@@ -25,6 +61,8 @@ class CompositeChartPainter extends CustomPainter {
     required this.regressionColor,
     this.windowBars = 0,
     this.solidRegression = true,
+    this.overlayPoints = const [],
+    this.overlayColor = Colors.transparent,
   });
 
   @override
@@ -150,7 +188,49 @@ class CompositeChartPainter extends CustomPainter {
       }
     }
 
+    if (overlayPoints.length >= 2) {
+      _paintOverlay(canvas, size);
+    }
+
     canvas.restore();
+  }
+
+  /// Plots [overlayPoints] on the same horizontal axis [pointAt] uses for
+  /// the main line: evenly spaced *by index*, not by elapsed time. Mapping
+  /// the overlay by raw time span instead would put it at a different x
+  /// than the main line for the same instant whenever [points] has irregular
+  /// bar gaps (e.g. a missing candle) — [xFor] instead finds each overlay
+  /// timestamp's fractional position within [points]' own timestamp axis,
+  /// so both lines agree on where a given instant sits.
+  void _paintOverlay(Canvas canvas, Size size) {
+    final mainTimestamps = points.map((p) => p.timestamp).toList();
+
+    final values = overlayPoints.map((p) => p.value).toList();
+    var minV = values.reduce(math.min);
+    var maxV = values.reduce(math.max);
+    var range = maxV - minV;
+    if (range == 0) {
+      range = 1.0;
+      minV -= 0.5;
+    }
+    double xFor(int timestamp) {
+      final frac = fractionalIndexFor(mainTimestamps, timestamp);
+      return (frac / (mainTimestamps.length - 1)) * size.width;
+    }
+
+    double yFor(double v) => size.height - ((v - minV) / range) * size.height;
+
+    final paint = Paint()
+      ..color = overlayColor
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path()
+      ..moveTo(xFor(overlayPoints[0].timestamp), yFor(values[0]));
+    for (var i = 1; i < overlayPoints.length; i++) {
+      path.lineTo(xFor(overlayPoints[i].timestamp), yFor(values[i]));
+    }
+    canvas.drawPath(path, paint);
   }
 
   void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
@@ -175,7 +255,9 @@ class CompositeChartPainter extends CustomPainter {
         other.lineColor != lineColor ||
         other.regressionColor != regressionColor ||
         other.windowBars != windowBars ||
-        other.solidRegression != solidRegression;
+        other.solidRegression != solidRegression ||
+        other.overlayPoints != overlayPoints ||
+        other.overlayColor != overlayColor;
   }
 }
 

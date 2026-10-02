@@ -26,9 +26,16 @@ import 'detail_context.dart';
 import 'http_setup_api.dart';
 import 'http_fragility_api.dart';
 import 'http_behavior_api.dart';
+import 'http_mtf_regimes_api.dart';
+import 'http_plan_api.dart';
 import 'fragility_data.dart';
 import 'behavior_data.dart';
+import 'mtf_regimes_data.dart';
+import 'plan_data.dart';
+import 'plan_panel.dart';
+import 'mtf_strip_presentation.dart';
 import 'setup_data.dart';
+import '../market_state/regime_colors.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/reliability_chip.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -38,6 +45,7 @@ import 'trade/trade_action_buttons.dart';
 import '../volatility/volatility_alignment.dart';
 import '../volatility/volatility_model.dart';
 import '../volatility/http_volatility_api.dart';
+import '../watchlist/watchlist_controller.dart';
 
 /// DetailScreen displays a single symbol in detail with candle chart,
 /// header block, time context, score breakdown, and favourite toggle.
@@ -59,6 +67,12 @@ class DetailScreen extends StatefulWidget {
   /// API for fetching retail behavior scores.
   final BehaviorApi? behaviorApi;
 
+  /// API for fetching the multi-timeframe regime stack (PR-100).
+  final MtfRegimesApi? mtfRegimesApi;
+
+  /// API for fetching the range trade plan (PR-111).
+  final PlanApi? planApi;
+
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
 
@@ -77,6 +91,11 @@ class DetailScreen extends StatefulWidget {
   /// Reliability summary for the setup chip. Null hides the chip.
   final ScorecardApi? scorecardApi;
 
+  /// Shared watchlist. When set, the star reads and writes here instead of
+  /// a screen-local flag, so other screens stay in sync. Null leaves the
+  /// toggle local-only (persisted, not synced).
+  final WatchlistController? watchlist;
+
   const DetailScreen({
     Key? key,
     required this.symbol,
@@ -89,12 +108,15 @@ class DetailScreen extends StatefulWidget {
     this.setupApi,
     this.fragilityApi,
     this.behaviorApi,
+    this.mtfRegimesApi,
+    this.planApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
     this.isProUser = false,
     this.volatilityApi,
     this.scorecardApi,
+    this.watchlist,
   }) : super(key: key);
 
   @override
@@ -150,6 +172,25 @@ class _DetailScreenState extends State<DetailScreen> {
   bool _volatilityFetched = false;
   int _volatilityGeneration = 0;
 
+  // ---- MTF regime stack state (PR-100) — symbol-scoped, not reloaded on
+  // chart timeframe switch (the backend stack always covers the same fixed
+  // 15m/1h/4h/1d set regardless of the chart's selected timeframe).
+  MtfRegimesData? _mtfData;
+  bool _mtfFetched = false;
+  int _mtfRequestSeq = 0;
+  int _mtfAppliedSeq = 0;
+
+  // ---- range plan state (PR-111) ----
+  PlanData? _planData;
+  bool _isLoadingPlan = false;
+  bool _planFetched = false;
+  bool _planLoadFailed = false;
+  int _planGeneration = 0;
+  double _planRisk = 100;
+  bool _planIsLong = true;
+  final TextEditingController _planRiskController =
+      TextEditingController(text: '100');
+
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
@@ -163,13 +204,16 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   void initState() {
     super.initState();
-    isFavourite = widget.isFavourite;
+    isFavourite =
+        widget.watchlist?.contains(widget.symbol.value) ?? widget.isFavourite;
+    widget.watchlist?.addListener(_onWatchlistChanged);
     _timeframe = widget.timeframe.value;
     _series = widget.series;
     _warmupCount = widget.warmupCount;
     _loadChartConfig();
     _loadExchangePreference();
     _loadExchangeConfigs();
+    _loadPlanRisk();
     _loadEvents();
     _wireSocialFeedCallback();
     _loadSetupData();
@@ -177,6 +221,8 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadFragilityData();
     _loadBehaviorData();
     _loadVolatilityData();
+    _loadMtfRegimes();
+    _loadPlanData();
     _startAutoRefresh();
     _startEventsRefreshTimer();
   }
@@ -205,9 +251,11 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    widget.watchlist?.removeListener(_onWatchlistChanged);
     if (_pausable != null) _lifecycle?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
+    _planRiskController.dispose();
     widget.socialFeedViewModel?.onChanged = null;
     super.dispose();
   }
@@ -238,6 +286,9 @@ class _DetailScreenState extends State<DetailScreen> {
         _volatilityData = null;
         _volatilityTimeframe = null;
         _volatilityFetched = false;
+        _planData = null;
+        _planFetched = false;
+        _planLoadFailed = false;
       });
       _loadEvents(); // reload events for new date range
       _loadSetupData(); // reload setup for new timeframe
@@ -245,6 +296,7 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData(); // reload fragility for new timeframe
       _loadBehaviorData(); // reload behavior for new timeframe
       _loadVolatilityData(); // reload volatility for new timeframe
+      _loadPlanData();
       _startAutoRefresh(); // restart with new timeframe interval
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
@@ -293,6 +345,14 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _behaviorFetched = false;
       _loadBehaviorData();
+      // MTF is symbol-scoped, not timeframe-scoped, so (unlike the panels
+      // above) it's called without resetting _mtfFetched first: a prior
+      // success is left alone (no pointless re-fetch every tick), while a
+      // prior failure (still _mtfFetched == false) gets retried here
+      // (PR-100 CR).
+      _loadMtfRegimes();
+      _planFetched = false;
+      _loadPlanData();
     } catch (_) {
       // Silently ignore — next tick will retry.
     }
@@ -309,6 +369,45 @@ class _DetailScreenState extends State<DetailScreen> {
       onTick: () async => _loadEvents(),
     );
     _eventsRefreshTimer!.start();
+  }
+
+  void _onWatchlistChanged() {
+    final watchlist = widget.watchlist;
+    if (!mounted || watchlist == null) return;
+    setState(() {
+      isFavourite = watchlist.contains(widget.symbol.value);
+    });
+  }
+
+  /// Toggles the star. With a [WatchlistController], membership and the
+  /// server sync live there (every other screen listens to the same
+  /// instance). Without one, the star is local-only and still persisted.
+  void _toggleWatchlist() {
+    final watchlist = widget.watchlist;
+    if (watchlist != null) {
+      watchlist.toggle(widget.symbol.value).then((_) {
+        if (!mounted) return;
+        final message = watchlist.takeStatus();
+        if (message == null) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
+      });
+      return;
+    }
+    final adding = !isFavourite;
+    setState(() => isFavourite = adding);
+    _persistLocalFavourite(adding);
+  }
+
+  Future<void> _persistLocalFavourite(bool adding) async {
+    final prefsRaw = await SharedPreferences.getInstance();
+    final prefs = PreferencesService(prefsRaw);
+    if (adding) {
+      prefs.addFavourite(widget.symbol.value);
+    } else {
+      prefs.removeFavourite(widget.symbol.value);
+    }
   }
 
   Future<void> _loadChartConfig() async {
@@ -551,6 +650,131 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
+  /// Fetches the MTF regime stack once per symbol (PR-100) — not reloaded
+  /// on chart timeframe switch, since the stack itself is fixed-timeframe.
+  /// `_mtfFetched` is only ever set on *success*: a failure leaves it false
+  /// so a later call (reload / auto-refresh) naturally retries, while a
+  /// successful, symbol-scoped reading is never redundantly re-fetched —
+  /// this guard is what makes both "Reload chart" and the auto-refresh
+  /// tick safe to call unconditionally (PR-100 CR).
+  ///
+  /// No "newest dispatch wins" guard here: rejecting a response just
+  /// because a differently-ordered concurrent attempt was *dispatched*
+  /// later would discard a perfectly valid success whenever that later
+  /// attempt happens to fail first (PR-100 CR). Instead, [_mtfAppliedSeq]
+  /// tracks the sequence number of the last *applied* response, so a
+  /// success is applied only if it isn't older than whatever is already
+  /// on screen — this still lets an older call's success land when nothing
+  /// newer ever succeeds, while stopping an older, slower response from
+  /// overwriting a newer one that already landed (PR-100 CR).
+  Future<void> _loadMtfRegimes() async {
+    final api = widget.mtfRegimesApi;
+    if (api == null || _mtfFetched) return;
+    final seq = ++_mtfRequestSeq;
+    try {
+      final data = await api.fetch(symbol: widget.symbol.value);
+      if (!mounted || seq < _mtfAppliedSeq) return;
+      _mtfAppliedSeq = seq;
+      setState(() {
+        _mtfData = data;
+        _mtfFetched = true;
+      });
+    } catch (_) {
+      // Deliberately do not set _mtfFetched here — leave it false so the
+      // guard above allows a retry next time this is called.
+    }
+  }
+
+  Future<void> _loadPlanRisk() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final svc = PreferencesService(prefs);
+      if (!mounted) return;
+      final risk = svc.planAccountRisk;
+      setState(() {
+        _planRisk = risk;
+        _planRiskController.text = _formatRisk(risk);
+      });
+    } catch (_) {
+      // Keep default 100 already shown in the controller.
+    }
+  }
+
+  String _formatRisk(double risk) {
+    if (risk == risk.roundToDouble()) return risk.toStringAsFixed(0);
+    return risk.toStringAsFixed(2);
+  }
+
+  Future<void> _persistPlanRisk(double risk) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      PreferencesService(prefs).planAccountRisk = risk;
+    } catch (_) {}
+  }
+
+  Future<void> _loadPlanData() async {
+    final api = widget.planApi;
+    if (api == null || _planFetched) return;
+    final generation = ++_planGeneration;
+    final timeframe = _timeframe;
+    setState(() {
+      _isLoadingPlan = true;
+      _planLoadFailed = false;
+    });
+    try {
+      // Size is computed locally; risk query is advisory for the contract.
+      final data = await api.fetch(
+        symbol: widget.symbol.value,
+        timeframe: timeframe,
+        risk: _planRisk,
+      );
+      if (!mounted ||
+          generation != _planGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      setState(() {
+        _planData = data;
+        _planFetched = true;
+        _planLoadFailed = false;
+        _isLoadingPlan = false;
+      });
+    } catch (_) {
+      if (!mounted ||
+          generation != _planGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      setState(() {
+        _isLoadingPlan = false;
+        _planLoadFailed = true;
+        // Always drop stale levels so Retry is visible and the chart
+        // cannot keep showing an outdated plan after a failed refresh.
+        _planData = null;
+      });
+    }
+  }
+
+  void _retryPlan() {
+    _planFetched = false;
+    _planLoadFailed = false;
+    _loadPlanData();
+  }
+
+  PlanChartLevels? _planChartLevels() {
+    final data = _planData;
+    if (data == null || !data.valid) return null;
+    return PlanChartLevels(
+      low: data.low,
+      mid: data.mid,
+      high: data.high,
+      valid: true,
+      entry: _planIsLong ? data.longEntry : data.shortEntry,
+      stop: _planIsLong ? data.longStop : data.shortStop,
+      target: _planIsLong ? data.longTarget : data.shortTarget,
+    );
+  }
+
   Future<void> _loadVolatilityData() async {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
@@ -610,6 +834,7 @@ class _DetailScreenState extends State<DetailScreen> {
         _fragilityFetched = false;
         _behaviorFetched = false;
         _volatilityFetched = false;
+        _planFetched = false;
       });
       _loadEvents();
       _loadSetupData();
@@ -617,6 +842,14 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData();
       _loadBehaviorData();
       _loadVolatilityData();
+      // No _mtfFetched reset here (unlike the panels above): MTF is
+      // symbol-scoped, not timeframe-scoped, so a prior success shouldn't
+      // be redundantly re-fetched just because the chart reloaded. The
+      // call is still safe to make unconditionally — _loadMtfRegimes's own
+      // guard only retries when the previous attempt hadn't succeeded
+      // (PR-100 CR).
+      _loadMtfRegimes();
+      _loadPlanData();
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -768,10 +1001,11 @@ class _DetailScreenState extends State<DetailScreen> {
     final pct24h = _last24hPct();
     final pctRef = _referenceAreaPct();
 
-    return WillPopScope(
-      onWillPop: () async {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
         Navigator.of(context).pop(isFavourite);
-        return false;
       },
       child: Scaffold(
         backgroundColor: const Color.fromARGB(255, 0, 0, 0),
@@ -784,8 +1018,8 @@ class _DetailScreenState extends State<DetailScreen> {
               isFavourite ? Icons.star : Icons.star_border,
               color: isFavourite ? Colors.amber : Colors.white54,
             ),
-            onPressed: () => setState(() => isFavourite = !isFavourite),
-            tooltip: isFavourite ? 'Unfavourite' : 'Favourite',
+            onPressed: _toggleWatchlist,
+            tooltip: isFavourite ? 'Remove from watchlist' : 'Add to watchlist',
           ),
           title: Row(
             children: [
@@ -887,6 +1121,10 @@ class _DetailScreenState extends State<DetailScreen> {
             children: [
               if (ctx != null) _buildHeaderBlock(ctx, pct24h, pctRef),
               if (ctx != null) const SizedBox(height: 12),
+              if (_mtfData != null) ...[
+                _buildMtfStrip(_mtfData!),
+                const SizedBox(height: 12),
+              ],
               Text(
                 _timeRangeLabel(),
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
@@ -916,6 +1154,7 @@ class _DetailScreenState extends State<DetailScreen> {
                   warmupCount: _warmupCount,
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
+                  planLevels: _planChartLevels(),
                 ),
               // Overlay controls (social feed + macro events)
               if (widget.socialFeedViewModel != null ||
@@ -1057,6 +1296,38 @@ class _DetailScreenState extends State<DetailScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
+              ],
+              if (_planData != null) ...[
+                const SizedBox(height: 20),
+                _fieldset(
+                  'Plan',
+                  [
+                    PlanPanel(
+                      data: _planData!,
+                      isLong: _planIsLong,
+                      risk: _planRisk,
+                      riskController: _planRiskController,
+                      onLongChanged: (long) =>
+                          setState(() => _planIsLong = long),
+                      onRiskChanged: (risk) {
+                        setState(() => _planRisk = risk);
+                        _persistPlanRisk(risk);
+                      },
+                    ),
+                  ],
+                ),
+              ] else if (_isLoadingPlan) ...[
+                const SizedBox(height: 20),
+                const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ] else if (_planLoadFailed && widget.planApi != null) ...[
+                const SizedBox(height: 20),
+                PlanLoadError(onRetry: _retryPlan),
               ],
             ],
           ),
@@ -1471,7 +1742,7 @@ class _DetailScreenState extends State<DetailScreen> {
     // Direction coloring: trend uses sign, compression uses sign heuristic,
     // breakout up = green, breakout down = red, sideways = gray.
     final trendColor = ctx.trendScore >= 0 ? Colors.green : Colors.red;
-    final compressionColor = Colors.amber;
+    const compressionColor = Colors.amber;
     const sidewaysColor = Colors.grey;
 
     return _fieldset(
@@ -1543,6 +1814,51 @@ class _DetailScreenState extends State<DetailScreen> {
     );
   }
 
+  // ---- MTF regime strip (PR-100) ----
+
+  Widget _buildMtfStrip(MtfRegimesData data) {
+    final pills = buildMtfPills(data);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: pills.map(_buildMtfPill).toList(),
+    );
+  }
+
+  Widget _buildMtfPill(MtfPill pill) {
+    final dominant = pill.dominant;
+    final color = dominant == null ? Colors.white24 : regimeColor(dominant);
+    return Container(
+      key: Key('mtf-pill-${pill.timeframe}'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withAlpha((0.15 * 255).round()),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            pill.timeframe,
+            style: const TextStyle(fontSize: 11, color: Colors.white70),
+          ),
+          // Bias is a per-frame reading independent of which regime is
+          // dominant (sideways/compression/expansion can still lean up or
+          // down), so it shows for every real frame — just not on a
+          // missing/placeholder pill, which has nothing to report.
+          if (dominant != null) ...[
+            const SizedBox(width: 4),
+            Icon(
+              trendBiasIcon(pill.bias),
+              size: 12,
+              color: trendBiasColor(pill.bias),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildSetupQuality(SetupData data) {
     final totalPct = data.score; // 0..1
     final totalDisplay = '${(totalPct * 100).toStringAsFixed(0)}%';
@@ -1554,18 +1870,6 @@ class _DetailScreenState extends State<DetailScreen> {
 
     // Normalize sub-scores to the total quality percentage
     final subSum = data.scores.values.fold(0.0, (a, b) => a + b);
-
-    // Health label color: green > 0.8, grey > 0.6, orange > 0.4, red otherwise
-    Color healthColor;
-    if (data.trendHealth > 0.8) {
-      healthColor = Colors.green;
-    } else if (data.trendHealth > 0.6) {
-      healthColor = Colors.white54;
-    } else if (data.trendHealth > 0.4) {
-      healthColor = Colors.orange;
-    } else {
-      healthColor = Colors.red;
-    }
 
     // Confidence dot color: green > 0.75, yellow > 0.55, red otherwise
     Color confidenceColor;

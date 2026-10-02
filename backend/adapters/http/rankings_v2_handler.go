@@ -1,24 +1,51 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
+	"golang.org/x/sync/errgroup"
+
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
+)
+
+const (
+	// mtfOverlayConcurrency bounds in-flight ?mtf=1 store reads per request —
+	// each row does up to 4 sequential GetSymbol calls (application/mtf), so
+	// a naive per-row sequential loop could serialize hundreds of Redis
+	// round-trips on the request goroutine.
+	mtfOverlayConcurrency = 16
+	// mtfOverlayBudget is a single deadline shared by every row's overlay
+	// lookup, so a hung/slow store adds at most this much latency to the
+	// response regardless of page size — not a per-row timeout multiplied
+	// by however many rows are requested.
+	mtfOverlayBudget = 300 * time.Millisecond
 )
 
 // RankingsV2Handler serves GET /api/rankings with sorting, pagination, and caching.
 type RankingsV2Handler struct {
 	useCase usecases.RankingsUseCase
+	mtf     MTFCalculator // optional; nil disables the ?mtf=1 overlay
 }
 
 // NewRankingsV2Handler constructs the handler.
 func NewRankingsV2Handler(uc usecases.RankingsUseCase) *RankingsV2Handler {
 	return &RankingsV2Handler{useCase: uc}
+}
+
+// SetMTFCalculator wires the optional multi-timeframe alignment overlay
+// (PR-099) exposed via the `?mtf=1` query param.
+func (h *RankingsV2Handler) SetMTFCalculator(calc MTFCalculator) {
+	h.mtf = calc
 }
 
 func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,13 +89,29 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// --- Execute use case ---
+	// --- Parse mtf (optional, default false) ---
+	mtfRequested := r.URL.Query().Get("mtf") == "1"
+
+	// --- Execute use case (asOf: middleware validates/injects on production routes) ---
 	req := usecases.GetRankingsRequest{
 		Timeframe:    tf,
 		Sort:         sortMode,
 		SidewaysAlgo: sidewaysAlgo,
 	}
-	out, err := h.useCase.Execute(r.Context(), req)
+	if raw := r.URL.Query().Get("asOf"); raw != "" {
+		asOf, asOfErr := replay.ParseUnixSeconds(raw)
+		if asOfErr != nil {
+			writeRankingsError(w, "invalid asOf", http.StatusBadRequest)
+			return
+		}
+		if err := replay.ValidateAsOf(*asOf, time.Now().UTC()); err != nil {
+			writeRankingsError(w, "invalid asOf", http.StatusBadRequest)
+			return
+		}
+		req.AsOf = asOf
+	}
+	ctx := r.Context()
+	out, err := h.useCase.Execute(ctx, req)
 	if err != nil {
 		writeRankingsError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -104,9 +147,12 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	pageSlice := results[start:end]
 
 	// --- Build response ---
-	respResults := make([]RankedResultV2Response, 0, len(pageSlice))
-	for _, row := range pageSlice {
-		respResults = append(respResults, RankedResultToV2(row))
+	respResults := make([]RankedResultV2Response, len(pageSlice))
+	for i, row := range pageSlice {
+		respResults[i] = RankedResultToV2(row)
+	}
+	if mtfRequested && h.mtf != nil && req.AsOf == nil {
+		applyMTFOverlays(ctx, respResults, h.mtf, pageSlice)
 	}
 
 	precision := 0
@@ -131,6 +177,67 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		writeRankingsError(w, "failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+// applyMTFOverlays fills each row's Alignment/AlignedState concurrently
+// (mtfOverlayConcurrency in flight at once — application/mtf.Calculate is a
+// handful of Redis round-trips, not free, and a plain per-row loop would
+// serialize all of them on the request goroutine) under one shared deadline
+// (mtfOverlayBudget), so a hung or slow store bounds the overlay's added
+// latency instead of stalling the response indefinitely. resp and rows must
+// be the same length and index-aligned; each goroutine only ever writes its
+// own resp[i], so no synchronization is needed between them.
+func applyMTFOverlays(
+	ctx context.Context,
+	resp []RankedResultV2Response,
+	calc MTFCalculator,
+	rows []usecases.RankedResult,
+) {
+	overlayCtx, cancel := context.WithTimeout(ctx, mtfOverlayBudget)
+	defer cancel()
+
+	var skipped int32
+	var g errgroup.Group
+	g.SetLimit(mtfOverlayConcurrency)
+	for i := range resp {
+		i := i
+		symbol := rows[i].Symbol.String()
+		g.Go(func() error {
+			if !applyMTFOverlay(overlayCtx, &resp[i], calc, symbol) {
+				atomic.AddInt32(&skipped, 1)
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // applyMTFOverlay never returns an error to the group — each row is independent and best-effort.
+
+	// One summary line, not one per row: a systemic outage would otherwise
+	// flood logs with up to `len(resp)` near-simultaneous timeout lines.
+	if skipped > 0 {
+		log.Printf("[mtf] overlay incomplete: %d/%d rows skipped (store miss or timeout)", skipped, len(resp))
+	}
+}
+
+// applyMTFOverlay fills resp's Alignment/AlignedState from calc for symbol.
+// It is best-effort: any error (miss, store transport failure, or the
+// shared overlay deadline expiring) leaves resp unchanged and reports false
+// rather than failing the row — the overlay must never break the primary
+// response (PR-099). An empty Stack (no fresh frames for this symbol —
+// cold start, store outage) is not an error from Calculate's point of view,
+// but it must still leave the fields unset: Alignment/AlignedState would
+// otherwise read 0/"indecisive", which is indistinguishable from a real
+// reading (COMMON.md says both are omitted when the store has nothing
+// usable, not stamped with a fake zero value).
+func applyMTFOverlay(ctx context.Context, resp *RankedResultV2Response, calc MTFCalculator, symbol string) bool {
+	stack, err := calc.Calculate(ctx, symbol)
+	if err != nil || len(stack.Frames) == 0 {
+		return false
+	}
+	alignment := stack.Alignment
+	alignedState := string(stack.AlignedState)
+	resp.Alignment = &alignment
+	resp.AlignedState = &alignedState
+	return true
 }
 
 // ParsePositiveIntOrDefault parses a string to a positive int, returning def on failure or <=0.

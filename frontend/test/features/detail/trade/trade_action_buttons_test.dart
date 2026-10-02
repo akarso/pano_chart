@@ -49,7 +49,7 @@ void main() {
     testWidgets('renders TradingView and preferred exchange buttons',
         (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
           preferredExchangeId: 'binance',
@@ -65,7 +65,7 @@ void main() {
 
     testWidgets('shows "…or choose another" link', (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
           preferredExchangeId: 'binance',
@@ -79,7 +79,7 @@ void main() {
     testWidgets('preferred exchange label reflects preferredExchangeId',
         (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
           preferredExchangeId: 'mexc',
@@ -94,7 +94,7 @@ void main() {
     testWidgets('falls back to first exchange when id not found',
         (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'ETHUSDT',
           timeframe: '1h',
           preferredExchangeId: 'unknown_exchange',
@@ -108,12 +108,12 @@ void main() {
 
     testWidgets('shows custom exchange button when provided', (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'BTCUSDT',
           timeframe: '4h',
           preferredExchangeId: 'binance',
           exchanges: _testExchanges,
-          customExchange: const CustomExchange(
+          customExchange: CustomExchange(
             name: 'MyDex',
             urlTemplate: 'https://mydex.com/BTC_USDT',
           ),
@@ -126,7 +126,7 @@ void main() {
 
     testWidgets('hides custom exchange section when null', (tester) async {
       await tester.pumpWidget(_wrap(
-        TradeActionButtons(
+        const TradeActionButtons(
           symbol: 'BTCUSDT',
           timeframe: '4h',
           preferredExchangeId: 'binance',

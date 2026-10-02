@@ -17,6 +17,8 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
   }) async {
     final idx = calls.length;
     calls.add({

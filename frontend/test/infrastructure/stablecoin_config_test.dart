@@ -4,14 +4,14 @@ import 'package:pano_chart_frontend/infrastructure/stablecoin_config.dart';
 void main() {
   group('StablecoinConfig', () {
     test('isStablecoin returns true for listed symbols', () {
-      final config = StablecoinConfig({'USDCUSDT', 'DAIUSDT'});
+      const config = StablecoinConfig({'USDCUSDT', 'DAIUSDT'});
       expect(config.isStablecoin('USDCUSDT'), isTrue);
       expect(config.isStablecoin('DAIUSDT'), isTrue);
       expect(config.isStablecoin('BTCUSDT'), isFalse);
     });
 
     test('count returns number of stablecoin symbols', () {
-      final config = StablecoinConfig({'USDCUSDT', 'DAIUSDT', 'BUSDUSDT'});
+      const config = StablecoinConfig({'USDCUSDT', 'DAIUSDT', 'BUSDUSDT'});
       expect(config.count, 3);
     });
 

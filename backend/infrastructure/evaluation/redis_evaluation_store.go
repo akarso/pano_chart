@@ -3,9 +3,12 @@ package evaluation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"pano_chart/backend/application/ports"
 	"pano_chart/backend/domain"
@@ -70,24 +73,86 @@ type RedisClient interface {
 // RedisEvaluationStore persists EvaluationSnapshots in Redis.
 //
 // Keys (tf must be a canonical timeframe — validated on every call):
-//   - eval:{tf}       → JSON array of snapshots
-//   - eval:{tf}:at    → unix seconds of Put
-//   - eval:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//   - eval:{trend}:{comp}:{tf}       → JSON array of snapshots
+//   - eval:{trend}:{comp}:{tf}:at    → unix seconds of Put
+//   - eval:{trend}:{comp}:{tf}:sym   → Redis hash field=symbol → JSON snapshot
+//
+// trendAlgo and compressionAlgo are part of the key so replicas with different
+// TREND_ALGO / COMPRESSION_ALGO values during a rolling deploy do not overwrite
+// each other (PR-103 / PR-105).
+//
+// Absolute compression also falls back to pre-PR-105 trend-only keys
+// eval:{trend}:{tf}; predictability + absolute further falls back to bare
+// eval:{tf} / eval:{tf}:at / eval:{tf}:sym until the next Put migrates data.
 //
 // Empty Put writes "[]" with a fresh at (valid empty snapshot, not a miss).
 type RedisEvaluationStore struct {
-	redis RedisClient
+	redis           RedisClient
+	trendAlgo       string
+	compressionAlgo string
 }
 
 // NewRedisEvaluationStore constructs the store.
 func NewRedisEvaluationStore(redis RedisClient) *RedisEvaluationStore {
-	return &RedisEvaluationStore{redis: redis}
+	return &RedisEvaluationStore{
+		redis:           redis,
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: domain.DefaultCompressionAlgo,
+	}
 }
 
-func arrayKey(tf string) string     { return fmt.Sprintf("eval:%s", tf) }
-func atKey(tf string) string        { return fmt.Sprintf("eval:%s:at", tf) }
-func symbolKey(tf string) string    { return fmt.Sprintf("eval:%s:sym", tf) }
-func symbolTmpKey(tf string) string { return fmt.Sprintf("eval:%s:sym:tmp", tf) }
+// SetTrendAlgo namespaces Redis keys by trend engine (predictability|strength).
+func (s *RedisEvaluationStore) SetTrendAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultTrendAlgo
+	}
+	s.trendAlgo = algo
+}
+
+// SetCompressionAlgo namespaces Redis keys by compression engine (absolute|percentile).
+func (s *RedisEvaluationStore) SetCompressionAlgo(algo string) {
+	if algo == "" {
+		algo = domain.DefaultCompressionAlgo
+	}
+	s.compressionAlgo = algo
+}
+
+func (s *RedisEvaluationStore) arrayKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:%s", s.trendAlgo, s.compressionAlgo, tf)
+}
+func (s *RedisEvaluationStore) atKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:%s:at", s.trendAlgo, s.compressionAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:%s:sym", s.trendAlgo, s.compressionAlgo, tf)
+}
+func (s *RedisEvaluationStore) symbolTmpKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:%s:sym:tmp", s.trendAlgo, s.compressionAlgo, tf)
+}
+
+// trendOnly*Key are the pre-PR-105 shapes (trend segment, no compression).
+func (s *RedisEvaluationStore) trendOnlyArrayKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) trendOnlyAtKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:at", s.trendAlgo, tf)
+}
+func (s *RedisEvaluationStore) trendOnlySymbolKey(tf string) string {
+	return fmt.Sprintf("eval:%s:%s:sym", s.trendAlgo, tf)
+}
+
+// legacy*Key are the pre-PR-103 key shapes (no trend segment).
+func legacyArrayKey(tf string) string  { return fmt.Sprintf("eval:%s", tf) }
+func legacyAtKey(tf string) string     { return fmt.Sprintf("eval:%s:at", tf) }
+func legacySymbolKey(tf string) string { return fmt.Sprintf("eval:%s:sym", tf) }
+
+func (s *RedisEvaluationStore) readLegacyFallback() bool {
+	return s.trendAlgo == domain.DefaultTrendAlgo && s.compressionAlgo == domain.DefaultCompressionAlgo
+}
+
+func (s *RedisEvaluationStore) readTrendOnlyFallback() bool {
+	return s.compressionAlgo == domain.DefaultCompressionAlgo
+}
 
 func parseTF(tf string) (domain.Timeframe, error) {
 	parsed, err := domain.NewTimeframe(tf)
@@ -189,7 +254,7 @@ func marshalPutArgs(stamped []domain.EvaluationSnapshot, atUnix int64, ttl time.
 
 func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []interface{}) error {
 	_, err := s.redis.Eval(ctx, putEvalScript, []string{
-		arrayKey(tf), atKey(tf), symbolKey(tf), symbolTmpKey(tf),
+		s.arrayKey(tf), s.atKey(tf), s.symbolKey(tf), s.symbolTmpKey(tf),
 	}, args...)
 	if err != nil {
 		return fmt.Errorf("atomic put: %w", err)
@@ -199,13 +264,32 @@ func (s *RedisEvaluationStore) evalPut(ctx context.Context, tf string, args []in
 
 // Get implements ports.EvaluationStore. Array and at are read via MGET so
 // the returned timestamp matches the returned snapshot generation.
+// Absolute compression falls back to pre-PR-105 trend-only keys; predictability
+// + absolute also falls back to pre-namespaced eval:{tf} keys.
 func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	vals, err := s.mget(ctx, arrayKey(tfStr), atKey(tfStr))
+	evals, at, err := s.getPair(ctx, s.arrayKey(tfStr), s.atKey(tfStr))
+	if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) {
+		return evals, at, err
+	}
+	if s.readTrendOnlyFallback() {
+		evals, at, err = s.getPair(ctx, s.trendOnlyArrayKey(tfStr), s.trendOnlyAtKey(tfStr))
+		if err == nil || !errors.Is(err, ports.ErrEvaluationNotFound) {
+			return evals, at, err
+		}
+	}
+	if s.readLegacyFallback() {
+		return s.getPair(ctx, legacyArrayKey(tfStr), legacyAtKey(tfStr))
+	}
+	return nil, time.Time{}, ports.ErrEvaluationNotFound
+}
+
+func (s *RedisEvaluationStore) getPair(ctx context.Context, arrayKey, atKey string) ([]domain.EvaluationSnapshot, time.Time, error) {
+	vals, err := s.mget(ctx, arrayKey, atKey)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("mget array+at: %w", err)
 	}
@@ -225,13 +309,51 @@ func (s *RedisEvaluationStore) Get(ctx context.Context, tf string) ([]domain.Eva
 
 // GetSymbol implements ports.EvaluationStore. Symbol hash field and at are
 // read atomically via Lua so the returned time matches the snapshot.
+// Absolute compression falls back to trend-only / bare legacy keys only when
+// the current namespaced generation is absent — a missing symbol in an
+// existing current batch must stay a miss.
 func (s *RedisEvaluationStore) GetSymbol(ctx context.Context, tf, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
 	parsed, err := parseTF(tf)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, err
 	}
 	tfStr := parsed.String()
-	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symbolKey(tfStr), atKey(tfStr)}, symbol)
+	present, err := s.generationPresent(ctx, s.atKey(tfStr))
+	if err != nil {
+		return domain.EvaluationSnapshot{}, time.Time{}, err
+	}
+	if present {
+		return s.getSymbolPair(ctx, s.symbolKey(tfStr), s.atKey(tfStr), symbol)
+	}
+	if s.readTrendOnlyFallback() {
+		present, err = s.generationPresent(ctx, s.trendOnlyAtKey(tfStr))
+		if err != nil {
+			return domain.EvaluationSnapshot{}, time.Time{}, err
+		}
+		if present {
+			return s.getSymbolPair(ctx, s.trendOnlySymbolKey(tfStr), s.trendOnlyAtKey(tfStr), symbol)
+		}
+	}
+	if s.readLegacyFallback() {
+		return s.getSymbolPair(ctx, legacySymbolKey(tfStr), legacyAtKey(tfStr), symbol)
+	}
+	return domain.EvaluationSnapshot{}, time.Time{}, ports.ErrEvaluationNotFound
+}
+
+// generationPresent reports whether a Put generation exists for atKey.
+func (s *RedisEvaluationStore) generationPresent(ctx context.Context, atKey string) (bool, error) {
+	_, err := s.redis.Get(ctx, atKey)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	return false, fmt.Errorf("get at: %w", err)
+}
+
+func (s *RedisEvaluationStore) getSymbolPair(ctx context.Context, symKey, atKey, symbol string) (domain.EvaluationSnapshot, time.Time, error) {
+	raw, err := s.redis.Eval(ctx, getSymbolScript, []string{symKey, atKey}, symbol)
 	if err != nil {
 		return domain.EvaluationSnapshot{}, time.Time{}, fmt.Errorf("get symbol: %w", err)
 	}

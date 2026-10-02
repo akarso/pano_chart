@@ -31,6 +31,8 @@ class _FakeGetOverview extends GetOverview {
     String? snapshot,
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
   }) async {
     // Capture the call index at invocation time (before any awaits).
     final callIdx = calls.length;
@@ -40,6 +42,7 @@ class _FakeGetOverview extends GetOverview {
       'sort': sort,
       'snapshot': snapshot,
       'sidewaysAlgo': sidewaysAlgo,
+      'mtf': mtf,
     });
 
     // If a gate was registered for this call index, wait on it.
@@ -49,6 +52,34 @@ class _FakeGetOverview extends GetOverview {
 
     if (error != null) throw error!;
     return results[callIdx % results.length];
+  }
+}
+
+/// First call succeeds with a hasMore:true page; every call after that
+/// fails — used to prove pagination retry stops rather than looping
+/// forever on a persistent failure (PR-100 CR).
+class _FailAfterFirstPageGetOverview extends GetOverview {
+  int calls = 0;
+
+  @override
+  Future<OverviewResult> call({
+    required String timeframe,
+    required int page,
+    required String sort,
+    String? snapshot,
+    String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
+  }) async {
+    calls++;
+    if (calls == 1) {
+      return const OverviewResult(
+        hasMore: true,
+        items: [OverviewItem(symbol: 'A', alignment: 0.5)],
+      );
+    }
+    throw Exception('persistent network error');
   }
 }
 
@@ -483,11 +514,11 @@ void main() {
 
       test('leaders sorts by rs descending with nulls last', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
               OverviewItem(symbol: 'SKIPUSDT'),
               OverviewItem(symbol: 'HIUSDT', rs: 0.05),
@@ -509,11 +540,11 @@ void main() {
 
       test('laggards sorts by rs ascending with nulls last', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'laggards',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'MIDUSDT', rs: 0.01),
               OverviewItem(symbol: 'SKIPUSDT'),
               OverviewItem(symbol: 'HIUSDT', rs: 0.05),
@@ -534,12 +565,12 @@ void main() {
       test('leaders fallback keeps backend total order not A-Z', () async {
         // Backend fell back to total — items already ordered by totalScore.
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
               OverviewItem(symbol: 'MMUSDT', totalScore: 0.1),
@@ -560,8 +591,8 @@ void main() {
       });
 
       test('equal rs ties break by symbol', () {
-        final a = const OverviewItem(symbol: 'BBBUSDT', rs: 0.01);
-        final b = const OverviewItem(symbol: 'AAAUSDT', rs: 0.01);
+        const a = OverviewItem(symbol: 'BBBUSDT', rs: 0.01);
+        const b = OverviewItem(symbol: 'AAAUSDT', rs: 0.01);
         // Ascending symbol: AAA before BBB.
         expect(
           OverviewViewModel.compareRsNullsLast(a, b, descending: true),
@@ -575,21 +606,21 @@ void main() {
 
       test('favourites merge does not promote fallback board', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'FAVUSDT', totalScore: 0.2, rs: 0.99),
             ],
           ),
@@ -615,21 +646,21 @@ void main() {
       test('favourites merge inserts mid-score into total order on fallback',
           () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'FAVUSDT', totalScore: 0.7, rs: 0.99),
             ],
           ),
@@ -650,20 +681,20 @@ void main() {
 
       test('timeframe change clears effectiveSort until new response', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ETHUSDT', rs: 0.02),
             ],
           ),
@@ -689,12 +720,12 @@ void main() {
 
       test('failed timeframe load keeps cleared effectiveSort', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
             ],
           ),
@@ -716,21 +747,21 @@ void main() {
 
       test('loadNext does not promote rsAvailable from a later page', () async {
         fakeGetOverview = _FakeGetOverview(results: [
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: false,
             effectiveSort: 'total',
             requestedSort: 'leaders',
             hasMore: true,
-            items: const [
+            items: [
               OverviewItem(symbol: 'ZZUSDT', totalScore: 0.9),
               OverviewItem(symbol: 'AAUSDT', totalScore: 0.5),
             ],
           ),
-          OverviewResult(
+          const OverviewResult(
             rsAvailable: true,
             effectiveSort: 'leaders',
             hasMore: false,
-            items: const [
+            items: [
               OverviewItem(symbol: 'HIUSDT', totalScore: 0.2, rs: 0.5),
             ],
           ),
@@ -748,6 +779,164 @@ void main() {
           vm.state.items.map((e) => e.symbol).toList(),
           ['ZZUSDT', 'AAUSDT', 'HIUSDT'],
         );
+      });
+    });
+
+    group('aligned sort (PR-100)', () {
+      test('sorts by alignment descending, nulls treated as 0', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            hasMore: false,
+            items: [
+              OverviewItem(symbol: 'MIDUSDT', alignment: 0.75),
+              OverviewItem(symbol: 'SKIPUSDT'), // no alignment (null)
+              OverviewItem(symbol: 'HIUSDT', alignment: 1.0),
+              OverviewItem(symbol: 'LOWUSDT', alignment: 0.5),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['HIUSDT', 'MIDUSDT', 'LOWUSDT', 'SKIPUSDT'],
+        );
+      });
+
+      test('ties break by total score descending', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            hasMore: false,
+            items: [
+              OverviewItem(
+                  symbol: 'LOWSCORE', alignment: 1.0, totalScore: 0.2),
+              OverviewItem(
+                  symbol: 'HISCORE', alignment: 1.0, totalScore: 0.9),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['HISCORE', 'LOWSCORE'],
+        );
+      });
+    });
+
+    group('mtf overlay gating (PR-100 CR)', () {
+      test('defaults to not requesting the overlay', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        await vm.loadInitial('1h');
+
+        expect(fakeGetOverview.calls.single['mtf'], false);
+      });
+
+      test('requests the overlay once isProUser is set', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.isProUser = true;
+        await vm.loadInitial('1h');
+
+        expect(fakeGetOverview.calls.single['mtf'], true);
+      });
+
+      test('refresh and loadNext also respect isProUser', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(items: [], hasMore: true),
+          const OverviewResult(items: [], hasMore: true),
+          const OverviewResult(items: [], hasMore: false),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.isProUser = true;
+        await vm.loadInitial('1h');
+        await vm.refresh('1h');
+        await vm.loadNext('1h');
+
+        expect(fakeGetOverview.calls.map((c) => c['mtf']).toList(),
+            [true, true, true]);
+      });
+    });
+
+    group('aligned sort auto-completes pagination (PR-100 CR)', () {
+      test(
+          'fetches every remaining page so a later page\'s aligned symbol is not stranded',
+          () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(
+            hasMore: true,
+            items: [
+              OverviewItem(symbol: 'PAGE1LOW', alignment: 0.25, totalScore: 0.9),
+            ],
+          ),
+          const OverviewResult(
+            hasMore: false,
+            items: [
+              OverviewItem(symbol: 'PAGE2HIGH', alignment: 1.0, totalScore: 0.1),
+            ],
+          ),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+        // Let the fire-and-forget completion loop run to exhaustion.
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(fakeGetOverview.calls.length, 2,
+            reason: 'both pages must be fetched automatically, not just page 1');
+        expect(vm.state.hasMore, false);
+        expect(
+          vm.state.items.map((e) => e.symbol).toList(),
+          ['PAGE2HIGH', 'PAGE1LOW'],
+          reason:
+              "the page-2 symbol's higher alignment must place it first once "
+              'the full universe is in — not stranded behind page 1',
+        );
+      });
+
+      test('does not auto-paginate for a non-aligned sort', () async {
+        fakeGetOverview = _FakeGetOverview(results: [
+          const OverviewResult(hasMore: true, items: [OverviewItem(symbol: 'A')]),
+          const OverviewResult(hasMore: false, items: [OverviewItem(symbol: 'B')]),
+        ]);
+        vm = OverviewViewModel(fakeGetOverview);
+        // Default sort is 'volume', not 'aligned'.
+        await vm.loadInitial('1h');
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(fakeGetOverview.calls.length, 1);
+        expect(vm.state.hasMore, true);
+      });
+
+      test(
+          'stops instead of retrying forever when a page fetch fails (PR-100 CR)',
+          () async {
+        final failing = _FailAfterFirstPageGetOverview();
+        vm = OverviewViewModel(failing);
+        vm.changeSortSilent('aligned');
+        await vm.loadInitial('1h');
+        // Give the fire-and-forget loop several turns to run — with the
+        // bug, each turn would add another identical, failing call.
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+        await Future.delayed(Duration.zero);
+
+        expect(failing.calls, 2,
+            reason: 'must stop after the one failed page, not hammer it '
+                'forever');
+        expect(vm.state.hasMore, true,
+            reason: 'left incomplete rather than silently claiming done');
       });
     });
   });

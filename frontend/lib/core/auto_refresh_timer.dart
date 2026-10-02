@@ -26,9 +26,9 @@ class AutoRefreshTimer {
   bool _running = false;
 
   AutoRefreshTimer({
-    required Duration interval,
+    required this._interval,
     required this.onTick,
-  }) : _interval = interval;
+  });
 
   /// Whether the timer is currently running (scheduled for next tick).
   bool get isRunning => _running;

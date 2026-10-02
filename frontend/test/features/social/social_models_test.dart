@@ -23,7 +23,7 @@ void main() {
     });
 
     test('dateTime converts unix seconds to UTC DateTime', () {
-      final post = SocialPost(
+      const post = SocialPost(
         id: 'p1',
         accountId: 'twitter:test',
         author: 'test',

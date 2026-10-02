@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -23,6 +26,8 @@ import (
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
+	"pano_chart/backend/application/mtf"
+	"pano_chart/backend/application/plan"
 	apprisk "pano_chart/backend/application/risk"
 	appscoring "pano_chart/backend/application/scoring"
 	"pano_chart/backend/application/setups"
@@ -50,6 +55,7 @@ import (
 	appsocial "pano_chart/backend/application/social"
 	infranotify "pano_chart/backend/infrastructure/notifications"
 	infrasocial "pano_chart/backend/infrastructure/social"
+	infrawatchlist "pano_chart/backend/infrastructure/watchlist"
 )
 
 func main() {
@@ -163,10 +169,55 @@ func main() {
 		}
 	}
 
+	// --- Trend / compression algorithm selection (PR-103 / PR-105) ---
+	trendAlgoStr := os.Getenv("TREND_ALGO")
+	if trendAlgoStr == "" {
+		if cfg := scoring.GetConfig(); cfg != nil {
+			trendAlgoStr = cfg.Scoring.TrendAlgo
+		}
+	}
+	trendAlgo, trendAlgoOK := usecases.ParseTrendAlgo(trendAlgoStr)
+	if !trendAlgoOK {
+		log.Printf("[main] WARNING: invalid trend_algo %q, falling back to predictability", trendAlgoStr)
+	}
+	trendCalc := usecases.TrendCalcFor(trendAlgo)
+	log.Printf("[main] trend algo=%s", trendAlgo)
+
+	compAlgoStr := os.Getenv("COMPRESSION_ALGO")
+	if compAlgoStr == "" {
+		if cfg := scoring.GetConfig(); cfg != nil {
+			compAlgoStr = cfg.Scoring.CompressionAlgo
+		}
+	}
+	compAlgo, compAlgoOK := usecases.ParseCompressionAlgo(compAlgoStr)
+	if !compAlgoOK {
+		log.Printf("[main] WARNING: invalid compression_algo %q, falling back to absolute", compAlgoStr)
+	}
+	log.Printf("[main] compression algo=%s", compAlgo)
+
+	// --- Learned regime classifier (PR-109; default stays heuristic) ---
+	if err := scoring.ValidateRegimeModelMode(); err != nil {
+		log.Fatalf("[main] %v", err)
+	}
+	if scoring.RegimeModelMode() == "learned" {
+		path := infrascoring.ResolveRegimeModelPath(scoring.ConfigPath(), scoring.ConfiguredRegimeModelPath())
+		model, err := infrascoring.LoadRegimeModelFile(path)
+		if err != nil {
+			log.Fatalf("[main] regime_model=learned but load failed: %v", err)
+		}
+		if err := model.ValidateForInference(); err != nil {
+			log.Fatalf("[main] regime_model=learned but model not ready for inference: %v", err)
+		}
+		scoring.SetRegimeModel(model)
+		log.Printf("[main] regime model=learned path=%s", path)
+	} else {
+		log.Printf("[main] regime model=heuristic")
+	}
+
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
 		{Calculator: sidewaysCalc, Weight: 1.0},
-		{Calculator: &scoring.TrendPredictabilityScoreCalculator{}, Weight: 1.0},
+		{Calculator: trendCalc, Weight: 1.0},
 		{Calculator: &scoring.GainLossScoreCalculator{}, Weight: 1.0},
 	}
 	rankUC := usecases.NewVolumeSortedRankSymbols(cachedUniverse, cachedVolumeProvider, weights, exchangeInfoURL, tickerURL)
@@ -260,6 +311,8 @@ func main() {
 		snapshotLogger,
 	)
 	getRankingsUC.SetSignalEmitter(signalEmitter)
+	getRankingsUC.SetTrendAlgo(string(trendAlgo))
+	getRankingsUC.SetCompressionAlgo(string(compAlgo))
 
 	// --- Rankings cache TTL ---
 	rankingsCacheTTL := 3 * time.Minute // default
@@ -277,6 +330,8 @@ func main() {
 
 	// Wrap with Redis cache decorator
 	rankingsUC := rankings.NewRedisCachedRankings(getRankingsUC, redisClient, rankingsCacheTTL, "rankings_v2")
+	rankingsUC.SetTrendAlgo(string(trendAlgo))
+	rankingsUC.SetCompressionAlgo(string(compAlgo))
 	rankingsUC.SetSignalEmitter(signalEmitter)
 
 	// --- Events use case ---
@@ -359,12 +414,22 @@ func main() {
 	// Always constructed so Market Pulse and setups can read; the refresher
 	// below populates it when PC_EVAL_REFRESH is enabled (default on).
 	evalStore := infraeval.NewRedisEvaluationStore(redisClient)
+	evalStore.SetTrendAlgo(string(trendAlgo))
+	evalStore.SetCompressionAlgo(string(compAlgo))
+
+	// --- Multi-timeframe regime stack (PR-099) — reads the same store, no
+	// candle fetch or rescoring ---
+	mtfService := mtf.NewService(evalStore)
+	mtfService.SetTrendAlgo(string(trendAlgo))
+	mtfService.SetCompressionAlgo(string(compAlgo))
 
 	// --- Market state service (canonical regime/breadth classification —
 	// see PR-073: this replaced a second, independently-evolved softmax
 	// pipeline that could disagree with this one about the same market) ---
 	evalProvider := market.NewRankingsEvaluationProvider(rankingsUC)
 	evalProvider.SetStore(evalStore)
+	evalProvider.SetTrendAlgo(string(trendAlgo))
+	evalProvider.SetCompressionAlgo(string(compAlgo))
 	marketService := appmarket.NewMarketStateService(evalProvider)
 	marketHandler := adhttp.NewMarketHandler(marketService)
 	log.Println("[main] Market state service initialized")
@@ -389,6 +454,24 @@ func main() {
 	compositeUC := market.NewRedisCachedComposite(compositeService, redisClient, compositeCacheTTL, "market_composite_v3")
 	compositeHandler := adhttp.NewMarketCompositeHandler(compositeUC)
 	log.Println("[main] Market composite index service initialized")
+
+	// --- Sector composites (PR-098) — missing auto path skips; explicit/bad fatal ---
+	var sectorCatalog *metrics.SectorCatalog
+	var sectorsHandler http.Handler
+	if cat, sectorErr := metrics.LoadSectorCatalog(metrics.SectorsPath()); sectorErr != nil {
+		explicit := os.Getenv("SECTORS_CONFIG_PATH") != ""
+		if !explicit && errors.Is(sectorErr, fs.ErrNotExist) {
+			log.Printf("[main] sectors disabled (no catalog): %v", sectorErr)
+		} else {
+			log.Fatalf("[main] sectors config: %v", sectorErr)
+		}
+	} else {
+		sectorCatalog = cat
+		sectorService := metrics.NewSectorIndexService(compositeService, sectorCatalog)
+		sectorsUC := market.NewRedisCachedSectors(sectorService, redisClient, compositeCacheTTL, "market_sectors_v1")
+		sectorsHandler = adhttp.NewMarketSectorsHandler(sectorsUC)
+		log.Println("[main] Market sectors service initialized")
+	}
 
 	// Enables VolatilityExpansion/Dispersion on the market summary (used by
 	// the legacy /api/market/regime response and the transition engine).
@@ -439,7 +522,7 @@ func main() {
 	// is invisible unless someone thinks to check — so surface it loudly
 	// once at startup instead.
 	for _, bfTF := range []string{"1h", "4h", "1d"} {
-		if hist, histErr := regimeHistoryService.GetHistory(bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
+		if hist, histErr := regimeHistoryService.GetHistory(context.Background(), bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
 			log.Printf("[main] WARNING: regime history for %s is empty (db=%s) — no backfill runs anymore (PR-073); it will accumulate live from now on", bfTF, regimeHistoryDBPath)
 		}
 	}
@@ -451,6 +534,11 @@ func main() {
 	transitionEngine := transition.NewTransitionEngine()
 	transitionService := transition.NewTransitionService(marketService, transitionEngine)
 	transitionService.SetAgeProvider(regimeHistoryService)
+	transitionService.SetMatrixCache(transition.NewMatrixCache(
+		transition.HistoryFromService{Service: regimeHistoryService},
+		15*time.Minute,
+		500,
+	))
 	transitionService.SetSignalEmitter(signalEmitter)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")
@@ -464,12 +552,36 @@ func main() {
 		volPath = "volatility_1m.json"
 	}
 	volatilityHandler := adhttp.NewVolatilityHandler(volPath)
+	seasonalityProvider := adhttp.NewVolatilitySeasonalityProvider(volatilityHandler)
+	sectorPrefix := os.Getenv("VOL_SECTOR_PREFIX")
+	if sectorPrefix == "" {
+		// Same stem as vol_aggregate --out (SectorProfilePath inserts "_").
+		sectorPrefix = filepath.Join(filepath.Dir(volPath), "vol")
+	}
+	seasonalityProvider.SetSectorPrefix(sectorPrefix)
+	if sectorCatalog != nil {
+		for _, sec := range sectorCatalog.Sectors() {
+			path, perr := metrics.SectorProfilePath(sectorPrefix, sec.ID)
+			if perr != nil {
+				continue
+			}
+			if _, serr := os.Stat(path); serr != nil {
+				log.Printf("[main] WARNING: sector seasonality file missing for %s (%s) — setups fall back to market-wide until written", sec.ID, path)
+			}
+		}
+	}
 
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
 	setupService := setups.NewSetupService(candleRepo, symbolScorer, setupEngine)
+	setupService.SetTrendDirectionCalc(trendCalc)
+	setupService.SetTrendAlgo(string(trendAlgo))
+	setupService.SetCompressionAlgo(string(compAlgo))
 	setupService.SetMarketProvider(marketService)
-	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
+	setupService.SetSeasonalityProvider(seasonalityProvider)
+	if sectorCatalog != nil {
+		setupService.SetSectorResolver(sectorCatalog)
+	}
 	setupService.SetEvaluationStore(evalStore)
 	setupService.SetSignalEmitter(signalEmitter)
 	setupHandler := adhttp.NewSetupHandler(setupService)
@@ -570,6 +682,8 @@ func main() {
 	// per interval. Readers (provider/setups) already hold evalStore above.
 	if appeval.RefreshEnabledFromEnv(os.Getenv("PC_EVAL_REFRESH")) {
 		evalRefresher := appeval.NewRefresher(getRankingsUC, evalStore, appeval.DefaultTimeframes)
+		evalRefresher.SetTrendAlgo(string(trendAlgo))
+		evalRefresher.SetCompressionAlgo(string(compAlgo))
 		evalRefresher.SetLock(infraeval.NewRedisRefreshLock(redisClient), hostnameOr("api"))
 		backgroundWG.Add(1)
 		go func() {
@@ -608,7 +722,7 @@ func main() {
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()
-		volatilityReloadLoop(socialCtx, volatilityHandler, time.Hour)
+		volatilityReloadLoop(socialCtx, volatilityHandler, seasonalityProvider, time.Hour)
 	}()
 	log.Println("[main] Volatility profile periodic reload started (interval=1h)")
 
@@ -646,6 +760,7 @@ func main() {
 		log.Println("[main] AUTH_ENFORCE not set — device auth middleware running in LOG-ONLY mode (unauthenticated requests are allowed through and logged, not rejected)")
 	}
 	authMW := middleware.RequireAuth(credentialStore, authEnforce)
+	replayMW := middleware.RequireReplayAccess(credentialStore, subscriptionSvc)
 
 	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	fcmProjectID := os.Getenv("FCM_PROJECT_ID")
@@ -675,6 +790,13 @@ func main() {
 	}
 	log.Println("[main] Notification config store initialized")
 
+	// --- Watchlist store (symbols + transition-alert dedup state) ---
+	watchlistStore, err := infrawatchlist.NewSQLiteStore(deviceStore.DB())
+	if err != nil {
+		log.Fatalf("[main] watchlist store: %v", err)
+	}
+	log.Println("[main] Watchlist store initialized")
+
 	// --- Notification engine (broadcast: market, setup, macro, news) ---
 	if fcmCredsPath != "" {
 		fcmForBroadcast, err := infrasocial.NewFCMNotifier(fcmCredsPath, fcmProjectID)
@@ -701,6 +823,13 @@ func main() {
 			)
 			notifyScheduler.SetConfigStore(notifConfigStore)
 			notifyScheduler.SetSubscriptionChecker(subscriptionSvc)
+			notifyScheduler.SetWatchlistProvider(watchlistStore)
+			notifyScheduler.SetRegimeStackProvider(mtfService)
+			notifyScheduler.SetWatchlistStateStore(watchlistStore)
+			notifyScheduler.SetEvaluationStore(evalStore)
+			notifyScheduler.SetTrendAlgo(string(trendAlgo))
+			notifyScheduler.SetCompressionAlgo(string(compAlgo))
+			log.Println("[main] Watchlist transition alerts wired into scheduler")
 			backgroundWG.Add(1)
 			go func() {
 				defer backgroundWG.Done()
@@ -718,9 +847,17 @@ func main() {
 		}
 	})
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
-	mux.Handle("/api/rankings", adhttp.NewRankingsV2Handler(rankingsUC))
+	rankingsHandler := adhttp.NewRankingsV2Handler(rankingsUC)
+	rankingsHandler.SetMTFCalculator(mtfService)
+	mux.Handle("/api/rankings", replayMW(rankingsHandler))
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
-	mux.Handle("/api/symbol/", adhttp.NewSymbolDetailHandler(getSymbolDetailUC))
+	symbolRouter := adhttp.NewSymbolRouter(
+		adhttp.NewSymbolDetailHandler(getSymbolDetailUC),
+		adhttp.NewMTFHandler(mtfService),
+	)
+	planSvc := plan.NewService(candleRepo)
+	symbolRouter.SetPlanHandler(adhttp.NewPlanHandler(planSvc))
+	mux.Handle("/api/symbol/", symbolRouter)
 	mux.Handle("/api/v1/fear-greed", adhttp.NewFearGreedHandler(fearGreedUC))
 	mux.Handle("/api/news", adhttp.NewNewsHandler(newsUC))
 	mux.Handle("/api/news/", adhttp.NewNewsHandler(newsUC))
@@ -770,10 +907,14 @@ func main() {
 	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseRoute(verifyPurchaseUC, credentialStore))
 	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
-	mux.Handle("/api/market/composite", compositeHandler)
-	mux.Handle("/api/market/regime", regimeHandler)
-	mux.Handle("/api/market/regime/history", regimeHistoryHandler)
-	mux.Handle("/api/market/transition", transitionHandler)
+	mux.Handle("/api/market/composite", replayMW(compositeHandler))
+	if sectorsHandler != nil {
+		mux.Handle("/api/market/sectors", sectorsHandler)
+		log.Println("[main] /api/market/sectors endpoint registered")
+	}
+	mux.Handle("/api/market/regime", replayMW(regimeHandler))
+	mux.Handle("/api/market/regime/history", replayMW(regimeHistoryHandler))
+	mux.Handle("/api/market/transition", replayMW(transitionHandler))
 	mux.Handle("/api/token/", tokenRouter)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
@@ -804,6 +945,11 @@ func main() {
 	// Notification config endpoint
 	mux.Handle("/api/notification/config", authMW(adhttp.NewNotificationConfigHandler(notifConfigStore)))
 	log.Println("[main] /api/notification/config endpoint registered")
+
+	// Watchlist endpoint — hard-enforced auth regardless of AUTH_ENFORCE,
+	// see adhttp.NewWatchlistRoute's doc.
+	mux.Handle("/api/watchlist", adhttp.NewWatchlistRoute(watchlistStore, credentialStore))
+	log.Println("[main] /api/watchlist endpoint registered")
 
 	// Volatility profile endpoint (handler constructed earlier, alongside
 	// the setup engine's SeasonalityProvider wiring — PR-082)
@@ -913,12 +1059,15 @@ func hostnameOr(fallback string) string {
 	return fallback
 }
 
-// volatilityReloadLoop periodically calls h.Reload() until ctx is done, so
-// an out-of-band vol_aggregate re-run is eventually picked up without
-// requiring a server restart — see PR-082 CR follow-up. Reload errors
-// (e.g. the file briefly missing mid-write) are logged, not fatal: the
-// handler keeps serving its last-good cached snapshot either way.
-func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, interval time.Duration) {
+// volatilityReloadLoop periodically reloads the market-wide profile and any
+// cached sector profiles until ctx is done, so an out-of-band vol_aggregate
+// re-run is eventually picked up without a server restart (PR-082 / PR-108).
+func volatilityReloadLoop(
+	ctx context.Context,
+	h *adhttp.VolatilityHandler,
+	seasonality *adhttp.VolatilitySeasonalityProvider,
+	interval time.Duration,
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -928,6 +1077,9 @@ func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, inte
 		case <-ticker.C:
 			if err := h.Reload(); err != nil {
 				log.Printf("[main] volatility profile reload failed: %v", err)
+			}
+			if seasonality != nil {
+				seasonality.ReloadSectors()
 			}
 		}
 	}

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"log"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/singleflight"
 
 	appmarket "pano_chart/backend/application/market"
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -17,10 +19,12 @@ import (
 // RankingsEvaluationProvider adapts RankingsUseCase to EvaluationProvider,
 // preferring the evaluation store when fresh (PR-089b).
 type RankingsEvaluationProvider struct {
-	rankings usecases.RankingsUseCase
-	store    ports.EvaluationStore // optional; nil → always compute
-	now      func() time.Time
-	sf       singleflight.Group
+	rankings        usecases.RankingsUseCase
+	store           ports.EvaluationStore // optional; nil → always compute
+	trendAlgo       string
+	compressionAlgo string
+	now             func() time.Time
+	sf              singleflight.Group
 	// fallbackEnter is invoked when entering computeFromRankings (tests:
 	// wait until all siblings have joined before releasing the flight).
 	fallbackEnter func()
@@ -29,14 +33,30 @@ type RankingsEvaluationProvider struct {
 // NewRankingsEvaluationProvider constructs the adapter.
 func NewRankingsEvaluationProvider(r usecases.RankingsUseCase) *RankingsEvaluationProvider {
 	return &RankingsEvaluationProvider{
-		rankings: r,
-		now:      time.Now,
+		rankings:        r,
+		trendAlgo:       domain.DefaultTrendAlgo,
+		compressionAlgo: domain.DefaultCompressionAlgo,
+		now:             time.Now,
 	}
 }
 
 // SetStore attaches the evaluation store (optional).
 func (p *RankingsEvaluationProvider) SetStore(store ports.EvaluationStore) {
 	p.store = store
+}
+
+// SetTrendAlgo sets the expected EvaluationSnapshot.TrendAlgo for store hits
+// and stamps fallback snapshots from rankings.
+func (p *RankingsEvaluationProvider) SetTrendAlgo(algo string) {
+	mode, _ := usecases.ParseTrendAlgo(algo)
+	p.trendAlgo = string(mode)
+}
+
+// SetCompressionAlgo sets the expected EvaluationSnapshot.CompressionAlgo for
+// store hits and stamps fallback snapshots (PR-105).
+func (p *RankingsEvaluationProvider) SetCompressionAlgo(algo string) {
+	mode, _ := usecases.ParseCompressionAlgo(algo)
+	p.compressionAlgo = string(mode)
 }
 
 // SetNow overrides the clock (tests).
@@ -65,7 +85,8 @@ func (p *RankingsEvaluationProvider) GetLatestEvaluations(ctx context.Context, t
 		return nil, err
 	}
 	tfKey := tf.String()
-	if p.store != nil {
+	// Live store is "now" — never serve it for replay (PR-112a).
+	if _, ok := replay.AsOf(ctx); !ok && p.store != nil {
 		evals, hit, err := p.readStore(ctx, tf, tfKey, nowFn)
 		if err != nil {
 			return nil, err
@@ -101,7 +122,7 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 		log.Printf("[eval] provider reason=empty tf=%s", timeframe)
 		return nil, false, nil
 	}
-	if !algoVersionOK(evals) {
+	if !algoVersionOK(evals, p.trendAlgo, p.compressionAlgo) {
 		log.Printf("[eval] provider reason=algo tf=%s", timeframe)
 		return nil, false, nil
 	}
@@ -114,9 +135,9 @@ func (p *RankingsEvaluationProvider) readStore(ctx context.Context, tf domain.Ti
 	return evals, true, nil
 }
 
-func algoVersionOK(evals []domain.EvaluationSnapshot) bool {
+func algoVersionOK(evals []domain.EvaluationSnapshot, wantTrendAlgo, wantCompressionAlgo string) bool {
 	for _, e := range evals {
-		if e.AlgoVersion != domain.AlgoVersion {
+		if !domain.EvaluationIdentityOK(e.AlgoVersion, e.TrendAlgo, wantTrendAlgo, e.CompressionAlgo, wantCompressionAlgo) {
 			return false
 		}
 	}
@@ -128,16 +149,25 @@ func (p *RankingsEvaluationProvider) computeFromRankings(ctx context.Context, tf
 	// at EvaluationStaleAfter (or cold store) does not stampede rankings.
 	// DoChan + select: cancelled callers return immediately while the shared
 	// flight continues (same pattern as RedisCachedComposite.CalculateTape).
-	ch := p.sf.DoChan(timeframe, func() (interface{}, error) {
+	// Replay flights are keyed by asOf so they never share a live computation.
+	flightKey := timeframe
+	var asOf *time.Time
+	if t, ok := replay.AsOf(ctx); ok {
+		asOf = &t
+		flightKey = timeframe + ":asOf:" + strconv.FormatInt(t.Unix(), 10)
+	}
+	ch := p.sf.DoChan(flightKey, func() (interface{}, error) {
 		workCtx := context.WithoutCancel(ctx)
-		out, err := p.rankings.Execute(workCtx, usecases.GetRankingsRequest{
+		req := usecases.GetRankingsRequest{
 			Timeframe: tf,
 			Sort:      usecases.SortByTotal,
-		})
+			AsOf:      asOf,
+		}
+		out, err := p.rankings.Execute(workCtx, req)
 		if err != nil {
 			return nil, err
 		}
-		return appmarket.SnapshotsFromRankings(out.Results, timeframe, time.Time{}), nil
+		return appmarket.SnapshotsFromRankings(out.Results, timeframe, time.Time{}, p.trendAlgo, p.compressionAlgo), nil
 	})
 	// Signal after DoChan so tests can wait until every sibling has joined
 	// the flight before releasing Execute.

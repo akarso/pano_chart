@@ -23,7 +23,7 @@ func TestSQLiteRepository_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -88,13 +88,72 @@ func TestSQLiteRepository_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteRepository_QueryUnlimitedOldestFirst(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	const n = 520
+	for i := 0; i < n; i++ {
+		if err := repo.Append(context.Background(), domainsignal.Signal{
+			ID: fmt.Sprintf("s%04d", i), Kind: domainsignal.KindSetup,
+			Symbol: "BTCUSDT", Timeframe: "1h", Label: "range",
+			Score: 0.6, Price: 100, ATR: 1,
+			Context:   map[string]float64{"trend": 0.1, "regime_code": 0},
+			EmittedAt: base.Add(time.Duration(i) * time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Default Limit 0 → 500 newest.
+	capped, err := repo.Query(context.Background(), domainsignal.Filter{Kind: domainsignal.KindSetup, Limit: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 500 {
+		t.Fatalf("default cap len=%d want 500", len(capped))
+	}
+	// Export path: unlimited + oldest first.
+	all, err := repo.Query(context.Background(), domainsignal.Filter{
+		Kind: domainsignal.KindSetup, Limit: -1, OldestFirst: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != n {
+		t.Fatalf("unlimited len=%d want %d", len(all), n)
+	}
+	if all[0].Signal.ID != "s0000" || all[n-1].Signal.ID != "s0519" {
+		t.Fatalf("order: first=%s last=%s", all[0].Signal.ID, all[n-1].Signal.ID)
+	}
+	// Offset pagination for export pages.
+	page, err := repo.Query(context.Background(), domainsignal.Filter{
+		Kind: domainsignal.KindSetup, Limit: 100, Offset: 500, OldestFirst: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 20 {
+		t.Fatalf("offset page len=%d want 20", len(page))
+	}
+	if page[0].Signal.ID != "s0500" {
+		t.Fatalf("offset first=%s want s0500", page[0].Signal.ID)
+	}
+}
+
 func TestSQLiteRepository_ChronologicalOrderAcrossSubsecond(t *testing.T) {
 	// Regression: variable-width RFC3339Nano text ordered "…00Z" after "…00.1Z".
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +197,7 @@ func TestSQLiteRepository_MigratesLegacyTextTimestampsWithOutcomes(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +276,7 @@ func TestEmitter_DedupWithinCandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +348,7 @@ func TestEmitter_ConcurrentSameKeySingleRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -325,7 +384,7 @@ func TestEmitter_CanceledContextStillPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -347,7 +406,7 @@ func TestEmitter_SkipsZeroPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +425,7 @@ func TestEmitter_AllowsZeroATR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -396,7 +455,7 @@ func TestRegimeWriter_EmitsOnlyOnChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -431,7 +490,7 @@ func TestRegimeWriter_SameTFSerialized(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -478,7 +537,7 @@ func TestRegimeWriter_AppendFailureDoesNotAdvanceLast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -499,7 +558,7 @@ func TestRegimeWriter_SeedPreventsColdStartReemit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)
@@ -526,7 +585,7 @@ func TestRegimeWriter_LazyLookupPreventsColdStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	repo, err := infrasignal.NewSQLiteRepositoryFromDB(db)
 	if err != nil {
 		t.Fatal(err)

@@ -114,27 +114,37 @@ func (p *symbolBars) ensureOrdered() {
 
 // CalculateTape produces both composite paths and synthetic OHLCV series.
 func (s *CompositeIndexService) CalculateTape(ctx context.Context, timeframe string, limit int) (CompositeTape, error) {
-	tf, err := domain.NewTimeframe(timeframe)
+	tf, paths, err := s.loadSymbolBars(ctx, timeframe, limit)
 	if err != nil {
 		return CompositeTape{}, err
 	}
-	if limit <= 0 {
-		limit = 200
-	}
-
-	symbols, err := s.provider.Symbols(ctx)
-	if err != nil {
-		return CompositeTape{}, err
-	}
-	if len(symbols) == 0 {
-		return emptyTape(timeframe, 0), nil
-	}
-
-	paths := s.fetchSymbolBars(ctx, symbols, tf, limit)
 	if len(paths) == 0 {
 		return emptyTape(timeframe, 0), nil
 	}
 	return assembleTape(timeframe, tf, paths, limit), nil
+}
+
+// loadSymbolBars fans out candle fetches once for the filtered universe.
+func (s *CompositeIndexService) loadSymbolBars(
+	ctx context.Context,
+	timeframe string,
+	limit int,
+) (domain.Timeframe, map[string]*symbolBars, error) {
+	tf, err := domain.NewTimeframe(timeframe)
+	if err != nil {
+		return tf, nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	symbols, err := s.provider.Symbols(ctx)
+	if err != nil {
+		return tf, nil, err
+	}
+	if len(symbols) == 0 {
+		return tf, map[string]*symbolBars{}, nil
+	}
+	return tf, s.fetchSymbolBars(ctx, symbols, tf, limit), nil
 }
 
 func emptyTape(timeframe string, n int) CompositeTape {

@@ -48,7 +48,7 @@ class ReliabilityChip extends StatelessWidget {
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              reliabilityChipLabel(row),
+              reliabilityChipLabel(row, dense: dense),
               style: TextStyle(
                 color: Colors.white,
                 fontSize: fontSize,

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'dto/rankings_response_dto.dart';
 import 'rankings_api.dart';
+import '../replay/replay_asof.dart';
 
 /// HTTP adapter implementing [RankingsApi] against the backend
 /// `GET /api/rankings` endpoint.
@@ -24,12 +25,17 @@ class HttpRankingsApi implements RankingsApi {
     required int pageSize,
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
   }) async {
     var url = '$baseUrl/api/rankings?timeframe=$timeframe&sort=$sort&page=$page&pageSize=$pageSize&sidewaysAlgo=$sidewaysAlgo';
     if (symbols.isNotEmpty) {
       url += '&symbols=${symbols.join(',')}';
     }
-    final uri = Uri.parse(url);
+    if (mtf) {
+      url += '&mtf=1';
+    }
+    final uri = uriWithAsOf(Uri.parse(url), asOf);
 
     final response = await client.get(uri).timeout(const Duration(seconds: 15));
 

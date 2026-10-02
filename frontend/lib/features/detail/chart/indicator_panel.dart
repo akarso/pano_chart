@@ -150,7 +150,7 @@ class _IndicatorPanelBodyState extends State<_IndicatorPanelBody> {
                     value: _cfg.showBehaviorPanel,
                     onChanged: (v) =>
                         _update(_cfg.copyWith(showBehaviorPanel: v)),
-                    activeColor: const Color(0xFF4DD0E1),
+                    activeThumbColor: const Color(0xFF4DD0E1),
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                 ),
@@ -280,7 +280,7 @@ class _IndicatorRow extends StatelessWidget {
             child: Switch(
               value: enabled,
               onChanged: onToggle,
-              activeColor: color,
+              activeThumbColor: color,
               materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
@@ -311,7 +311,7 @@ class _IndicatorRow extends StatelessWidget {
                 max: maxPeriod.toDouble(),
                 divisions: maxPeriod - minPeriod,
                 label: '$period',
-                activeColor: color.withOpacity(enabled ? 1.0 : 0.3),
+                activeColor: color.withValues(alpha: enabled ? 1.0 : 0.3),
                 inactiveColor: Colors.white12,
                 onChanged: enabled
                     ? (v) => onPeriod(v.round())
