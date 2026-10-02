@@ -1,16 +1,15 @@
 // Command export_dataset writes a CSV of resolved setup signals for offline
 // regime-model training (PR-109).
 //
-// IMPORTANT: Collect training CSVs while scoring.regime_model is heuristic.
-// regime_label is the four-way raw-score argmax at emission (regime_code).
-// Under a learned model that label follows the live classifier — not ground
-// truth for retraining.
+// regime_label is the four-way raw-score argmax stored as regime_code at
+// emission — independent of scoring.regime_model (heuristic or learned).
+// success is the separate outcome grade.
 //
 // Skips: unresolved rows; ExcludedFromHitRate outcome rules; rows missing
 // regime_code or any DefaultRegimeFeatures key (pre-PR-109 / incomplete).
 //
-// Default: kind=setup, oldest-first. Use -max-rows to cap memory on large DBs
-// (0 = unlimited).
+// Default: kind=setup, oldest-first. -max-rows caps eligible written rows
+// (DB load is uncapped so excluded/incomplete rows do not consume the budget).
 //
 //	export_dataset -db ./signals.sqlite -out ./dataset.csv
 package main
@@ -34,7 +33,7 @@ func main() {
 	outPath := flag.String("out", "dataset.csv", "output CSV path")
 	kind := flag.String("kind", "setup", "signal kind filter (default setup; empty = all kinds — incomplete features)")
 	sinceDays := flag.Int("since-days", 0, "only signals emitted in the last N days (0 = all)")
-	maxRows := flag.Int("max-rows", 0, "cap rows loaded from DB (0 = unlimited; loads full join into memory)")
+	maxRows := flag.Int("max-rows", 0, "cap eligible written rows (0 = unlimited); DB query is always uncapped")
 	flag.Parse()
 
 	if *kind == "" {
@@ -48,11 +47,9 @@ func main() {
 	}
 	defer func() { _ = repo.Close() }()
 
-	limit := -1
-	if *maxRows > 0 {
-		limit = *maxRows
-	}
-	filter := domainsignal.Filter{Limit: limit, OldestFirst: true}
+	// Always load uncapped; apply -max-rows after eligibility filters so
+	// unresolved / excluded / incomplete rows cannot exhaust the budget.
+	filter := domainsignal.Filter{Limit: -1, OldestFirst: true}
 	if *kind != "" {
 		filter.Kind = domainsignal.Kind(*kind)
 	}
@@ -103,6 +100,9 @@ func main() {
 			skippedIncomplete++
 			continue
 		}
+		if *maxRows > 0 && written >= *maxRows {
+			break
+		}
 		rec := recordFor(row)
 		if err := w.Write(rec); err != nil {
 			fmt.Fprintf(os.Stderr, "write row: %v\n", err)
@@ -118,7 +118,6 @@ func main() {
 	unlimited := *maxRows <= 0
 	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v oldest_first=true\n",
 		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited)
-	fmt.Fprintf(os.Stderr, "note: collect training CSVs under scoring.regime_model=heuristic so regime_label is independent of a learned classifier\n")
 }
 
 // hasTrainingFeatures requires regime_code and every DefaultRegimeFeatures key.

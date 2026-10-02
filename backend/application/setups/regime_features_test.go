@@ -135,6 +135,12 @@ func TestStructureRegimeCode_IncludesExpansion(t *testing.T) {
 	if structureRegimeCode(0.1, 0.1, 0.9, 0.1) != 2 {
 		t.Fatal("want compression")
 	}
+	if structureRegimeCode(0, 0, 0, 0) != 0 {
+		t.Fatal("all-zero must be sideways, not expansion")
+	}
+	if structureRegimeCode(0.5, 0.5, 0.5, 0.5) != 0 {
+		t.Fatal("four-way tie must stay sideways (strict >)")
+	}
 }
 
 func TestSeriesPriceATR_ShortSeriesFallback(t *testing.T) {

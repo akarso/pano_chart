@@ -320,18 +320,20 @@ func setupRegimeFeatures(scores map[string]float64, series domain.CandleSeries) 
 // structureRegimeCode encodes the four-way argmax of raw scores for export
 // training (0=sideways, 1=trend, 2=compression, 3=expansion). Independent of
 // result.Regime, which folds expansion into sideways for setup labels.
+// Strict `>` so ties (including all-zero) keep the earlier class / sideways
+// instead of inventing an expansion (or compression) training label.
 func structureRegimeCode(trend, sideways, compression, expansion float64) float64 {
 	code := 0.0
 	best := sideways
-	if trend >= best {
+	if trend > best {
 		best = trend
 		code = 1
 	}
-	if compression >= best {
+	if compression > best {
 		best = compression
 		code = 2
 	}
-	if expansion >= best {
+	if expansion > best {
 		code = 3
 	}
 	return code

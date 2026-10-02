@@ -1075,10 +1075,10 @@ periods with durations.
 
 **Spec.**
 1. Export tool `cmd/export_dataset`: resolved **setup** signals (default); features from
-   `signal.Context` at emission (four raw scores, ER, VR, ATR pct, RS, alignment);
-   `regime_label` for structure training; `success` is a separate outcome column.
-   **Collect CSVs under `regime_model: heuristic`** so `regime_label` is not the
-   learned model's own output. Query is uncapped (`Limit: -1`) / `-max-rows`, oldest-first.
+   `signal.Context` at emission (four raw scores, ER, VR, ATR pct);
+   `regime_label` is the raw-score structure argmax (independent of
+   `regime_model`); `success` is a separate outcome column.
+   Query is uncapped; `-max-rows` caps eligible written rows.
 2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`
    with one-vs-rest `classes` (plus optional binary `weights`/`bias` for success-only
    notebooks). Shipped stub is `placeholder: true` (not usable for inference).
