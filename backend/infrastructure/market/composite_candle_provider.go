@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	suPorts "pano_chart/backend/application/symbol_universe"
 	"pano_chart/backend/domain"
 )
@@ -37,6 +38,7 @@ func (p *CompositeCandleProvider) Symbols(ctx context.Context) ([]domain.Symbol,
 }
 
 // GetLastNCandles implements metrics.CandleProvider.
+// When ctx carries replay AsOf (PR-112a), returns the window ending at that instant.
 func (p *CompositeCandleProvider) GetLastNCandles(ctx context.Context, symbol domain.Symbol, timeframe domain.Timeframe, n int) (domain.CandleSeries, error) {
-	return p.candleRepo.GetLastNCandles(ctx, symbol, timeframe, n)
+	return replay.FetchCandles(ctx, p.candleRepo, symbol, timeframe, n)
 }

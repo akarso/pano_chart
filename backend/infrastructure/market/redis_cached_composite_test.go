@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"pano_chart/backend/application/market/metrics"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/domain"
 )
 
@@ -316,4 +317,45 @@ func (b *blockingTapeCandleProvider) Symbols(ctx context.Context) ([]domain.Symb
 	b.once.Do(func() { close(b.started) })
 	<-b.release
 	return b.spyTapeCandleProvider.Symbols(ctx)
+}
+
+func TestRedisCachedComposite_AsOfBypassesCache(t *testing.T) {
+	sym := domain.NewSymbolUnsafe("BTCUSDT")
+	tf := domain.Timeframe1h
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	candles := make([]domain.Candle, 3)
+	for i := 0; i < 3; i++ {
+		c := 100.0 + float64(i)
+		candles[i] = domain.NewCandleUnsafe(
+			sym, tf, base.Add(time.Duration(i)*time.Hour),
+			c, c+1, c-1, c, 1000,
+		)
+	}
+	spy := &spyTapeCandleProvider{
+		symbols: []domain.Symbol{sym},
+		candles: map[string][]domain.Candle{"BTCUSDT:1h": candles},
+	}
+	svc := metrics.NewCompositeIndexService(spy, 4)
+	redis := newFakeCompositeRedis()
+	cached := NewRedisCachedComposite(svc, redis, 3*time.Minute, "market_composite_v3")
+
+	if _, err := cached.Calculate(context.Background(), "1h", 3); err != nil {
+		t.Fatal(err)
+	}
+	if redis.setCount != 1 {
+		t.Fatalf("expected live cache write, setCount=%d", redis.setCount)
+	}
+	spy.fetchCalls = 0
+
+	asOf := time.Unix(1_700_000_000, 0).UTC()
+	ctx := replay.WithAsOf(context.Background(), asOf)
+	if _, err := cached.Calculate(ctx, "1h", 3); err != nil {
+		t.Fatal(err)
+	}
+	if spy.fetchCalls == 0 {
+		t.Fatal("asOf must bypass cache and refetch")
+	}
+	if redis.setCount != 1 {
+		t.Fatalf("asOf must not write live cache, setCount=%d", redis.setCount)
+	}
 }

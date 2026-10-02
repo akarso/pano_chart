@@ -6,12 +6,14 @@ import (
 	"log"
 	"math"
 	"sort"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
 	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/ports"
+	"pano_chart/backend/application/replay"
 	appsignal "pano_chart/backend/application/signal"
 	"pano_chart/backend/domain"
 	"pano_chart/backend/domain/scoring" // also used for structural regime detection (compression/breakout)
@@ -104,6 +106,8 @@ type GetRankingsRequest struct {
 	Timeframe    domain.Timeframe
 	Sort         SortMode
 	SidewaysAlgo SidewaysAlgoMode // empty = use default
+	// AsOf, when set, scores against candles ending at this instant (PR-112a).
+	AsOf *time.Time
 }
 
 // RankedResult represents a single symbol in the rankings output.
@@ -260,6 +264,13 @@ func (g *GetRankings) SetRSFilter(f symbolSkipper) {
 // Execute computes the full ranking for the requested sort mode.
 func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (RankingsResult, error) {
 	empty := RankingsResult{Sort: req.Sort, RequestedSort: req.Sort}
+	if req.AsOf == nil {
+		if t, ok := replay.AsOf(ctx); ok {
+			req.AsOf = &t
+		}
+	} else {
+		ctx = replay.WithAsOf(ctx, *req.AsOf)
+	}
 
 	symbols, err := g.universe.Symbols(ctx, g.exchangeInfoURL, g.tickerURL)
 	if err != nil {
@@ -274,10 +285,16 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		}, nil
 	}
 
-	volMap, err := g.volumes.Volumes(ctx)
-	if err != nil {
-		return empty, fmt.Errorf("volume fetch failed: %w", err)
+	var volMap map[string]float64
+	if req.AsOf == nil {
+		var err error
+		volMap, err = g.volumes.Volumes(ctx)
+		if err != nil {
+			return empty, fmt.Errorf("volume fetch failed: %w", err)
+		}
 	}
+	// Replay has no historical 24h ticker — leave volume unset (0) rather than
+	// pairing today's activity with as-of scores (PR-112a).
 
 	scored, err := g.fetchAndScoreSymbols(ctx, symbols, req)
 	if err != nil {
@@ -318,7 +335,7 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 		grp.Go(func() error {
 			defer sem.Release(1)
 
-			cs, err := g.candleRepo.GetLastNCandles(gCtx, sym, req.Timeframe, g.candleFetchN)
+			cs, err := replay.FetchCandles(gCtx, g.candleRepo, sym, req.Timeframe, g.candleFetchN)
 			if err != nil {
 				return nil // skip symbols with fetch errors
 			}
@@ -361,10 +378,12 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 			}
 
 			if g.snapshotLogger != nil {
-				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
-				snap.TrendAlgo = g.trendAlgo
-				snap.CompressionAlgo = string(g.compressionAlgo)
-				_ = g.snapshotLogger.Log(snap)
+				if _, replay := replay.AsOf(gCtx); !replay {
+					snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
+					snap.TrendAlgo = g.trendAlgo
+					snap.CompressionAlgo = string(g.compressionAlgo)
+					_ = g.snapshotLogger.Log(snap)
+				}
 			}
 			return nil
 		})
@@ -428,6 +447,10 @@ func buildRankedRows(scored []scoredSymbol, volMap map[string]float64) []RankedR
 func (g *GetRankings) finalizeRankings(ctx context.Context, req GetRankingsRequest, results []RankedResult, universeN int) RankingsResult {
 	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, universeN)
 	sortMode := effectiveSort(req.Sort, rs.available)
+	// Replay volumes are unset — do not pretend to sort by today's ticker.
+	if req.AsOf != nil && sortMode == SortByVolume {
+		sortMode = SortByTotal
+	}
 
 	sortResults(results, sortMode)
 	assignPositionPercentiles(results)
@@ -589,6 +612,9 @@ func (g *GetRankings) emitBadgeSignals(ctx context.Context, timeframe string, re
 // on cache miss.
 func EmitBadgeSignals(ctx context.Context, emitter ports.SignalEmitter, timeframe string, results []RankedResult) {
 	if emitter == nil {
+		return
+	}
+	if _, ok := replay.AsOf(ctx); ok {
 		return
 	}
 	for _, r := range results {

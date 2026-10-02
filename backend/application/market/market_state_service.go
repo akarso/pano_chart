@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pano_chart/backend/application/market/metrics"
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/domain"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -266,9 +267,12 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		}
 	}
 
+	// Replay must not mutate live regime history (PR-112a).
 	if s.observer != nil && ctx.Err() == nil {
-		if err := s.observer.Update(timeframe, mkt.Regime(dominant), bias, time.Now().Unix()); err != nil {
-			log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
+		if _, replay := replay.AsOf(ctx); !replay {
+			if err := s.observer.Update(timeframe, mkt.Regime(dominant), bias, time.Now().Unix()); err != nil {
+				log.Printf("[market] regime observer update failed for %s: %v", timeframe, err)
+			}
 		}
 	}
 

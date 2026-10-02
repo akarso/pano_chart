@@ -519,3 +519,49 @@ func TestGetRankings_EmitsBadgeLabelsAndRangeContext(t *testing.T) {
 		}
 	}
 }
+
+func TestGetRankings_AsOfSkipsBadgeEmit(t *testing.T) {
+	tf := domain.NewTimeframeUnsafe("1h")
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	a, b := domain.NewSymbolUnsafe("AAAUSDT"), domain.NewSymbolUnsafe("BBBUSD")
+	mk := func(sym domain.Symbol, start float64) domain.CandleSeries {
+		cs := make([]domain.Candle, 25)
+		for i := range cs {
+			cs[i] = mustNewCandleAt(sym, tf, base.Add(time.Duration(i)*time.Hour), start+float64(i))
+		}
+		s, _ := domain.NewCandleSeries(sym, tf, cs)
+		return s
+	}
+	weights := []usecases.ScoreWeight{
+		{Calculator: &stubCalculator{name: "Trend Predictability", scores: map[string]float64{"AAAUSDT": 0.9, "BBBUSD": 0.1}}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Sideways Consistency", scores: map[string]float64{"AAAUSDT": 0.1, "BBBUSD": 0.9}}, Weight: 1},
+		{Calculator: &stubCalculator{name: "Gain/Loss", scores: map[string]float64{"AAAUSDT": 0.2, "BBBUSD": 0.2}}, Weight: 1},
+	}
+	cap := &capturingBadgeEmitter{}
+	uc := usecases.NewGetRankings(
+		&fakeUniverse{symbols: []domain.Symbol{a, b}},
+		usecases.NewDefaultRankSymbols(weights),
+		&fakeVolumes{vols: map[string]float64{"AAAUSDT": 1, "BBBUSD": 1}},
+		NewFakeCandleRepository(map[domain.Symbol]domain.CandleSeries{a: mk(a, 100), b: mk(b, 50)}, nil),
+		"http://fake/ei", "http://fake/t",
+		20, usecases.SidewaysAlgoV1, weights, 4, nil,
+	)
+	uc.SetSignalEmitter(cap)
+	asOf := base.Add(24 * time.Hour)
+	if _, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+		Timeframe: tf, Sort: usecases.SortByTotal, AsOf: &asOf,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cap.sigs) != 0 {
+		t.Fatalf("replay must not emit badges, got %d", len(cap.sigs))
+	}
+	// Live path still emits when badges are assigned.
+	cap.sigs = nil
+	if _, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{Timeframe: tf, Sort: usecases.SortByTotal}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cap.sigs) == 0 {
+		t.Fatal("expected live badge emits for control")
+	}
+}

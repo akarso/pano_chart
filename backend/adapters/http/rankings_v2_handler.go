@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"pano_chart/backend/application/replay"
 	"pano_chart/backend/application/usecases"
 	"pano_chart/backend/domain"
 )
@@ -91,13 +92,26 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// --- Parse mtf (optional, default false) ---
 	mtfRequested := r.URL.Query().Get("mtf") == "1"
 
-	// --- Execute use case ---
+	// --- Execute use case (asOf: middleware validates/injects on production routes) ---
 	req := usecases.GetRankingsRequest{
 		Timeframe:    tf,
 		Sort:         sortMode,
 		SidewaysAlgo: sidewaysAlgo,
 	}
-	out, err := h.useCase.Execute(r.Context(), req)
+	if raw := r.URL.Query().Get("asOf"); raw != "" {
+		asOf, asOfErr := replay.ParseUnixSeconds(raw)
+		if asOfErr != nil {
+			writeRankingsError(w, "invalid asOf", http.StatusBadRequest)
+			return
+		}
+		if err := replay.ValidateAsOf(*asOf, time.Now().UTC()); err != nil {
+			writeRankingsError(w, "invalid asOf", http.StatusBadRequest)
+			return
+		}
+		req.AsOf = asOf
+	}
+	ctx := r.Context()
+	out, err := h.useCase.Execute(ctx, req)
 	if err != nil {
 		writeRankingsError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -137,8 +151,8 @@ func (h *RankingsV2Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for i, row := range pageSlice {
 		respResults[i] = RankedResultToV2(row)
 	}
-	if mtfRequested && h.mtf != nil {
-		applyMTFOverlays(r.Context(), respResults, h.mtf, pageSlice)
+	if mtfRequested && h.mtf != nil && req.AsOf == nil {
+		applyMTFOverlays(ctx, respResults, h.mtf, pageSlice)
 	}
 
 	precision := 0

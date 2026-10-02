@@ -760,6 +760,7 @@ func main() {
 		log.Println("[main] AUTH_ENFORCE not set — device auth middleware running in LOG-ONLY mode (unauthenticated requests are allowed through and logged, not rejected)")
 	}
 	authMW := middleware.RequireAuth(credentialStore, authEnforce)
+	replayMW := middleware.RequireReplayAccess(credentialStore, subscriptionSvc)
 
 	fcmCredsPath := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 	fcmProjectID := os.Getenv("FCM_PROJECT_ID")
@@ -848,7 +849,7 @@ func main() {
 	mux.Handle("/api/v1/candles", adhttp.NewGetCandleSeriesHandler(getCandleUC))
 	rankingsHandler := adhttp.NewRankingsV2Handler(rankingsUC)
 	rankingsHandler.SetMTFCalculator(mtfService)
-	mux.Handle("/api/rankings", rankingsHandler)
+	mux.Handle("/api/rankings", replayMW(rankingsHandler))
 	mux.Handle("/api/overview", adhttp.NewOverviewHandler(overviewUC))
 	symbolRouter := adhttp.NewSymbolRouter(
 		adhttp.NewSymbolDetailHandler(getSymbolDetailUC),
@@ -906,14 +907,14 @@ func main() {
 	mux.Handle("/api/payments/verify", adhttp.NewVerifyPurchaseRoute(verifyPurchaseUC, credentialStore))
 	mux.Handle("/api/subscription/status", authMW(adhttp.NewSubscriptionStatusHandler(subscriptionSvc)))
 	mux.Handle("/api/market/state", marketHandler)
-	mux.Handle("/api/market/composite", compositeHandler)
+	mux.Handle("/api/market/composite", replayMW(compositeHandler))
 	if sectorsHandler != nil {
 		mux.Handle("/api/market/sectors", sectorsHandler)
 		log.Println("[main] /api/market/sectors endpoint registered")
 	}
-	mux.Handle("/api/market/regime", regimeHandler)
-	mux.Handle("/api/market/regime/history", regimeHistoryHandler)
-	mux.Handle("/api/market/transition", transitionHandler)
+	mux.Handle("/api/market/regime", replayMW(regimeHandler))
+	mux.Handle("/api/market/regime/history", replayMW(regimeHistoryHandler))
+	mux.Handle("/api/market/transition", replayMW(transitionHandler))
 	mux.Handle("/api/token/", tokenRouter)
 	log.Println("[main] /api/market/state endpoint registered")
 	log.Println("[main] /api/market/composite endpoint registered")
