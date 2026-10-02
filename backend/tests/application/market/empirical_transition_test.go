@@ -359,7 +359,7 @@ func (b *blockingHistory) GetHistory(ctx context.Context, tf string, _ int) ([]m
 	return b.periods, nil
 }
 
-func TestMatrixCache_CanceledContextMarksStale(t *testing.T) {
+func TestMatrixCache_CanceledRequestDoesNotPoison(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	end := int64(1)
 	seed := make([]mkt.RegimePeriod, 0, 80)
@@ -381,8 +381,50 @@ func TestMatrixCache_CanceledContextMarksStale(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	v := cache.Matrix(ctx, "4h")
-	if !v.Stale {
-		t.Fatal("canceled refresh must mark view stale")
+	if v.Stale {
+		t.Fatal("canceled caller must not poison shared entry as stale")
+	}
+
+	// Healthy sibling after cancel must still be able to refresh / blend.
+	ok := cache.Matrix(context.Background(), "4h")
+	if ok.Stale {
+		t.Fatal("healthy request after cancel must not see poisoned stale flag")
+	}
+}
+
+func TestMatrixCache_CoalescesConcurrentRefresh(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	hist := &blockingHistory{
+		periods: []mkt.RegimePeriod{
+			{Regime: mkt.RegimeTrend, DurationCandles: 10, EndTimestamp: int64Ptr(1)},
+			{Regime: mkt.RegimeSideways, DurationCandles: 10, EndTimestamp: int64Ptr(1)},
+		},
+		blockTF: "4h",
+		started: started,
+		release: release,
+	}
+	cache := transition.NewMatrixCache(hist, time.Minute, 100)
+
+	const n = 5
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = cache.Matrix(context.Background(), "4h")
+		}()
+	}
+	<-started
+	time.Sleep(50 * time.Millisecond) // let siblings join the flight
+	close(release)
+	wg.Wait()
+
+	hist.mu.Lock()
+	calls := hist.calls
+	hist.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("expected 1 coalesced GetHistory, got %d", calls)
 	}
 }
 
@@ -394,6 +436,10 @@ func TestTrailingMergedAge_SilentIndecisiveSideways(t *testing.T) {
 	}
 	if got := transition.TrailingMergedAge(periods); got != 16 {
 		t.Fatalf("merged age=%d want 16", got)
+	}
+	prefix, reg := transition.TrailingMergedPrefix(periods)
+	if prefix != 8 || reg != mkt.RegimeSideways {
+		t.Fatalf("prefix=%d reg=%q want 8 sideways", prefix, reg)
 	}
 	if transition.ClassifyAge(8, 20) != transition.AgeMid {
 		t.Fatal("unmerged 8/20 should be Mid")
@@ -432,7 +478,7 @@ func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
 		},
 	}
 	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
-	svc.SetAgeProvider(fixedAge(8)) // unmerged open period only
+	svc.SetAgeProvider(fixedAge(8)) // live open period; prefix 8 → merged 16
 	svc.SetMatrixCache(transition.NewMatrixCache(&stubHistory{periods: live}, time.Minute, 500))
 
 	result, err := svc.Calculate(context.Background(), "4h")
@@ -445,6 +491,65 @@ func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
 	// Mature bucket (merged 16) prefers expansion; Mid (8) would prefer trend.
 	if result.Probabilities.Expansion <= result.Probabilities.Trend {
 		t.Fatalf("expected mature expansion row from merged age, got %+v", result.Probabilities)
+	}
+}
+
+func TestTransitionService_StaleSkipsMergedPrefix(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	end := int64(1)
+	// Seed so Mid(8)→trend and Mature(16)→expansion; live ends silent+indecisive.
+	periods := make([]mkt.RegimePeriod, 0, 80)
+	for i := 0; i < 40; i++ {
+		periods = append(periods,
+			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 8, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeTrend, DurationCandles: 8, EndTimestamp: &end},
+		)
+	}
+	for i := 0; i < 40; i++ {
+		periods = append(periods,
+			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 16, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 8, EndTimestamp: &end},
+		)
+	}
+	live := append(append([]mkt.RegimePeriod{}, periods...),
+		mkt.RegimePeriod{Regime: mkt.RegimeSilent, DurationCandles: 8, EndTimestamp: &end},
+		mkt.RegimePeriod{Regime: mkt.RegimeIndecisive, DurationCandles: 8, EndTimestamp: nil},
+	)
+	hist := &stubHistory{periods: live}
+	cache := transition.NewMatrixCache(hist, time.Minute, 500)
+	cache.SetClock(func() time.Time { return now })
+
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateSideways,
+			Breadth:             mkt.Breadth{Sideways: 1},
+			VolatilityExpansion: 1.0,
+		},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedAge(8))
+	svc.SetMatrixCache(cache)
+
+	ok, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok.Source != "blend" || ok.Probabilities.Expansion <= ok.Probabilities.Trend {
+		t.Fatalf("fresh merged lookup failed: %+v", ok)
+	}
+
+	now = now.Add(2 * time.Minute)
+	hist.err = context.DeadlineExceeded
+	stale, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Source != "heuristic" {
+		t.Fatalf("stale must not blend, source=%q", stale.Source)
+	}
+	// Horizon must reflect live age (8), not frozen merged 16.
+	if stale.Horizon == "" || stale.Horizon[:1] != "8" {
+		t.Fatalf("stale horizon should use live age 8, got %q", stale.Horizon)
 	}
 }
 

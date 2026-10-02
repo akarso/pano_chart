@@ -71,22 +71,24 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	volSlope := summary.VolatilityExpansion - 1.0
 
 	// Derive regime age from history; fall back to 12 if unavailable.
-	regimeAge := 12
+	liveAge := 12
 	if s.ageProvider != nil {
 		if age, err := s.ageProvider.CurrentAge(timeframe); err == nil && age > 0 {
-			regimeAge = age
+			liveAge = age
 		}
 	}
+	regimeAge := liveAge
 
 	currentRegime := mkt.Regime(summary.State)
 
 	var view MatrixView
 	if s.matrixCache != nil {
 		view = s.matrixCache.Matrix(ctx, timeframe)
-		// Prefer trailing merged age only when it describes the current regime
-		// (silent/indecisive/sideways), so Lookup buckets match BuildMatrix.
-		if view.MergedAge > 0 && view.MergedRegime == currentRegime {
-			regimeAge = view.MergedAge
+		// Closed silent/indecisive/sideways predecessors from the matrix
+		// snapshot + live open-period age. Skip when stale so a failed
+		// refresh cannot freeze horizon/probs on a 15m-old age.
+		if !view.Stale && view.MergedRegime == currentRegime && view.MergedPrefix > 0 {
+			regimeAge = view.MergedPrefix + liveAge
 		}
 	}
 

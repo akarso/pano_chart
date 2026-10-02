@@ -246,6 +246,21 @@ func TrailingMerged(periods []mkt.RegimePeriod) (age int, regime mkt.Regime) {
 	return sum, last
 }
 
+// TrailingMergedPrefix is the trailing same-regime sum excluding the last
+// (open) period. Callers add the live CurrentAge so Lookup age stays fresh
+// while closed predecessor durations come from cached history.
+func TrailingMergedPrefix(periods []mkt.RegimePeriod) (prefix int, regime mkt.Regime) {
+	age, reg := TrailingMerged(periods)
+	if len(periods) == 0 || reg == "" {
+		return 0, reg
+	}
+	last := periods[len(periods)-1].DurationCandles
+	if last > age {
+		return 0, reg
+	}
+	return age - last, reg
+}
+
 // WeightFromSamples is clamp(n/100, 0, 0.7).
 func WeightFromSamples(n int) float64 {
 	if n <= 0 {

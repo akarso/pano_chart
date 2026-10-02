@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	mkt "pano_chart/backend/domain/market"
 )
 
@@ -16,16 +18,17 @@ type PeriodHistory interface {
 // MatrixView is the cache result for a timeframe.
 type MatrixView struct {
 	Matrix       Matrix
-	MergedAge    int        // trailing merged core-regime age from last successful periods
+	MergedPrefix int        // trailing same-regime candles excluding the open period
 	MergedRegime mkt.Regime // core regime of that trailing run (empty if none)
 	Stale        bool       // true when serving a matrix after a failed refresh
 }
 
 // MatrixCache rebuilds an empirical Matrix per timeframe on a TTL.
 // Rebuilds are keyed per timeframe so one TF's DB I/O does not block others.
-// History fetches run without holding the slot lock and honour ctx cancellation.
-// Failed refreshes mark the prior matrix stale (no blend) and negative-cache
-// the failure for the TTL so outages do not retry every request.
+// Concurrent misses coalesce via singleflight; the shared fetch uses
+// WithoutCancel so one aborted client cannot abort siblings or poison the
+// cache. Failed refreshes mark the prior matrix stale (no blend) and
+// negative-cache the failure for the TTL so outages do not retry every request.
 type MatrixCache struct {
 	history PeriodHistory
 	limit   int
@@ -34,6 +37,7 @@ type MatrixCache struct {
 
 	mu    sync.Mutex
 	slots map[string]*matrixSlot
+	group singleflight.Group
 }
 
 type matrixSlot struct {
@@ -43,7 +47,7 @@ type matrixSlot struct {
 
 type matrixCacheEntry struct {
 	matrix    Matrix
-	periods   []mkt.RegimePeriod // last successful fetch (for merged age)
+	periods   []mkt.RegimePeriod // last successful fetch (for merged-age prefix)
 	builtAt   time.Time
 	stale     bool
 	hasMatrix bool
@@ -93,6 +97,38 @@ func (c *MatrixCache) clock() func() time.Time {
 	return c.now
 }
 
+func viewFromPeriods(m Matrix, periods []mkt.RegimePeriod, stale bool) MatrixView {
+	prefix, reg := TrailingMergedPrefix(periods)
+	return MatrixView{
+		Matrix:       m,
+		MergedPrefix: prefix,
+		MergedRegime: reg,
+		Stale:        stale,
+	}
+}
+
+func (c *MatrixCache) hotView(slot *matrixSlot, now time.Time) (MatrixView, bool) {
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	ent := slot.entry
+	if ent.builtAt.IsZero() || now.Sub(ent.builtAt) >= c.ttl {
+		return MatrixView{}, false
+	}
+	return viewFromPeriods(ent.matrix, ent.periods, ent.stale), true
+}
+
+func (c *MatrixCache) priorView(slot *matrixSlot) MatrixView {
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	ent := slot.entry
+	if !ent.hasMatrix {
+		return MatrixView{Stale: true}
+	}
+	// Caller aborted: serve prior matrix without marking the slot stale so
+	// healthy siblings can still blend (or complete an in-flight refresh).
+	return viewFromPeriods(ent.matrix, ent.periods, ent.stale)
+}
+
 // Matrix returns a (possibly cached) empirical matrix for timeframe.
 func (c *MatrixCache) Matrix(ctx context.Context, timeframe string) MatrixView {
 	if c == nil || c.history == nil {
@@ -102,77 +138,63 @@ func (c *MatrixCache) Matrix(ctx context.Context, timeframe string) MatrixView {
 	slot := c.slot(timeframe)
 	nowFn := c.clock()
 
-	slot.mu.Lock()
-	now := nowFn()
-	ent := slot.entry
-	if !ent.builtAt.IsZero() && now.Sub(ent.builtAt) < c.ttl {
-		age, reg := TrailingMerged(ent.periods)
-		view := MatrixView{
-			Matrix:       ent.matrix,
-			MergedAge:    age,
-			MergedRegime: reg,
-			Stale:        ent.stale,
-		}
-		slot.mu.Unlock()
+	if view, ok := c.hotView(slot, nowFn()); ok {
 		return view
 	}
-	slot.mu.Unlock()
 
-	// Fetch without holding the slot lock so other TFs / waiters are not blocked
-	// for the duration of the DB read, and so ctx cancel can abort the wait path.
-	periods, err := c.history.GetHistory(ctx, timeframe, c.limit)
-
-	slot.mu.Lock()
-	defer slot.mu.Unlock()
-	now = nowFn()
-
-	// Another goroutine may have refreshed while we fetched.
-	if !slot.entry.builtAt.IsZero() && now.Sub(slot.entry.builtAt) < c.ttl && !slot.entry.stale {
-		age, reg := TrailingMerged(slot.entry.periods)
-		return MatrixView{
-			Matrix:       slot.entry.matrix,
-			MergedAge:    age,
-			MergedRegime: reg,
-			Stale:        false,
+	ch := c.group.DoChan(timeframe, func() (any, error) {
+		if view, ok := c.hotView(slot, nowFn()); ok {
+			return view, nil
 		}
-	}
 
-	if err != nil || ctx.Err() != nil {
-		// Negative-cache the failure. Keep prior matrix but mark stale so
-		// callers do not blend from unrevalidated history during an outage.
-		if slot.entry.hasMatrix {
-			slot.entry = matrixCacheEntry{
-				matrix:    slot.entry.matrix,
-				periods:   slot.entry.periods,
-				builtAt:   now,
-				stale:     true,
-				hasMatrix: true,
-			}
-			age, reg := TrailingMerged(slot.entry.periods)
-			return MatrixView{
-				Matrix:       slot.entry.matrix,
-				MergedAge:    age,
-				MergedRegime: reg,
-				Stale:        true,
-			}
+		// Detach from any single caller's cancel so one aborted HTTP client
+		// cannot abort (or poison) a shared history read for siblings.
+		periods, err := c.history.GetHistory(context.WithoutCancel(ctx), timeframe, c.limit)
+
+		slot.mu.Lock()
+		defer slot.mu.Unlock()
+		now := nowFn()
+
+		// Another flight may have refreshed while we fetched.
+		if !slot.entry.builtAt.IsZero() && now.Sub(slot.entry.builtAt) < c.ttl && !slot.entry.stale {
+			return viewFromPeriods(slot.entry.matrix, slot.entry.periods, false), nil
 		}
-		slot.entry = matrixCacheEntry{builtAt: now, stale: true}
-		return MatrixView{Stale: true}
-	}
 
-	m := BuildMatrix(periods)
-	slot.entry = matrixCacheEntry{
-		matrix:    m,
-		periods:   append([]mkt.RegimePeriod(nil), periods...),
-		builtAt:   now,
-		stale:     false,
-		hasMatrix: true,
-	}
-	age, reg := TrailingMerged(periods)
-	return MatrixView{
-		Matrix:       m,
-		MergedAge:    age,
-		MergedRegime: reg,
-		Stale:        false,
+		if err != nil {
+			// Storage failure: negative-cache. Keep prior matrix but mark stale
+			// so callers do not blend from unrevalidated history during an outage.
+			if slot.entry.hasMatrix {
+				slot.entry = matrixCacheEntry{
+					matrix:    slot.entry.matrix,
+					periods:   slot.entry.periods,
+					builtAt:   now,
+					stale:     true,
+					hasMatrix: true,
+				}
+				return viewFromPeriods(slot.entry.matrix, slot.entry.periods, true), nil
+			}
+			slot.entry = matrixCacheEntry{builtAt: now, stale: true}
+			return MatrixView{Stale: true}, nil
+		}
+
+		m := BuildMatrix(periods)
+		slot.entry = matrixCacheEntry{
+			matrix:    m,
+			periods:   append([]mkt.RegimePeriod(nil), periods...),
+			builtAt:   now,
+			stale:     false,
+			hasMatrix: true,
+		}
+		return viewFromPeriods(m, periods, false), nil
+	})
+
+	select {
+	case <-ctx.Done():
+		return c.priorView(slot)
+	case res := <-ch:
+		if res.Val == nil {
+			return c.priorView(slot)
+		}
+		return res.Val.(MatrixView)
 	}
 }
