@@ -48,3 +48,16 @@ func (s *Service) CurrentAge(timeframe string) (int, error) {
 	}
 	return latest.DurationCandles, nil
 }
+
+// OpenPeriodStart returns the StartTimestamp of the open (latest) period.
+// Used so transition merged-age prefix only applies to the same open period.
+func (s *Service) OpenPeriodStart(timeframe string) (int64, error) {
+	latest, err := s.repo.GetLatest(timeframe)
+	if err != nil {
+		return 0, err
+	}
+	if latest == nil {
+		return 0, nil
+	}
+	return latest.StartTimestamp, nil
+}

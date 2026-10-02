@@ -25,6 +25,13 @@ type AgeProvider interface {
 	CurrentAge(timeframe string) (int, error)
 }
 
+// openPeriodStarter optionally identifies the live open period so a cached
+// MergedPrefix is only applied when it belongs to the same period (not a
+// same-named regime that started after a flip within the matrix TTL).
+type openPeriodStarter interface {
+	OpenPeriodStart(timeframe string) (int64, error)
+}
+
 // TransitionService orchestrates regime detection and transition-probability
 // calculation.  It is the primary entry point for the HTTP handler.
 type TransitionService struct {
@@ -66,31 +73,10 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		return mkt.MarketTransition{}, fmt.Errorf("transition: regime error: %w", err)
 	}
 
-	// Derive volatility slope from the single-point VolatilityExpansion metric.
-	// A value of 1.0 is neutral; >1 means expansion, <1 compression.
 	volSlope := summary.VolatilityExpansion - 1.0
-
-	// Derive regime age from history; fall back to 12 if unavailable.
-	liveAge := 12
-	if s.ageProvider != nil {
-		if age, err := s.ageProvider.CurrentAge(timeframe); err == nil && age > 0 {
-			liveAge = age
-		}
-	}
-	regimeAge := liveAge
-
+	liveAge := s.liveAge(timeframe)
 	currentRegime := mkt.Regime(summary.State)
-
-	var view MatrixView
-	if s.matrixCache != nil {
-		view = s.matrixCache.Matrix(ctx, timeframe)
-		// Closed silent/indecisive/sideways predecessors from the matrix
-		// snapshot + live open-period age. Skip when stale so a failed
-		// refresh cannot freeze horizon/probs on a 15m-old age.
-		if !view.Stale && view.MergedRegime == currentRegime && view.MergedPrefix > 0 {
-			regimeAge = view.MergedPrefix + liveAge
-		}
-	}
+	view, regimeAge := s.matrixAndAge(ctx, timeframe, currentRegime, liveAge)
 
 	heuristic := s.engine.Calculate(
 		currentRegime,
@@ -99,42 +85,103 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 		regimeAge,
 	)
 
-	probs := heuristic
-	source := "heuristic"
-	var empiricalWeight float64
-	var sampleSize int
-	var pooled bool
-
-	if s.matrixCache != nil && !view.Stale {
-		if look, ok := view.Matrix.Lookup(currentRegime, regimeAge); ok {
-			sampleSize = look.SampleSize
-			pooled = look.Pooled
-			// Blend only when the row actually used is confident (≥ 30 samples).
-			if look.SampleSize >= minBlendSamples {
-				empiricalWeight = WeightFromSamples(look.SampleSize)
-				probs = Blend(look.Probabilities, heuristic, empiricalWeight)
-				source = "blend"
-			}
-		}
-	}
+	probs, source, empiricalWeight, sampleSize, pooled := s.blendEmpirical(view, currentRegime, regimeAge, heuristic)
 
 	s.emitTransitionSignals(ctx, summary.Timeframe, probs)
-
-	horizon := fmt.Sprintf("%d candles", regimeAge)
-	if h := HumanDuration(summary.Timeframe, regimeAge); h != "" {
-		horizon = fmt.Sprintf("%d candles (~%s)", regimeAge, h)
-	}
 
 	return mkt.MarketTransition{
 		Timeframe:       summary.Timeframe,
 		CurrentRegime:   currentRegime,
 		Probabilities:   probs,
-		Horizon:         horizon,
+		Horizon:         formatHorizon(summary.Timeframe, regimeAge),
 		Source:          source,
 		EmpiricalWeight: empiricalWeight,
 		SampleSize:      sampleSize,
 		Pooled:          pooled,
 	}, nil
+}
+
+func (s *TransitionService) liveAge(timeframe string) int {
+	age := 12
+	if s.ageProvider != nil {
+		if a, err := s.ageProvider.CurrentAge(timeframe); err == nil && a > 0 {
+			age = a
+		}
+	}
+	return age
+}
+
+func (s *TransitionService) matrixAndAge(
+	ctx context.Context,
+	timeframe string,
+	current mkt.Regime,
+	liveAge int,
+) (MatrixView, int) {
+	if s.matrixCache == nil {
+		return MatrixView{}, liveAge
+	}
+	view := s.matrixCache.Matrix(ctx, timeframe)
+	return view, applyMergedPrefix(s.ageProvider, timeframe, current, liveAge, view)
+}
+
+// applyMergedPrefix adds cached closed predecessors only when the live open
+// period is the same period the matrix snapshot saw (matching start) and the
+// core regimes align (silent/indecisive ≡ sideways).
+func applyMergedPrefix(
+	ages AgeProvider,
+	timeframe string,
+	current mkt.Regime,
+	liveAge int,
+	view MatrixView,
+) int {
+	if view.Stale || view.MergedPrefix <= 0 || view.OpenStart == 0 {
+		return liveAge
+	}
+	core, ok := coreRegime(current)
+	if !ok || view.MergedRegime != core {
+		return liveAge
+	}
+	starter, ok := ages.(openPeriodStarter)
+	if !ok {
+		return liveAge
+	}
+	start, err := starter.OpenPeriodStart(timeframe)
+	if err != nil || start == 0 || start != view.OpenStart {
+		return liveAge
+	}
+	return view.MergedPrefix + liveAge
+}
+
+func (s *TransitionService) blendEmpirical(
+	view MatrixView,
+	current mkt.Regime,
+	regimeAge int,
+	heuristic mkt.TransitionProbabilities,
+) (probs mkt.TransitionProbabilities, source string, weight float64, sampleSize int, pooled bool) {
+	probs = heuristic
+	source = "heuristic"
+	if s.matrixCache == nil || view.Stale {
+		return probs, source, 0, 0, false
+	}
+	look, ok := view.Matrix.Lookup(current, regimeAge)
+	if !ok {
+		return probs, source, 0, 0, false
+	}
+	sampleSize = look.SampleSize
+	pooled = look.Pooled
+	if look.SampleSize < minBlendSamples {
+		return probs, source, 0, sampleSize, pooled
+	}
+	weight = WeightFromSamples(look.SampleSize)
+	return Blend(look.Probabilities, heuristic, weight), "blend", weight, sampleSize, pooled
+}
+
+func formatHorizon(timeframe string, regimeAge int) string {
+	horizon := fmt.Sprintf("%d candles", regimeAge)
+	if h := HumanDuration(timeframe, regimeAge); h != "" {
+		horizon = fmt.Sprintf("%d candles (~%s)", regimeAge, h)
+	}
+	return horizon
 }
 
 func (s *TransitionService) emitTransitionSignals(ctx context.Context, timeframe string, probs mkt.TransitionProbabilities) {

@@ -449,27 +449,39 @@ func TestTrailingMergedAge_SilentIndecisiveSideways(t *testing.T) {
 	}
 }
 
-func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
+type fixedOpenAge struct {
+	age   int
+	start int64
+}
+
+func (f fixedOpenAge) CurrentAge(string) (int, error)        { return f.age, nil }
+func (f fixedOpenAge) OpenPeriodStart(string) (int64, error) { return f.start, nil }
+
+func sidewaysMergeFixture(openStart int64) (seed []mkt.RegimePeriod, live []mkt.RegimePeriod) {
 	end := int64(1)
-	// Seed matrix: Mid bucket (dur 8) → trend; Mature (dur 16) → expansion.
-	periods := make([]mkt.RegimePeriod, 0, 80)
+	seed = make([]mkt.RegimePeriod, 0, 80)
 	for i := 0; i < 40; i++ {
-		periods = append(periods,
+		seed = append(seed,
 			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 8, EndTimestamp: &end},
 			mkt.RegimePeriod{Regime: mkt.RegimeTrend, DurationCandles: 8, EndTimestamp: &end},
 		)
 	}
 	for i := 0; i < 40; i++ {
-		periods = append(periods,
+		seed = append(seed,
 			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 16, EndTimestamp: &end},
 			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 8, EndTimestamp: &end},
 		)
 	}
-	// Live history ends with silent(8)+indecisive(8) → merged age 16.
-	live := append(append([]mkt.RegimePeriod{}, periods...),
-		mkt.RegimePeriod{Regime: mkt.RegimeSilent, DurationCandles: 8, EndTimestamp: &end},
-		mkt.RegimePeriod{Regime: mkt.RegimeIndecisive, DurationCandles: 8, EndTimestamp: nil},
+	live = append(append([]mkt.RegimePeriod{}, seed...),
+		mkt.RegimePeriod{Regime: mkt.RegimeSilent, DurationCandles: 8, EndTimestamp: &end, StartTimestamp: openStart - 1},
+		mkt.RegimePeriod{Regime: mkt.RegimeIndecisive, DurationCandles: 8, EndTimestamp: nil, StartTimestamp: openStart},
 	)
+	return seed, live
+}
+
+func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
+	const openStart int64 = 9_000
+	_, live := sidewaysMergeFixture(openStart)
 	provider := &fakeTransitionRegimeProvider{
 		summary: mkt.Summary{
 			State:               mkt.StateSideways,
@@ -478,7 +490,7 @@ func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
 		},
 	}
 	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
-	svc.SetAgeProvider(fixedAge(8)) // live open period; prefix 8 → merged 16
+	svc.SetAgeProvider(fixedOpenAge{age: 8, start: openStart})
 	svc.SetMatrixCache(transition.NewMatrixCache(&stubHistory{periods: live}, time.Minute, 500))
 
 	result, err := svc.Calculate(context.Background(), "4h")
@@ -494,27 +506,64 @@ func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
 	}
 }
 
+func TestTransitionService_SilentUsesCoreRegimeForMergedPrefix(t *testing.T) {
+	const openStart int64 = 9_100
+	_, live := sidewaysMergeFixture(openStart)
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateSilent,
+			Breadth:             mkt.Breadth{Sideways: 1},
+			VolatilityExpansion: 1.0,
+		},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedOpenAge{age: 8, start: openStart})
+	svc.SetMatrixCache(transition.NewMatrixCache(&stubHistory{periods: live}, time.Minute, 500))
+
+	result, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "blend" {
+		t.Fatalf("source=%q", result.Source)
+	}
+	if result.Probabilities.Expansion <= result.Probabilities.Trend {
+		t.Fatalf("silent must normalize to sideways for merged prefix, got %+v", result.Probabilities)
+	}
+}
+
+func TestTransitionService_FlipBackSkipsStaleMergedPrefix(t *testing.T) {
+	const cachedOpen int64 = 9_200
+	_, live := sidewaysMergeFixture(cachedOpen)
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateSideways,
+			Breadth:             mkt.Breadth{Sideways: 1},
+			VolatilityExpansion: 1.0,
+		},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	// Live open period started after a flip-away/back; cached prefix belongs to old period.
+	svc.SetAgeProvider(fixedOpenAge{age: 8, start: cachedOpen + 50})
+	svc.SetMatrixCache(transition.NewMatrixCache(&stubHistory{periods: live}, time.Minute, 500))
+
+	result, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "blend" {
+		t.Fatalf("source=%q", result.Source)
+	}
+	// Live age 8 alone → Mid → trend; must not add cached prefix 8 → Mature/expansion.
+	if result.Probabilities.Trend <= result.Probabilities.Expansion {
+		t.Fatalf("flip-back must not reuse old merged prefix, got %+v", result.Probabilities)
+	}
+}
+
 func TestTransitionService_StaleSkipsMergedPrefix(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	end := int64(1)
-	// Seed so Mid(8)→trend and Mature(16)→expansion; live ends silent+indecisive.
-	periods := make([]mkt.RegimePeriod, 0, 80)
-	for i := 0; i < 40; i++ {
-		periods = append(periods,
-			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 8, EndTimestamp: &end},
-			mkt.RegimePeriod{Regime: mkt.RegimeTrend, DurationCandles: 8, EndTimestamp: &end},
-		)
-	}
-	for i := 0; i < 40; i++ {
-		periods = append(periods,
-			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 16, EndTimestamp: &end},
-			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 8, EndTimestamp: &end},
-		)
-	}
-	live := append(append([]mkt.RegimePeriod{}, periods...),
-		mkt.RegimePeriod{Regime: mkt.RegimeSilent, DurationCandles: 8, EndTimestamp: &end},
-		mkt.RegimePeriod{Regime: mkt.RegimeIndecisive, DurationCandles: 8, EndTimestamp: nil},
-	)
+	const openStart int64 = 9_300
+	_, live := sidewaysMergeFixture(openStart)
 	hist := &stubHistory{periods: live}
 	cache := transition.NewMatrixCache(hist, time.Minute, 500)
 	cache.SetClock(func() time.Time { return now })
@@ -527,7 +576,7 @@ func TestTransitionService_StaleSkipsMergedPrefix(t *testing.T) {
 		},
 	}
 	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
-	svc.SetAgeProvider(fixedAge(8))
+	svc.SetAgeProvider(fixedOpenAge{age: 8, start: openStart})
 	svc.SetMatrixCache(cache)
 
 	ok, err := svc.Calculate(context.Background(), "4h")

@@ -82,8 +82,13 @@ func BuildMatrix(periods []mkt.RegimePeriod) Matrix {
 		return m
 	}
 
-	// Median from closed periods only (exclude trailing open current). Closed
-	// stubs absorbed into an open continuation are kept via medianClosed.
+	m.medianDur = closedDurationMedians(segments)
+	counts, pooledCounts := countTransitions(segments, &m)
+	fillBucketProbs(&m, counts, pooledCounts)
+	return m
+}
+
+func closedDurationMedians(segments []periodSegment) map[mkt.Regime]float64 {
 	durs := make(map[mkt.Regime][]int)
 	for _, seg := range segments {
 		for r, xs := range seg.medianClosed {
@@ -99,13 +104,17 @@ func BuildMatrix(periods []mkt.RegimePeriod) Matrix {
 			}
 		}
 	}
+	out := make(map[mkt.Regime]float64, len(durs))
 	for r, xs := range durs {
-		m.medianDur[r] = medianInt(xs)
+		out[r] = medianInt(xs)
 	}
+	return out
+}
 
-	var counts [4][ageBucketCount][4]float64
-	var pooledCounts [4][4]float64
-
+func countTransitions(
+	segments []periodSegment,
+	m *Matrix,
+) (counts [4][ageBucketCount][4]float64, pooledCounts [4][4]float64) {
 	for _, seg := range segments {
 		for i := 0; i+1 < len(seg.periods); i++ {
 			from := seg.periods[i]
@@ -127,7 +136,14 @@ func BuildMatrix(periods []mkt.RegimePeriod) Matrix {
 			m.nBucket[from.Regime] = nb
 		}
 	}
+	return counts, pooledCounts
+}
 
+func fillBucketProbs(
+	m *Matrix,
+	counts [4][ageBucketCount][4]float64,
+	pooledCounts [4][4]float64,
+) {
 	for _, from := range transitionTargets {
 		fi := fromIndex[from]
 		nb := m.nBucket[from]
@@ -143,7 +159,6 @@ func BuildMatrix(periods []mkt.RegimePeriod) Matrix {
 			m.pooled[from] = laplaceNormalizeCounts(pooledCounts[fi])
 		}
 	}
-	return m
 }
 
 type periodSegment struct {

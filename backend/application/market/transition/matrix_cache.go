@@ -15,20 +15,25 @@ type PeriodHistory interface {
 	GetHistory(ctx context.Context, timeframe string, limit int) ([]mkt.RegimePeriod, error)
 }
 
+// historyRefreshTimeout bounds the shared DB read so a stalled query cannot
+// block a timeframe's singleflight indefinitely after callers cancel.
+const historyRefreshTimeout = 5 * time.Second
+
 // MatrixView is the cache result for a timeframe.
 type MatrixView struct {
 	Matrix       Matrix
 	MergedPrefix int        // trailing same-regime candles excluding the open period
 	MergedRegime mkt.Regime // core regime of that trailing run (empty if none)
+	OpenStart    int64      // StartTimestamp of the cached open period (0 if unknown)
 	Stale        bool       // true when serving a matrix after a failed refresh
 }
 
 // MatrixCache rebuilds an empirical Matrix per timeframe on a TTL.
 // Rebuilds are keyed per timeframe so one TF's DB I/O does not block others.
-// Concurrent misses coalesce via singleflight; the shared fetch uses
-// WithoutCancel so one aborted client cannot abort siblings or poison the
-// cache. Failed refreshes mark the prior matrix stale (no blend) and
-// negative-cache the failure for the TTL so outages do not retry every request.
+// Concurrent misses coalesce via singleflight; the shared fetch uses a bounded
+// timeout detached from caller cancel so one aborted client cannot abort
+// siblings or poison the cache. Failed refreshes mark the prior matrix stale
+// (no blend) and negative-cache the failure for the TTL.
 type MatrixCache struct {
 	history PeriodHistory
 	limit   int
@@ -99,10 +104,15 @@ func (c *MatrixCache) clock() func() time.Time {
 
 func viewFromPeriods(m Matrix, periods []mkt.RegimePeriod, stale bool) MatrixView {
 	prefix, reg := TrailingMergedPrefix(periods)
+	var openStart int64
+	if n := len(periods); n > 0 {
+		openStart = periods[n-1].StartTimestamp
+	}
 	return MatrixView{
 		Matrix:       m,
 		MergedPrefix: prefix,
 		MergedRegime: reg,
+		OpenStart:    openStart,
 		Stale:        stale,
 	}
 }
@@ -134,60 +144,23 @@ func (c *MatrixCache) Matrix(ctx context.Context, timeframe string) MatrixView {
 	if c == nil || c.history == nil {
 		return MatrixView{}
 	}
-
 	slot := c.slot(timeframe)
 	nowFn := c.clock()
-
 	if view, ok := c.hotView(slot, nowFn()); ok {
 		return view
 	}
+	return c.awaitRefresh(ctx, timeframe, slot, nowFn)
+}
 
+func (c *MatrixCache) awaitRefresh(
+	ctx context.Context,
+	timeframe string,
+	slot *matrixSlot,
+	nowFn func() time.Time,
+) MatrixView {
 	ch := c.group.DoChan(timeframe, func() (any, error) {
-		if view, ok := c.hotView(slot, nowFn()); ok {
-			return view, nil
-		}
-
-		// Detach from any single caller's cancel so one aborted HTTP client
-		// cannot abort (or poison) a shared history read for siblings.
-		periods, err := c.history.GetHistory(context.WithoutCancel(ctx), timeframe, c.limit)
-
-		slot.mu.Lock()
-		defer slot.mu.Unlock()
-		now := nowFn()
-
-		// Another flight may have refreshed while we fetched.
-		if !slot.entry.builtAt.IsZero() && now.Sub(slot.entry.builtAt) < c.ttl && !slot.entry.stale {
-			return viewFromPeriods(slot.entry.matrix, slot.entry.periods, false), nil
-		}
-
-		if err != nil {
-			// Storage failure: negative-cache. Keep prior matrix but mark stale
-			// so callers do not blend from unrevalidated history during an outage.
-			if slot.entry.hasMatrix {
-				slot.entry = matrixCacheEntry{
-					matrix:    slot.entry.matrix,
-					periods:   slot.entry.periods,
-					builtAt:   now,
-					stale:     true,
-					hasMatrix: true,
-				}
-				return viewFromPeriods(slot.entry.matrix, slot.entry.periods, true), nil
-			}
-			slot.entry = matrixCacheEntry{builtAt: now, stale: true}
-			return MatrixView{Stale: true}, nil
-		}
-
-		m := BuildMatrix(periods)
-		slot.entry = matrixCacheEntry{
-			matrix:    m,
-			periods:   append([]mkt.RegimePeriod(nil), periods...),
-			builtAt:   now,
-			stale:     false,
-			hasMatrix: true,
-		}
-		return viewFromPeriods(m, periods, false), nil
+		return c.refresh(timeframe, slot, nowFn), nil
 	})
-
 	select {
 	case <-ctx.Done():
 		return c.priorView(slot)
@@ -197,4 +170,69 @@ func (c *MatrixCache) Matrix(ctx context.Context, timeframe string) MatrixView {
 		}
 		return res.Val.(MatrixView)
 	}
+}
+
+func (c *MatrixCache) refresh(
+	timeframe string,
+	slot *matrixSlot,
+	nowFn func() time.Time,
+) MatrixView {
+	if view, ok := c.hotView(slot, nowFn()); ok {
+		return view
+	}
+	periods, err := c.loadHistory(timeframe)
+	return c.commitRefresh(slot, nowFn, periods, err)
+}
+
+func (c *MatrixCache) loadHistory(timeframe string) ([]mkt.RegimePeriod, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), historyRefreshTimeout)
+	defer cancel()
+	return c.history.GetHistory(ctx, timeframe, c.limit)
+}
+
+func (c *MatrixCache) commitRefresh(
+	slot *matrixSlot,
+	nowFn func() time.Time,
+	periods []mkt.RegimePeriod,
+	err error,
+) MatrixView {
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	now := nowFn()
+
+	// Another flight may have refreshed while we fetched.
+	if !slot.entry.builtAt.IsZero() && now.Sub(slot.entry.builtAt) < c.ttl && !slot.entry.stale {
+		return viewFromPeriods(slot.entry.matrix, slot.entry.periods, false)
+	}
+
+	if err != nil {
+		return c.storeFailureLocked(slot, now)
+	}
+
+	m := BuildMatrix(periods)
+	slot.entry = matrixCacheEntry{
+		matrix:    m,
+		periods:   append([]mkt.RegimePeriod(nil), periods...),
+		builtAt:   now,
+		stale:     false,
+		hasMatrix: true,
+	}
+	return viewFromPeriods(m, periods, false)
+}
+
+func (c *MatrixCache) storeFailureLocked(slot *matrixSlot, now time.Time) MatrixView {
+	// Storage failure: negative-cache. Keep prior matrix but mark stale so
+	// callers do not blend from unrevalidated history during an outage.
+	if slot.entry.hasMatrix {
+		slot.entry = matrixCacheEntry{
+			matrix:    slot.entry.matrix,
+			periods:   slot.entry.periods,
+			builtAt:   now,
+			stale:     true,
+			hasMatrix: true,
+		}
+		return viewFromPeriods(slot.entry.matrix, slot.entry.periods, true)
+	}
+	slot.entry = matrixCacheEntry{builtAt: now, stale: true}
+	return MatrixView{Stale: true}
 }
