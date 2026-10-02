@@ -47,6 +47,7 @@ import '../detail/detail_context.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
 import '../detail/http_mtf_regimes_api.dart';
+import '../detail/http_plan_api.dart';
 import '../detail/http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../scorecards/scorecard_catalog.dart';
@@ -86,6 +87,7 @@ class OverviewWidget extends StatefulWidget {
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
   final MtfRegimesApi? mtfRegimesApi;
+  final PlanApi? planApi;
   final SocialFeedViewModel? socialFeedViewModel;
   final NotificationConfigApi? notificationConfigApi;
   final ScorecardApi? scorecardApi;
@@ -116,6 +118,7 @@ class OverviewWidget extends StatefulWidget {
     this.behaviorApi,
     this.volatilityApi,
     this.mtfRegimesApi,
+    this.planApi,
     this.socialFeedViewModel,
     this.notificationConfigApi,
     this.scorecardApi,
@@ -629,6 +632,7 @@ class OverviewWidgetState extends State<OverviewWidget>
             behaviorApi: _isProUser ? widget.behaviorApi : null,
             volatilityApi: _isProUser ? widget.volatilityApi : null,
             mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
+            planApi: _isProUser ? widget.planApi : null,
             scorecardApi: widget.scorecardApi,
             isProUser: _isProUser,
             watchlist: _watchlist,
@@ -1300,6 +1304,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                     // through to a symbol detail screen, so this new
                     // pro-tier field must not ride along ungated.
                     mtfRegimesApi: _isProUser ? widget.mtfRegimesApi : null,
+                    planApi: _isProUser ? widget.planApi : null,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
                     watchlist: _watchlist,

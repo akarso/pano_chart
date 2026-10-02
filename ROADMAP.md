@@ -1141,10 +1141,12 @@ LongStop 99, conservative target 105, RR ≈ 3.8, Valid. Trending series → `Va
 
 **Layer:** frontend. **Depends on:** PR-110.
 
+**Spec file:** `frontend/docs/PR-111.md`.
+
 **Spec.**
 1. Symbol detail: "Plan" tab/section. Draw `Low/Mid/High` as horizontal lines on the existing
-   candle chart (`features/detail/candle_series_chart_renderer.dart`) with entry/stop/target
-   ticks on the right axis (`sticky_price_labels.dart`).
+   candle chart (`features/detail/chart/interactive_chart.dart` + `plan_levels_painter.dart`) with entry/stop/target
+   ticks on the right axis.
 2. Panel: Long / Short toggle, entry/stop/target values, R:R, "Position in range" bar, quality
    dots. Account-risk input (persisted in `SharedPreferences`, default 100 USDT) → size.
 3. When `Valid=false` show the `Reason` and no levels.

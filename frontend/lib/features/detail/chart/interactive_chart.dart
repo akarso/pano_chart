@@ -20,6 +20,8 @@ import 'crosshair_overlay.dart';
 import 'indicators.dart';
 import 'oscillator_painter.dart';
 import 'volume_painter.dart';
+import 'plan_levels_painter.dart';
+import '../plan_data.dart';
 import '../../volatility/volatility_model.dart';
 import '../../volatility/volatility_painter.dart';
 
@@ -54,6 +56,9 @@ class InteractiveChart extends StatefulWidget {
   /// the last candle.  `null` hides the reference line.
   final int? referenceStartIndex;
 
+  /// Optional range-plan channel / trade levels overlay (PR-111).
+  final PlanChartLevels? planLevels;
+
   const InteractiveChart({
     Key? key,
     required this.series,
@@ -68,6 +73,7 @@ class InteractiveChart extends StatefulWidget {
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
     this.referenceStartIndex,
+    this.planLevels,
   }) : super(key: key);
 
   @override
@@ -454,6 +460,14 @@ class _InteractiveChartState extends State<InteractiveChart> {
               if (v < baseLo) baseLo = v;
               if (v > baseHi) baseHi = v;
             });
+            // Include plan Low/Mid/High (+ E/S/T when valid) so overlays stay
+            // on-screen even when the visible candle window is tighter than
+            // the 110-bar channel (PR-111).
+            widget.planLevels?.expandPriceRange((v) {
+              if (!v.isFinite) return;
+              if (v < baseLo) baseLo = v;
+              if (v > baseHi) baseHi = v;
+            });
             final baseRange = (baseHi - baseLo) == 0 ? 1.0 : (baseHi - baseLo);
             final baseCenter = (baseHi + baseLo) / 2;
             final scaledRange = baseRange / _priceScaleY;
@@ -553,6 +567,29 @@ class _InteractiveChartState extends State<InteractiveChart> {
                       ),
                     ),
                   ),
+
+                  // ── Range plan levels (PR-111) ──
+                  if (widget.planLevels != null)
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      width: chartW,
+                      height: priceH,
+                      child: IgnorePointer(
+                        child: RepaintBoundary(
+                          child: CustomPaint(
+                            key: const Key('plan-levels-overlay'),
+                            size: Size(chartW, priceH),
+                            painter: PlanLevelsPainter(
+                              levels: widget.planLevels!,
+                              priceLo: priceLo,
+                              priceHi: priceHi,
+                              yAxisWidth: _yAxisW,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
 
                   // ── Volume layer ──
                   Positioned(

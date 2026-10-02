@@ -59,6 +59,7 @@ Widget bootstrapApp({
   final behaviorApi = root.createBehaviorApi();
   final volatilityApi = root.createVolatilityApi();
   final mtfRegimesApi = root.createMtfRegimesApi();
+  final planApi = root.createPlanApi();
   final notificationConfigApi = root.createNotificationConfigApi();
   final watchlist = prefs == null
       ? null
@@ -88,6 +89,7 @@ Widget bootstrapApp({
       behaviorApi: behaviorApi,
       volatilityApi: volatilityApi,
       mtfRegimesApi: mtfRegimesApi,
+      planApi: planApi,
       socialFeedViewModel: socialVm,
       notificationConfigApi: notificationConfigApi,
       scorecardApi: scorecardApi,
@@ -122,6 +124,7 @@ Widget bootstrapApp({
         mtfRegimesApi: (billingManager?.hasFullAccess ?? false)
             ? mtfRegimesApi
             : null,
+        planApi: (billingManager?.hasFullAccess ?? false) ? planApi : null,
         scorecardApi: scorecardApi,
         isProUser: billingManager?.hasFullAccess ?? false,
         watchlist: watchlist,
