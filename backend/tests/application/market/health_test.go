@@ -574,6 +574,22 @@ func TestTrendHealthFromSnapshot_FlatSparklineUnscorable(t *testing.T) {
 	}
 }
 
+func TestTrendHealthFromSnapshot_NaNATRUnscorable(t *testing.T) {
+	_, ok := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
+		Price: 100, RecentHigh: 110, RecentLow: 90, ATR: math.NaN(), RecentReturn: 0.5,
+	})
+	if ok {
+		t.Fatal("NaN ATR must be unscorable")
+	}
+}
+
+func TestTrendHealthV2_NaNATR(t *testing.T) {
+	h := appmarket.ComputeTrendHealthV2("uptrend", 100, 110, 90, math.NaN(), 0.5, 0)
+	if h != 0 || math.IsNaN(h) {
+		t.Fatalf("expected 0 for NaN ATR, got %f", h)
+	}
+}
+
 // ---------- DampenTrendByHealth ----------
 
 func TestDampenTrendByHealth_HealthyTrend_MinimalDampening(t *testing.T) {
