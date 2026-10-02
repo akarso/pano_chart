@@ -80,31 +80,58 @@ func TestEnrichFromSparkline_ATRComputation(t *testing.T) {
 }
 
 func TestEnrichFromSparkline_WilderATR14WhenLong(t *testing.T) {
-	// Constant |Δclose|=1 for 20 bars → Wilder ATR14 ≈ 1 (not mean of full window alone).
-	spark := make([]float64, 20)
-	for i := range spark {
-		spark[i] = 100 + float64(i)
+	// Early large steps, then tiny ones: mean |Δ| stays elevated; Wilder
+	// decays toward recent small TRs — formulas must diverge.
+	spark := make([]float64, 30)
+	spark[0] = 100
+	for i := 1; i < 30; i++ {
+		step := 0.1
+		if i <= 5 {
+			step = 10
+		}
+		spark[i] = spark[i-1] + step
 	}
+	var absSum float64
+	for i := 1; i < len(spark); i++ {
+		absSum += math.Abs(spark[i] - spark[i-1])
+	}
+	meanAbs := absSum / float64(len(spark)-1)
+
 	snap := domain.EvaluationSnapshot{}
 	appmarket.EnrichFromSparkline(&snap, spark)
-	if math.Abs(snap.ATR-1.0) > 0.05 {
-		t.Fatalf("expected Wilder ATR≈1.0, got %f", snap.ATR)
+	if math.Abs(snap.ATR-meanAbs) < 0.4 {
+		t.Fatalf("Wilder ATR=%f should diverge from mean|Δ|=%f", snap.ATR, meanAbs)
+	}
+	if snap.ATR <= 0 || snap.ATR >= meanAbs {
+		t.Fatalf("expected 0 < Wilder ATR < mean|Δ|, got ATR=%f mean=%f", snap.ATR, meanAbs)
 	}
 }
 
-func TestEnrichFromSparkline_RecentReturnIsFullWindow(t *testing.T) {
-	// Full-window return in ATR units — not the 8-bar health tail.
-	spark := make([]float64, 20)
-	for i := range spark {
-		spark[i] = 100 + float64(i) // +19 over window; ATR≈1 → RecentReturn≈19
+func TestEnrichFromSparkline_RecentReturnUsesMeanAbsDenom(t *testing.T) {
+	// Full-window return / mean|Δ| — not Wilder ATR (silent/bias scale).
+	spark := make([]float64, 30)
+	spark[0] = 100
+	for i := 1; i < 30; i++ {
+		step := 0.1
+		if i <= 5 {
+			step = 10
+		}
+		spark[i] = spark[i-1] + step
 	}
+	var absSum float64
+	for i := 1; i < len(spark); i++ {
+		absSum += math.Abs(spark[i] - spark[i-1])
+	}
+	meanAbs := absSum / float64(len(spark)-1)
+
 	snap := domain.EvaluationSnapshot{}
 	appmarket.EnrichFromSparkline(&snap, spark)
-	want := (spark[19] - spark[0]) / snap.ATR
+	want := (spark[len(spark)-1] - spark[0]) / meanAbs
 	if math.Abs(snap.RecentReturn-want) > 0.01 {
-		t.Fatalf("RecentReturn=%f want full-window %f", snap.RecentReturn, want)
+		t.Fatalf("RecentReturn=%f want mean|Δ| scale %f (ATR=%f)", snap.RecentReturn, want, snap.ATR)
 	}
-	if snap.RecentReturn < 10 {
-		t.Fatalf("full-window return should be ≫ 8-bar tail scale, got %f", snap.RecentReturn)
+	wilderReturn := (spark[len(spark)-1] - spark[0]) / snap.ATR
+	if math.Abs(snap.RecentReturn-wilderReturn) < 0.2 {
+		t.Fatalf("RecentReturn should differ from Wilder-scaled %f, got %f", wilderReturn, snap.RecentReturn)
 	}
 }

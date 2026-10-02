@@ -33,6 +33,16 @@ func TrendHealthFromSnapshot(state string, e domain.EvaluationSnapshot) float64 
 	return ComputeTrendHealthV2(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn, 0)
 }
 
+// hasTrendHealthBaseline reports whether a snapshot can produce a usable
+// volatility baseline for V2 health. Flat long sparklines yield TrueATR 0 and
+// must be skipped (not counted as breakdowns).
+func hasTrendHealthBaseline(e domain.EvaluationSnapshot) bool {
+	if len(e.Sparkline) >= tapeMinBars {
+		return scoring.TrueATR(candlesFromCloses(e.Sparkline), tapeATRPeriod) > 0
+	}
+	return e.ATR > 0
+}
+
 func candlesFromCloses(closes []float64) []domain.Candle {
 	out := make([]domain.Candle, len(closes))
 	for i, c := range closes {

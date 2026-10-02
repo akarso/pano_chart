@@ -377,6 +377,80 @@ func TestCalculate_SparklineScoresWhenATRUnset(t *testing.T) {
 	}
 }
 
+func TestCalculate_FlatSparkline_NotCountedAsBreakdown(t *testing.T) {
+	flat := make([]float64, 20)
+	for i := range flat {
+		flat[i] = 100 // TrueATR 0 — no volatility baseline
+	}
+	healthy := make([]float64, 20)
+	for i := range healthy {
+		healthy[i] = 100 + float64(i)
+	}
+	provider := &fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.9, Bias: "up", Sparkline: healthy},
+			{TrendScore: 0.9, Bias: "up", Sparkline: flat, ATR: 0},
+		},
+	}
+	svc := appmarket.NewMarketStateService(provider)
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.BreakdownRate != 0 {
+		t.Fatalf("flat sparkline must not count as breakdown, got rate=%f et=%f",
+			s.BreakdownRate, s.EffectiveTrend)
+	}
+	if s.EffectiveTrend <= 0 {
+		t.Fatalf("expected healthy token to set EffectiveTrend, got %f", s.EffectiveTrend)
+	}
+}
+
+func TestCalculate_DampenedTrend_LabelMatchesState(t *testing.T) {
+	// Pre-dampen trend share high enough to stay State=trend after mild
+	// health dampening, but dampened share < 0.6 so the old prevalence-gated
+	// BuildMarketLabel would have said "Mixed conditions".
+	evals := make([]domain.EvaluationSnapshot, 10)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{
+			TrendScore:    0.70,
+			SidewaysScore: 0.15,
+			CompressionScore: 0.10,
+			BreakoutUpScore:  0.05,
+			Bias:          "up",
+			Price:         100,
+			RecentHigh:    105, // 1 ATR under high → V2 health 1.0… wait need ~0.53
+			RecentLow:     80,
+			ATR:           5,
+			RecentReturn:  0.2,
+		}
+	}
+	// dd = (105-100)/5 = 1 → ddScore 1. Need health ≈ 0.53.
+	// 2 ATR: price 95, high 105 → dd=2 → 0.6. Close enough; or use 2.175 ATR.
+	// (dd-1)/2.5 = 0.47 → dd = 1+1.175 = 2.175 → price = 105 - 2.175*5 = 94.125
+	for i := range evals {
+		evals[i].Price = 94.125
+		evals[i].RecentHigh = 105
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.State != mkt.StateTrend {
+		t.Fatalf("expected State=trend, got %s breadth=%+v", s.State, s.Breadth)
+	}
+	if s.Breadth.Trend >= 0.6 {
+		t.Fatalf("fixture needs dampened trend share < 0.6, got %f", s.Breadth.Trend)
+	}
+	if s.Label == "Mixed conditions" || s.Label == "No clear trend" {
+		t.Fatalf("trend state must keep a trend caption, got %q et=%f", s.Label, s.EffectiveTrend)
+	}
+	if s.Label != "Trend weakening" && s.Label != "Strong trend" && s.Label != "Trend breaking down" {
+		t.Fatalf("unexpected label %q", s.Label)
+	}
+}
+
 func TestTrendHealthV2_TwoATRDrawdown(t *testing.T) {
 	h := appmarket.ComputeTrendHealthV2("uptrend", 100, 110, 90, 5, 0.5, 0)
 	if math.Abs(h-0.6) > 0.01 {

@@ -194,9 +194,9 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 			if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
 				continue
 			}
-			// Prefer sparkline V2 when present even if ATR was never enriched
-			// (hand-built / partially migrated rows).
-			if e.ATR == 0 && len(e.Sparkline) < tapeMinBars {
+			// Skip tokens with no volatility baseline (flat long sparkline
+			// yields TrueATR 0 and must not count as a breakdown).
+			if !hasTrendHealthBaseline(e) {
 				continue
 			}
 			healthyTrendCount++
@@ -249,14 +249,11 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 		} else if bias == "down" && avgReturn > 0.5 {
 			bias = "neutral"
 		}
-		label = BuildMarketLabel(participation.Trend, effectiveTrend)
+		label = BuildTapeLabel(dominant, effectiveTrend)
 		structure = participation
-		// Trend captions only when the headline is actually TREND — same
-		// rule as the tape path (PR-115). Indecisive / compression / etc.
-		// must not keep a V1 "Strong trend" from mix share alone.
-		if dominant != mkt.StateTrend {
-			label = BuildTapeLabel(dominant, effectiveTrend)
-		}
+		// Caption follows the headline state (BuildTapeLabel). Do not re-gate
+		// on dampened prevalence via BuildMarketLabel — that can yield
+		// State=trend with "Mixed conditions" when share dips under 0.6.
 	}
 
 	// Silent override still uses per-token activity (flat + quiet volume).

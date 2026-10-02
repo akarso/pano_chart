@@ -13,10 +13,10 @@ import (
 // application → infrastructure.
 //
 // ATR is Wilder TrueATR(14) when len ≥ tapeMinBars (close-only OHLC); otherwise
-// mean |Δclose|. RecentReturn stays full-window / ATR so silent override and
-// bias override keep their pre-PR-106 shape (Wilder vs mean-|Δ| is a small
-// residual unit drift when len ≥ 15). The 8-bar adverse tail used by
-// trend health is computed only inside TrendHealthFromSnapshot / ScoreMarketTape.
+// mean |Δclose|. RecentReturn is always full-window / mean|Δclose| so silent
+// override and bias override keep their pre-PR-106 scale (Wilder is not used
+// as the return denominator). The 8-bar adverse tail used by trend health is
+// computed only inside TrendHealthFromSnapshot / ScoreMarketTape.
 func EnrichFromSparkline(snap *domain.EvaluationSnapshot, sparkline []float64) {
 	n := len(sparkline)
 	if n < 2 {
@@ -34,6 +34,7 @@ func EnrichFromSparkline(snap *domain.EvaluationSnapshot, sparkline []float64) {
 	}
 
 	hi, lo := sparkline[0], sparkline[0]
+	var absSum float64
 	for i := 0; i < n; i++ {
 		if sparkline[i] > hi {
 			hi = sparkline[i]
@@ -41,24 +42,23 @@ func EnrichFromSparkline(snap *domain.EvaluationSnapshot, sparkline []float64) {
 		if sparkline[i] < lo {
 			lo = sparkline[i]
 		}
+		if i > 0 {
+			absSum += math.Abs(sparkline[i] - sparkline[i-1])
+		}
 	}
 	snap.RecentHigh = hi
 	snap.RecentLow = lo
 
-	atr := 0.0
+	meanAbs := absSum / float64(n-1)
+	atr := meanAbs
 	if n >= tapeMinBars {
-		atr = scoring.TrueATR(candlesFromCloses(sparkline), tapeATRPeriod)
-	}
-	if atr <= 0 {
-		var atrSum float64
-		for i := 1; i < n; i++ {
-			atrSum += math.Abs(sparkline[i] - sparkline[i-1])
+		if w := scoring.TrueATR(candlesFromCloses(sparkline), tapeATRPeriod); w > 0 {
+			atr = w
 		}
-		atr = atrSum / float64(n-1)
 	}
 	snap.ATR = atr
 
-	if snap.ATR > 0 {
-		snap.RecentReturn = (sparkline[n-1] - sparkline[0]) / snap.ATR
+	if meanAbs > 0 {
+		snap.RecentReturn = (sparkline[n-1] - sparkline[0]) / meanAbs
 	}
 }
