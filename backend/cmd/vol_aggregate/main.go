@@ -196,8 +196,10 @@ func aggregateSymbol(
 			}
 			if len(candles) == 0 {
 				// Listing may post-date the lookback start; skip empty early
-				// windows and keep scanning toward `end`.
+				// windows and keep scanning toward `end`. Still pace requests
+				// so a long empty prefix does not 429 and abort the run.
 				current = next
+				time.Sleep(200 * time.Millisecond)
 				continue
 			}
 			if serr := cache.Store(symbol, candles); serr != nil {
