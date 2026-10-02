@@ -443,11 +443,22 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 500
+	order := "DESC"
+	if filter.OldestFirst {
+		order = "ASC"
 	}
-	args = append(args, limit)
+	// Limit < 0 → unlimited (export). Limit == 0 → scorecard default 500.
+	limitSQL := ""
+	if filter.Limit < 0 {
+		// no LIMIT clause
+	} else {
+		limit := filter.Limit
+		if limit == 0 {
+			limit = 500
+		}
+		limitSQL = " LIMIT ?"
+		args = append(args, limit)
+	}
 
 	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,
 		 s.context, s.emitted_at, s.horizon_bars,
@@ -455,8 +466,7 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 		 FROM signals s
 		 LEFT JOIN outcomes o ON o.signal_id = s.id
 		 %s
-		 ORDER BY s.emitted_at DESC
-		 LIMIT ?`, where)
+		 ORDER BY s.emitted_at %s%s`, where, order, limitSQL)
 
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {

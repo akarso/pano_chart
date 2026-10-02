@@ -1,0 +1,33 @@
+# Placeholder learned regime classifier (PR-109).
+# placeholder: true → ClassifyStructure refuses; heuristic tape/setup stays active
+# even if someone flips scoring.regime_model to learned without replacing this file
+# (startup still requires ValidateForInference, so learned mode will fail closed
+# until a real non-placeholder model with all four classes is shipped).
+#
+# Training is out of repo. Ship one-vs-rest `classes` heads for Structure;
+# binary `weights`/`bias` are for setup-success notebooks only — not structure.
+model: logistic
+placeholder: true
+features: [trend, sideways, compression, expansion, er, vr, atr_pct, rs, alignment]
+weights:
+  trend: 0.5
+  sideways: 0.2
+  compression: 0.2
+  expansion: 0.3
+  er: 0.4
+  vr: -0.2
+  atr_pct: -0.1
+bias: -0.5
+classes:
+  trend:
+    weights: {trend: 1.0}
+    bias: 0
+  sideways:
+    weights: {sideways: 1.0}
+    bias: 0
+  compression:
+    weights: {compression: 1.0}
+    bias: 0
+  expansion:
+    weights: {expansion: 1.0}
+    bias: 0

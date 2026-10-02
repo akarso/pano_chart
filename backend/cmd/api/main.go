@@ -194,6 +194,25 @@ func main() {
 	}
 	log.Printf("[main] compression algo=%s", compAlgo)
 
+	// --- Learned regime classifier (PR-109; default stays heuristic) ---
+	if err := scoring.ValidateRegimeModelMode(); err != nil {
+		log.Fatalf("[main] %v", err)
+	}
+	if scoring.RegimeModelMode() == "learned" {
+		path := scoring.RegimeModelPath()
+		model, err := scoring.LoadRegimeModel(path)
+		if err != nil {
+			log.Fatalf("[main] regime_model=learned but load failed: %v", err)
+		}
+		if err := model.ValidateForInference(); err != nil {
+			log.Fatalf("[main] regime_model=learned but model not ready for inference: %v", err)
+		}
+		scoring.SetRegimeModel(model)
+		log.Printf("[main] regime model=learned path=%s", path)
+	} else {
+		log.Printf("[main] regime model=heuristic")
+	}
+
 	// --- Use cases ---
 	weights := []usecases.ScoreWeight{
 		{Calculator: sidewaysCalc, Weight: 1.0},

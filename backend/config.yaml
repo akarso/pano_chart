@@ -2,6 +2,8 @@
 scoring:
   trend_algo: predictability       # or strength
   compression_algo: absolute       # or percentile (PR-105; needs 500-bar fetch)
+  regime_model: heuristic          # or learned (PR-109; needs regime_model.yaml + A/B)
+  # regime_model_path: config/regime_model.yaml
 
 sideways:
   extrema_window: 3

@@ -36,7 +36,7 @@ type SignalWithOutcome struct {
 	Outcome *Outcome // nil if unresolved
 }
 
-// Filter selects signals for Query (scorecard / debug).
+// Filter selects signals for Query (scorecard / debug / export).
 type Filter struct {
 	Kind      Kind
 	Label     string
@@ -44,5 +44,10 @@ type Filter struct {
 	Symbol    string
 	Since     time.Time
 	Until     time.Time
-	Limit     int
+	// Limit caps rows. Limit == 0 → default 500 (scorecard). Limit < 0 →
+	// unlimited (export_dataset). Positive values are honored as-is.
+	Limit int
+	// OldestFirst orders by emitted_at ASC (default DESC). Use for
+	// reproducible training splits.
+	OldestFirst bool
 }

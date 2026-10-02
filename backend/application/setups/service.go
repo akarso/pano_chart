@@ -249,11 +249,11 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 		stats.Scores["Breakout Down"],
 	)
 
-	s.emitSetupSignal(ctx, result, series)
+	s.emitSetupSignal(ctx, result, series, stats)
 	return result, nil
 }
 
-func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupScores, series domain.CandleSeries) {
+func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupScores, series domain.CandleSeries, stats usecases.SymbolStats) {
 	if s.signalEmitter == nil || result.Confidence < 0.5 {
 		return
 	}
@@ -269,6 +269,13 @@ func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupSc
 		"seasonality_fit":  result.SeasonalityFit,
 		"market_effective": result.MarketEffective,
 	}
+	// Same feature builder as dominantRegimeLearned (PR-109 train/serve parity).
+	for k, v := range setupRegimeFeatures(stats.Scores, series) {
+		ctxNums[k] = v
+	}
+	// Structure-training label (distinct from outcome success). Encoded because
+	// Context is map[string]float64; export_dataset decodes to regime_label.
+	ctxNums["regime_code"] = regimeCode(result.Regime)
 	if label == "range" || label == "compression" {
 		hi, lo := recentExtremes(series)
 		ctxNums["range_low"] = lo
@@ -286,6 +293,40 @@ func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupSc
 	})
 }
 
+// setupRegimeFeatures builds the PR-109 feature map shared by emit and
+// dominantRegimeLearned. Uses raw score keys (not confidence-adjusted
+// breakouts) and Wilder TrueATR(14) so CSV rows match live classification.
+func setupRegimeFeatures(scores map[string]float64, series domain.CandleSeries) map[string]float64 {
+	trend := scores["Trend Predictability"]
+	compression := scores["Compression"]
+	sideways := scores["Sideways Consistency"]
+	expansion := scores["Breakout Up"]
+	if down := scores["Breakout Down"]; down > expansion {
+		expansion = down
+	}
+	candles := series.All()
+	closes := scoring.ClosesFromCandles(candles)
+	atr := scoring.TrueATR(candles, 14)
+	price := 0.0
+	if n := len(closes); n > 0 {
+		price = closes[n-1]
+	}
+	return scoring.BuildRegimeFeatures(trend, sideways, compression, expansion, closes, atr, price, 0, 0)
+}
+
+// regimeCode encodes result.Regime for Context / export (PR-109).
+// 0=sideways, 1=trend, 2=compression. Expansion folds to sideways in setups.
+func regimeCode(regime string) float64 {
+	switch regime {
+	case "uptrend", "downtrend":
+		return 1
+	case "compression":
+		return 2
+	default:
+		return 0
+	}
+}
+
 func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
 	n := series.Len()
 	if n == 0 {
@@ -296,7 +337,8 @@ func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
 		return 0, 0
 	}
 	price = last.Close()
-	atr = usecases.SimpleATR(series, 14)
+	// Wilder TrueATR(14) — same definition as setupRegimeFeatures / atr_pct.
+	atr = scoring.TrueATR(series.All(), 14)
 	return price, atr
 }
 
@@ -521,6 +563,13 @@ func scoresAgree(a, b float64) bool {
 // EvaluationSnapshot.Bias stays the sparkline first/last signal for Market
 // Pulse and is not used here.
 func dominantRegime(scores map[string]float64, series domain.CandleSeries, directionBias string, trendDir scoring.DirectedScoreCalculator) string {
+	if label, ok := dominantRegimeLearned(scores, series); ok {
+		if label != "trend" {
+			return label
+		}
+		return resolveTrendDirection(scores["Trend Predictability"], series, directionBias, trendDir)
+	}
+
 	trend := scores["Trend Predictability"]
 	compression := scores["Compression"]
 
@@ -539,42 +588,59 @@ func dominantRegime(scores map[string]float64, series domain.CandleSeries, direc
 		return "compression"
 	}
 	if trend > sideways {
-		if directionBias != "" {
-			return regimeFromDirectionBias(directionBias)
-		}
-		if trendDir == nil {
-			trendDir = &scoring.TrendPredictabilityScoreCalculator{}
-		}
-		recomputed, bias, err := trendDir.ScoreWithDirection(series)
-		switch {
-		case err != nil:
-			// Not expected to happen here — computeRegimeAndHealth already
-			// guards series.Len() < 2, and a regression over >= 2 distinct
-			// indices can't hit ScoreWithDirection's other error path
-			// (zero denominator). Logged because a masked error here would
-			// otherwise be undiagnosable in the field.
-			log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
-			return "sideways"
-		case bias == "neutral":
-			// No reliable direction (flat, clustered, or too little data)
-			// despite a nonzero trend score from other calculators —
-			// don't guess a direction that isn't there.
-			return "sideways"
-		case !scoresAgree(recomputed, trend):
-			// The recomputed score doesn't match what was already scored —
-			// series/scorer diverged somewhere; don't trust the bias. Logged
-			// since this is the one branch scoresAgree's doc comment flags
-			// as "should never happen today" — if it ever fires, that
-			// assumption broke somewhere and needs investigating.
-			log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
-			return "sideways"
-		case bias == "up":
-			return "uptrend"
-		default:
-			return "downtrend"
-		}
+		return resolveTrendDirection(trend, series, directionBias, trendDir)
 	}
 	return "sideways"
+}
+
+// resolveTrendDirection maps a trend-dominant call to uptrend/downtrend/sideways.
+func resolveTrendDirection(trend float64, series domain.CandleSeries, directionBias string, trendDir scoring.DirectedScoreCalculator) string {
+	if directionBias != "" {
+		return regimeFromDirectionBias(directionBias)
+	}
+	if trendDir == nil {
+		trendDir = &scoring.TrendPredictabilityScoreCalculator{}
+	}
+	recomputed, bias, err := trendDir.ScoreWithDirection(series)
+	switch {
+	case err != nil:
+		log.Printf("[setups] dominantRegime: ScoreWithDirection error, falling back to sideways: %v", err)
+		return "sideways"
+	case bias == "neutral":
+		return "sideways"
+	case !scoresAgree(recomputed, trend):
+		log.Printf("[setups] dominantRegime: score mismatch (scored=%.6f recomputed=%.6f), falling back to sideways", trend, recomputed)
+		return "sideways"
+	case bias == "up":
+		return "uptrend"
+	default:
+		return "downtrend"
+	}
+}
+
+// dominantRegimeLearned maps a one-vs-rest model to setup regime labels.
+// Expansion is folded into sideways (setups have no expansion regime string).
+// ok is false when no model is installed or classification fails.
+func dominantRegimeLearned(scores map[string]float64, series domain.CandleSeries) (string, bool) {
+	model := scoring.ActiveRegimeModel()
+	if model == nil {
+		return "", false
+	}
+	features := setupRegimeFeatures(scores, series)
+	_, _, _, _, dominant, ok := scoring.ClassifyStructure(features, *model)
+	if !ok {
+		return "", false
+	}
+	switch dominant {
+	case scoring.ClassTrend:
+		return "trend", true // caller resolves up/down
+	case scoring.ClassCompression:
+		return "compression", true
+	case scoring.ClassExpansion, scoring.ClassSideways:
+		return "sideways", true
+	default:
+		return "sideways", true
+	}
 }
 
 func regimeFromDirectionBias(bias string) string {
