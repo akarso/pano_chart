@@ -1,6 +1,8 @@
 package transition
 
 import (
+	"context"
+
 	"pano_chart/backend/application/market/regimehistory"
 	mkt "pano_chart/backend/domain/market"
 )
@@ -11,11 +13,11 @@ type HistoryFromService struct {
 }
 
 // GetHistory implements PeriodHistory.
-func (h HistoryFromService) GetHistory(timeframe string, limit int) ([]mkt.RegimePeriod, error) {
+func (h HistoryFromService) GetHistory(ctx context.Context, timeframe string, limit int) ([]mkt.RegimePeriod, error) {
 	if h.Service == nil {
 		return nil, nil
 	}
-	hist, err := h.Service.GetHistory(timeframe, limit)
+	hist, err := h.Service.GetHistory(ctx, timeframe, limit)
 	if err != nil {
 		return nil, err
 	}

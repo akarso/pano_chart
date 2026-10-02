@@ -499,7 +499,7 @@ func main() {
 	// is invisible unless someone thinks to check — so surface it loudly
 	// once at startup instead.
 	for _, bfTF := range []string{"1h", "4h", "1d"} {
-		if hist, histErr := regimeHistoryService.GetHistory(bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
+		if hist, histErr := regimeHistoryService.GetHistory(context.Background(), bfTF, 1); histErr == nil && len(hist.Periods) == 0 {
 			log.Printf("[main] WARNING: regime history for %s is empty (db=%s) — no backfill runs anymore (PR-073); it will accumulate live from now on", bfTF, regimeHistoryDBPath)
 		}
 	}

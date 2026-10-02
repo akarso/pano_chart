@@ -79,6 +79,17 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	}
 
 	currentRegime := mkt.Regime(summary.State)
+
+	var view MatrixView
+	if s.matrixCache != nil {
+		view = s.matrixCache.Matrix(ctx, timeframe)
+		// Prefer trailing merged age only when it describes the current regime
+		// (silent/indecisive/sideways), so Lookup buckets match BuildMatrix.
+		if view.MergedAge > 0 && view.MergedRegime == currentRegime {
+			regimeAge = view.MergedAge
+		}
+	}
+
 	heuristic := s.engine.Calculate(
 		currentRegime,
 		summary.Breadth.Compression,
@@ -92,9 +103,8 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	var sampleSize int
 	var pooled bool
 
-	if s.matrixCache != nil {
-		matrix := s.matrixCache.Matrix(timeframe)
-		if look, ok := matrix.Lookup(currentRegime, regimeAge); ok {
+	if s.matrixCache != nil && !view.Stale {
+		if look, ok := view.Matrix.Lookup(currentRegime, regimeAge); ok {
 			sampleSize = look.SampleSize
 			pooled = look.Pooled
 			// Blend only when the row actually used is confident (≥ 30 samples).

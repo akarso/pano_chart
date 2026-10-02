@@ -217,10 +217,13 @@ type stubHistory struct {
 	calls   int
 }
 
-func (s *stubHistory) GetHistory(string, int) ([]mkt.RegimePeriod, error) {
+func (s *stubHistory) GetHistory(ctx context.Context, _ string, _ int) ([]mkt.RegimePeriod, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return s.periods, s.err
 }
 
@@ -239,13 +242,13 @@ func TestMatrixCache_TTL(t *testing.T) {
 	cache := transition.NewMatrixCache(hist, time.Minute, 100)
 	cache.SetClock(func() time.Time { return now })
 
-	_ = cache.Matrix("4h")
-	_ = cache.Matrix("4h")
+	_ = cache.Matrix(context.Background(), "4h")
+	_ = cache.Matrix(context.Background(), "4h")
 	if hist.callCount() != 1 {
 		t.Fatalf("expected 1 history call within TTL, got %d", hist.callCount())
 	}
 	now = now.Add(2 * time.Minute)
-	_ = cache.Matrix("4h")
+	_ = cache.Matrix(context.Background(), "4h")
 	if hist.callCount() != 2 {
 		t.Fatalf("expected rebuild after TTL, calls=%d", hist.callCount())
 	}
@@ -260,12 +263,21 @@ func TestMatrixCache_ErrorNegativeCaches(t *testing.T) {
 	cache := transition.NewMatrixCache(hist, time.Minute, 100)
 	cache.SetClock(func() time.Time { return now })
 
-	_ = cache.Matrix("4h")
+	v0 := cache.Matrix(context.Background(), "4h")
+	if v0.Stale {
+		t.Fatal("fresh build must not be stale")
+	}
 	now = now.Add(2 * time.Minute)
 	hist.err = context.DeadlineExceeded
-	_ = cache.Matrix("4h") // fail once, bump builtAt
+	v1 := cache.Matrix(context.Background(), "4h") // fail once, bump builtAt, mark stale
+	if !v1.Stale {
+		t.Fatal("failed refresh must mark view stale")
+	}
 	for i := 0; i < 5; i++ {
-		_ = cache.Matrix("4h")
+		v := cache.Matrix(context.Background(), "4h")
+		if !v.Stale {
+			t.Fatal("stale flag must persist within TTL")
+		}
 	}
 	if hist.callCount() != 2 {
 		t.Fatalf("persistent errors must not retry within TTL, calls=%d want 2", hist.callCount())
@@ -277,9 +289,9 @@ func TestMatrixCache_FirstFailureNegativeCaches(t *testing.T) {
 	hist := &stubHistory{err: context.DeadlineExceeded}
 	cache := transition.NewMatrixCache(hist, time.Minute, 100)
 	cache.SetClock(func() time.Time { return now })
-	_ = cache.Matrix("1h")
-	_ = cache.Matrix("1h")
-	_ = cache.Matrix("1h")
+	_ = cache.Matrix(context.Background(), "1h")
+	_ = cache.Matrix(context.Background(), "1h")
+	_ = cache.Matrix(context.Background(), "1h")
 	if hist.callCount() != 1 {
 		t.Fatalf("first failure must negative-cache, calls=%d", hist.callCount())
 	}
@@ -293,22 +305,22 @@ func TestMatrixCache_PerTimeframeIsolation(t *testing.T) {
 			{Regime: mkt.RegimeTrend, DurationCandles: 10, EndTimestamp: int64Ptr(1)},
 			{Regime: mkt.RegimeSideways, DurationCandles: 10, EndTimestamp: int64Ptr(1)},
 		},
-		blockTF:    "4h",
-		started:    started4h,
-		release:    release4h,
+		blockTF: "4h",
+		started: started4h,
+		release: release4h,
 	}
 	cache := transition.NewMatrixCache(hist, time.Minute, 100)
 
 	slowDone := make(chan struct{})
 	go func() {
-		_ = cache.Matrix("4h")
+		_ = cache.Matrix(context.Background(), "4h")
 		close(slowDone)
 	}()
 	<-started4h // 4h rebuild is inside GetHistory
 
 	fastDone := make(chan struct{})
 	go func() {
-		_ = cache.Matrix("1h")
+		_ = cache.Matrix(context.Background(), "1h")
 		close(fastDone)
 	}()
 
@@ -323,24 +335,164 @@ func TestMatrixCache_PerTimeframeIsolation(t *testing.T) {
 }
 
 type blockingHistory struct {
-	periods  []mkt.RegimePeriod
-	blockTF  string
-	started  chan struct{}
-	release  chan struct{}
-	mu       sync.Mutex
-	calls    int
+	periods     []mkt.RegimePeriod
+	blockTF     string
+	started     chan struct{}
+	release     chan struct{}
+	mu          sync.Mutex
+	calls       int
 	startedOnce sync.Once
 }
 
-func (b *blockingHistory) GetHistory(tf string, _ int) ([]mkt.RegimePeriod, error) {
+func (b *blockingHistory) GetHistory(ctx context.Context, tf string, _ int) ([]mkt.RegimePeriod, error) {
 	b.mu.Lock()
 	b.calls++
 	b.mu.Unlock()
 	if tf == b.blockTF {
 		b.startedOnce.Do(func() { close(b.started) })
-		<-b.release
+		select {
+		case <-b.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return b.periods, nil
+}
+
+func TestMatrixCache_CanceledContextMarksStale(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	end := int64(1)
+	seed := make([]mkt.RegimePeriod, 0, 80)
+	for i := 0; i < 40; i++ {
+		seed = append(seed,
+			mkt.RegimePeriod{Regime: mkt.RegimeCompression, DurationCandles: 10, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 10, EndTimestamp: &end},
+		)
+	}
+	hist := &stubHistory{periods: seed}
+	cache := transition.NewMatrixCache(hist, time.Minute, 200)
+	cache.SetClock(func() time.Time { return now })
+
+	if v := cache.Matrix(context.Background(), "4h"); v.Stale {
+		t.Fatal("warm build must not be stale")
+	}
+
+	now = now.Add(2 * time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	v := cache.Matrix(ctx, "4h")
+	if !v.Stale {
+		t.Fatal("canceled refresh must mark view stale")
+	}
+}
+
+func TestTrailingMergedAge_SilentIndecisiveSideways(t *testing.T) {
+	// 8 + 8 = 16 against median 20 → Mature; unmerged 8 → Mid.
+	periods := []mkt.RegimePeriod{
+		{Regime: mkt.RegimeSilent, DurationCandles: 8},
+		{Regime: mkt.RegimeIndecisive, DurationCandles: 8},
+	}
+	if got := transition.TrailingMergedAge(periods); got != 16 {
+		t.Fatalf("merged age=%d want 16", got)
+	}
+	if transition.ClassifyAge(8, 20) != transition.AgeMid {
+		t.Fatal("unmerged 8/20 should be Mid")
+	}
+	if transition.ClassifyAge(16, 20) != transition.AgeMature {
+		t.Fatal("merged 16/20 should be Mature")
+	}
+}
+
+func TestTransitionService_UsesMergedAgeForLookup(t *testing.T) {
+	end := int64(1)
+	// Seed matrix: Mid bucket (dur 8) → trend; Mature (dur 16) → expansion.
+	periods := make([]mkt.RegimePeriod, 0, 80)
+	for i := 0; i < 40; i++ {
+		periods = append(periods,
+			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 8, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeTrend, DurationCandles: 8, EndTimestamp: &end},
+		)
+	}
+	for i := 0; i < 40; i++ {
+		periods = append(periods,
+			mkt.RegimePeriod{Regime: mkt.RegimeSideways, DurationCandles: 16, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 8, EndTimestamp: &end},
+		)
+	}
+	// Live history ends with silent(8)+indecisive(8) → merged age 16.
+	live := append(append([]mkt.RegimePeriod{}, periods...),
+		mkt.RegimePeriod{Regime: mkt.RegimeSilent, DurationCandles: 8, EndTimestamp: &end},
+		mkt.RegimePeriod{Regime: mkt.RegimeIndecisive, DurationCandles: 8, EndTimestamp: nil},
+	)
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateSideways,
+			Breadth:             mkt.Breadth{Sideways: 1},
+			VolatilityExpansion: 1.0,
+		},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedAge(8)) // unmerged open period only
+	svc.SetMatrixCache(transition.NewMatrixCache(&stubHistory{periods: live}, time.Minute, 500))
+
+	result, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Source != "blend" {
+		t.Fatalf("source=%q", result.Source)
+	}
+	// Mature bucket (merged 16) prefers expansion; Mid (8) would prefer trend.
+	if result.Probabilities.Expansion <= result.Probabilities.Trend {
+		t.Fatalf("expected mature expansion row from merged age, got %+v", result.Probabilities)
+	}
+}
+
+func TestTransitionService_StaleMatrixDoesNotBlend(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	end := int64(1)
+	periods := make([]mkt.RegimePeriod, 0, 80)
+	for i := 0; i < 40; i++ {
+		periods = append(periods,
+			mkt.RegimePeriod{Regime: mkt.RegimeCompression, DurationCandles: 10, EndTimestamp: &end},
+			mkt.RegimePeriod{Regime: mkt.RegimeExpansion, DurationCandles: 10, EndTimestamp: &end},
+		)
+	}
+	hist := &stubHistory{periods: periods}
+	cache := transition.NewMatrixCache(hist, time.Minute, 200)
+	cache.SetClock(func() time.Time { return now })
+
+	provider := &fakeTransitionRegimeProvider{
+		summary: mkt.Summary{
+			State:               mkt.StateCompression,
+			Breadth:             mkt.Breadth{Compression: 0},
+			VolatilityExpansion: 1.0,
+		},
+	}
+	svc := transition.NewTransitionService(provider, transition.NewTransitionEngine())
+	svc.SetAgeProvider(fixedAge(10))
+	svc.SetMatrixCache(cache)
+
+	ok, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok.Source != "blend" {
+		t.Fatalf("fresh source=%q", ok.Source)
+	}
+
+	now = now.Add(2 * time.Minute)
+	hist.err = context.DeadlineExceeded
+	stale, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Source != "heuristic" {
+		t.Fatalf("stale refresh must not blend, source=%q", stale.Source)
+	}
+	if math.Abs(stale.Probabilities.Compression-0.6) > 1e-9 {
+		t.Fatalf("expected zero-pressure heuristic, got %+v", stale.Probabilities)
+	}
 }
 
 func TestTransitionService_EmptyHistoryHeuristic(t *testing.T) {

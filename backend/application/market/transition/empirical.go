@@ -217,6 +217,35 @@ func ClassifyAge(duration int, median float64) AgeBucket {
 	}
 }
 
+// TrailingMergedAge sums durations of the trailing run of periods that share
+// the same core regime as the last period (silent/indecisive/sideways merge
+// the same way as BuildMatrix). Used so live Lookup age matches how historical
+// transitions were bucketed.
+func TrailingMergedAge(periods []mkt.RegimePeriod) int {
+	age, _ := TrailingMerged(periods)
+	return age
+}
+
+// TrailingMerged returns the merged age and core regime of the trailing run.
+func TrailingMerged(periods []mkt.RegimePeriod) (age int, regime mkt.Regime) {
+	if len(periods) == 0 {
+		return 0, ""
+	}
+	last, ok := coreRegime(periods[len(periods)-1].Regime)
+	if !ok {
+		return periods[len(periods)-1].DurationCandles, ""
+	}
+	sum := 0
+	for i := len(periods) - 1; i >= 0; i-- {
+		r, ok := coreRegime(periods[i].Regime)
+		if !ok || r != last {
+			break
+		}
+		sum += periods[i].DurationCandles
+	}
+	return sum, last
+}
+
 // WeightFromSamples is clamp(n/100, 0, 0.7).
 func WeightFromSamples(n int) float64 {
 	if n <= 0 {
