@@ -300,6 +300,8 @@ row) used for the current regime** has ≥ 30 raw samples:
   across all replay endpoints; excess → `429`. Rankings `?mtf=1` is ignored
   when `asOf` is set (MTF overlay is live-only until PR-112b).
 * Replay does **not** write badge or transition signals to the signal log.
+* Replay rankings omit live 24h ticker volume (`volume` is `0`); `sort=volume`
+  falls back to `total`. Evaluation snapshot logging is skipped under `asOf`.
 
 ### Composite index
 

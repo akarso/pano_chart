@@ -45,11 +45,8 @@ func historyAtAsOf(periods []mkt.RegimePeriod, timeframe string, asOfUnix int64,
 		if len(out) > limit {
 			out = out[len(out)-limit:]
 		}
-		age := 0
-		if len(out) > 0 {
-			age = out[len(out)-1].DurationCandles
-		}
-		return out, age
+		// Gap / asOf outside any period — age is unknown (0), not the last closed duration.
+		return out, 0
 	}
 
 	out := make([]mkt.RegimePeriod, 0, coverIdx+1)

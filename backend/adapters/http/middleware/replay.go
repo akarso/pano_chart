@@ -29,8 +29,8 @@ const (
 // RequireReplayAccess gates requests that carry ?asOf=:
 //   - parses and attaches replay.WithAsOf
 //   - hard-requires Bearer auth (independent of AUTH_ENFORCE)
+//   - rate-limits at ReplayRateLimitPerMinute / user (before entitlement I/O)
 //   - requires an active Pro subscription when a checker is configured
-//   - rate-limits at ReplayRateLimitPerMinute / user (asOf traffic only)
 //
 // Requests without asOf pass through unchanged (no auth / no rate limit).
 func RequireReplayAccess(
@@ -46,12 +46,34 @@ func RequireReplayAccess(
 	}, float64(ReplayRateLimitPerMinute)/60.0, ReplayRateLimitBurst)
 
 	return func(next http.Handler) http.Handler {
-		limited := limiter(next)
+		// Rate-limit wraps entitlement + handler so exhausted callers are
+		// rejected cheaply without hitting the subscription store.
+		limited := limiter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID, ok := UserIDFromContextOK(r.Context())
+			if !ok {
+				writeReplayError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			if subs != nil {
+				active, serr := subs.IsActive(r.Context(), userID)
+				if serr != nil {
+					log.Printf("[replay] subscription check error user=%s: %v", userID, serr)
+					writeReplayError(w, http.StatusServiceUnavailable, "subscription check failed")
+					return
+				}
+				if !active {
+					writeReplayError(w, http.StatusForbidden, "pro required")
+					return
+				}
+			}
+			next.ServeHTTP(w, r)
+		}))
+
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := r.URL.Query().Get("asOf")
 			asOf, err := replay.ParseUnixSeconds(raw)
 			if err != nil {
-				http.Error(w, `{"error":"invalid asOf"}`, http.StatusBadRequest)
+				writeReplayError(w, http.StatusBadRequest, "invalid asOf")
 				return
 			}
 			if asOf == nil {
@@ -59,34 +81,26 @@ func RequireReplayAccess(
 				return
 			}
 			if err := replay.ValidateAsOf(*asOf, time.Now().UTC()); err != nil {
-				http.Error(w, `{"error":"invalid asOf"}`, http.StatusBadRequest)
+				writeReplayError(w, http.StatusBadRequest, "invalid asOf")
 				return
 			}
 
 			userID, ok := lookupBearerUser(r, creds)
 			if !ok {
-				http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+				writeReplayError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			ctx := WithUserID(r.Context(), userID)
-
-			if subs != nil {
-				active, serr := subs.IsActive(ctx, userID)
-				if serr != nil {
-					log.Printf("[replay] subscription check error user=%s: %v", userID, serr)
-					http.Error(w, `{"error":"subscription check failed"}`, http.StatusServiceUnavailable)
-					return
-				}
-				if !active {
-					http.Error(w, `{"error":"pro required"}`, http.StatusForbidden)
-					return
-				}
-			}
-
 			ctx = replay.WithAsOf(ctx, *asOf)
 			limited.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+func writeReplayError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(`{"error":"` + msg + `"}`))
 }
 
 func lookupBearerUser(r *http.Request, store ports.CredentialStore) (string, bool) {

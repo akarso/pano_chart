@@ -470,4 +470,17 @@ func TestGetRankings_AsOfUsesHistoricalWindow(t *testing.T) {
 	if replayTrend <= 0 {
 		t.Fatalf("asOf trend score=%g want positive (early uptrend)", replayTrend)
 	}
+	if replayOut.Results[0].Volume != 0 {
+		t.Fatalf("replay volume=%g want 0 (no live ticker)", replayOut.Results[0].Volume)
+	}
+
+	volSort, err := uc.Execute(context.Background(), usecases.GetRankingsRequest{
+		Timeframe: tf, Sort: usecases.SortByVolume, AsOf: &asOf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volSort.Sort != usecases.SortByTotal || volSort.RequestedSort != usecases.SortByVolume {
+		t.Fatalf("volume under asOf: sort=%s requested=%s want total/volume", volSort.Sort, volSort.RequestedSort)
+	}
 }

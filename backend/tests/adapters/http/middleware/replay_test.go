@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,13 +41,23 @@ func replayHash(secret string) string {
 type replaySubs struct {
 	active map[string]bool
 	err    error
+	calls  atomic.Int64
 }
 
 func (s *replaySubs) IsActive(_ context.Context, userID string) (bool, error) {
+	s.calls.Add(1)
 	if s.err != nil {
 		return false, s.err
 	}
 	return s.active[userID], nil
+}
+
+func assertJSONError(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type=%q want application/json", ct)
+	}
 }
 
 func TestRequireReplayAccess_PassthroughWithoutAsOf(t *testing.T) {
@@ -77,6 +89,7 @@ func TestRequireReplayAccess_InvalidAsOf(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code=%d", w.Code)
 	}
+	assertJSONError(t, w)
 }
 
 func TestRequireReplayAccess_RequiresAuthAndPro(t *testing.T) {
@@ -100,6 +113,7 @@ func TestRequireReplayAccess_RequiresAuthAndPro(t *testing.T) {
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("no auth: code=%d", w.Code)
 	}
+	assertJSONError(t, w)
 
 	// Free user
 	creds.byHash[replayHash("free")] = "free-user"
@@ -110,6 +124,7 @@ func TestRequireReplayAccess_RequiresAuthAndPro(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("free: code=%d", w.Code)
 	}
+	assertJSONError(t, w)
 
 	// Pro user
 	r = httptest.NewRequest(http.MethodGet, "/api/rankings?asOf=1700000000", nil)
@@ -138,9 +153,10 @@ func TestRequireReplayAccess_SubscriptionCheckError503(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d want 503", w.Code)
 	}
+	assertJSONError(t, w)
 }
 
-func TestRequireReplayAccess_RateLimitsPerUser(t *testing.T) {
+func TestRequireReplayAccess_RateLimitsBeforeSubscription(t *testing.T) {
 	creds := &replayCredStore{byHash: map[string]string{replayHash("secret"): "pro-user"}}
 	subs := &replaySubs{active: map[string]bool{"pro-user": true}}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -166,5 +182,8 @@ func TestRequireReplayAccess_RateLimitsPerUser(t *testing.T) {
 	}
 	if ok != middleware.ReplayRateLimitBurst || denied == 0 {
 		t.Fatalf("ok=%d denied=%d want ok=%d and some 429", ok, denied, middleware.ReplayRateLimitBurst)
+	}
+	if got := subs.calls.Load(); got != int64(middleware.ReplayRateLimitBurst) {
+		t.Fatalf("IsActive calls=%d want %d (rate limit before entitlement)", got, middleware.ReplayRateLimitBurst)
 	}
 }

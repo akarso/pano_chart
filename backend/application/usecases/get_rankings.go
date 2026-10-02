@@ -285,10 +285,16 @@ func (g *GetRankings) Execute(ctx context.Context, req GetRankingsRequest) (Rank
 		}, nil
 	}
 
-	volMap, err := g.volumes.Volumes(ctx)
-	if err != nil {
-		return empty, fmt.Errorf("volume fetch failed: %w", err)
+	var volMap map[string]float64
+	if req.AsOf == nil {
+		var err error
+		volMap, err = g.volumes.Volumes(ctx)
+		if err != nil {
+			return empty, fmt.Errorf("volume fetch failed: %w", err)
+		}
 	}
+	// Replay has no historical 24h ticker — leave volume unset (0) rather than
+	// pairing today's activity with as-of scores (PR-112a).
 
 	scored, err := g.fetchAndScoreSymbols(ctx, symbols, req)
 	if err != nil {
@@ -372,10 +378,12 @@ func (g *GetRankings) fetchAndScoreSymbols(ctx context.Context, symbols []domain
 			}
 
 			if g.snapshotLogger != nil {
-				snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
-				snap.TrendAlgo = g.trendAlgo
-				snap.CompressionAlgo = string(g.compressionAlgo)
-				_ = g.snapshotLogger.Log(snap)
+				if _, replay := replay.AsOf(gCtx); !replay {
+					snap := BuildSnapshot(sym, req.Timeframe, ranked[0].Scores, precisionSeries, 0, domain.AlgoVersion)
+					snap.TrendAlgo = g.trendAlgo
+					snap.CompressionAlgo = string(g.compressionAlgo)
+					_ = g.snapshotLogger.Log(snap)
+				}
 			}
 			return nil
 		})
@@ -439,6 +447,10 @@ func buildRankedRows(scored []scoredSymbol, volMap map[string]float64) []RankedR
 func (g *GetRankings) finalizeRankings(ctx context.Context, req GetRankingsRequest, results []RankedResult, universeN int) RankingsResult {
 	rs := g.annotateRelativeStrength(ctx, req.Timeframe, results, universeN)
 	sortMode := effectiveSort(req.Sort, rs.available)
+	// Replay volumes are unset — do not pretend to sort by today's ticker.
+	if req.AsOf != nil && sortMode == SortByVolume {
+		sortMode = SortByTotal
+	}
 
 	sortResults(results, sortMode)
 	assignPositionPercentiles(results)
