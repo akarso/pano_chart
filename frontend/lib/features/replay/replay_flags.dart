@@ -1,10 +1,9 @@
 /// Compile-time gate for the Pro Replay UI (PR-112b).
 ///
-/// When false, [bootstrapApp] does not wire a [ReplayController], so the
-/// Replay toggle stays hidden. Flip to true only once PR-112a `?asOf=` is
-/// live on the API this build talks to — otherwise the banner would label
-/// live payloads as replay.
+/// Default **on** now that PR-112a `?asOf=` is on `dev`. Bootstrap wires a
+/// [ReplayController] when enabled so the Pro history toggle appears.
 ///
-/// Override locally with `--dart-define=REPLAY_UI=true`.
+/// Kill-switch for builds that still talk to a pre-112a API:
+/// `--dart-define=REPLAY_UI=false`.
 const bool kReplayUiEnabled =
-    bool.fromEnvironment('REPLAY_UI', defaultValue: false);
+    bool.fromEnvironment('REPLAY_UI', defaultValue: true);
