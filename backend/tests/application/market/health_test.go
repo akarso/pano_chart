@@ -511,12 +511,15 @@ func TestTrendHealthFromSnapshot_SparklineTwoATR(t *testing.T) {
 	}
 	spark[18] = 116
 	spark[19] = 115
-	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
+	h, ok := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
 		Sparkline:  spark,
 		Price:      999, // must be ignored on sparkline path
 		RecentHigh: 999,
 		ATR:        99,
 	})
+	if !ok {
+		t.Fatal("expected scorable sparkline")
+	}
 	if math.Abs(h-0.6) > 0.02 {
 		t.Fatalf("expected ≈0.6 after light staleness (≈0.585), got %f", h)
 	}
@@ -533,24 +536,41 @@ func TestTrendHealthFromSnapshot_SparklineStaleness(t *testing.T) {
 			spark[i] = 148
 		}
 	}
-	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{Sparkline: spark})
+	h, ok := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{Sparkline: spark})
+	if !ok {
+		t.Fatal("expected scorable sparkline")
+	}
 	if math.Abs(h-0.5) > 0.08 {
 		t.Fatalf("expected ~0.5 with full staleness, got %f", h)
 	}
 }
 
 func TestTrendHealthFromSnapshot_ShortUsesEnrichedFields(t *testing.T) {
-	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
-		Sparkline:  []float64{100, 101, 102}, // < tapeMinBars
-		Price:      100,
-		RecentHigh: 110,
-		RecentLow:  90,
-		ATR:        5,
+	h, ok := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
+		Sparkline:    []float64{100, 101, 102}, // < tapeMinBars
+		Price:        100,
+		RecentHigh:   110,
+		RecentLow:    90,
+		ATR:          5,
 		RecentReturn: 0.5,
 	})
+	if !ok {
+		t.Fatal("expected scorable enriched fields")
+	}
 	// dd = 2 ATR → 0.6; barsSinceExtreme forced 0 (no staleness on short path).
 	if math.Abs(h-0.6) > 0.01 {
 		t.Fatalf("expected ~0.6 from enriched fields, got %f", h)
+	}
+}
+
+func TestTrendHealthFromSnapshot_FlatSparklineUnscorable(t *testing.T) {
+	flat := make([]float64, 20)
+	for i := range flat {
+		flat[i] = 100
+	}
+	_, ok := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{Sparkline: flat})
+	if ok {
+		t.Fatal("flat sparkline must be unscorable")
 	}
 }
 

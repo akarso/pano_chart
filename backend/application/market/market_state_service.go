@@ -194,17 +194,16 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 			if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
 				continue
 			}
-			// Skip tokens with no volatility baseline (flat long sparkline
-			// yields TrueATR 0 and must not count as a breakdown).
-			if !hasTrendHealthBaseline(e) {
-				continue
-			}
-			healthyTrendCount++
 			state := "uptrend"
 			if e.Bias == "down" {
 				state = "downtrend"
 			}
-			h := TrendHealthFromSnapshot(state, e)
+			h, ok := TrendHealthFromSnapshot(state, e)
+			if !ok {
+				// No volatility baseline (e.g. flat long sparkline → TrueATR 0).
+				continue
+			}
+			healthyTrendCount++
 			effectiveSum += h
 			if h < 0.4 {
 				breakdowns++
