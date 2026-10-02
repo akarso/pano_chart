@@ -133,6 +133,11 @@ func finalizePlan(symbol, timeframe string, low, high, mid, atr, price, quality 
 		plan.Reason = "degenerate channel"
 		return plan
 	}
+	if math.IsNaN(price) || math.IsInf(price, 0) {
+		plan.Price = 0
+		plan.Reason = "price unavailable"
+		return plan
+	}
 
 	plan.Position = clamp01((price - low) / (high - low))
 

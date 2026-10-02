@@ -196,11 +196,14 @@ func TestChannelFromSwings_EqualTouchesStillConfirm(t *testing.T) {
 
 func TestBuildRangePlanFromBounds_NaNPricePositionZero(t *testing.T) {
 	p := plan.BuildRangePlanFromBounds("BTCUSDT", "1h", 100, 110, math.NaN(), 1, 0.8)
+	if p.Valid || p.Reason != "price unavailable" {
+		t.Fatalf("Valid=%v Reason=%q want price unavailable", p.Valid, p.Reason)
+	}
+	if math.IsNaN(p.Price) || math.IsInf(p.Price, 0) || p.Price != 0 {
+		t.Fatalf("Price=%v want 0", p.Price)
+	}
 	if math.IsNaN(p.Position) || math.IsInf(p.Position, 0) {
 		t.Fatalf("Position=%v want finite", p.Position)
-	}
-	if p.Position != 0 {
-		t.Fatalf("Position=%v want 0 for NaN price", p.Position)
 	}
 }
 

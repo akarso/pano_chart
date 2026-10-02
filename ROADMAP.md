@@ -1122,7 +1122,8 @@ model is absent / placeholder; learned Structure keeps trend gate; export Query 
    **PR-104 caveat:** Lo–MacKinlay MRS ≠ channel quality (`tight_range` MRS≈0). Use
    Sideways V5 as the quality gate, not LM MRS.
    Channel Low/High come from confirmed 3-bar swing pivots (shared
-   `scoring.IsPivotHigh`/`IsPivotLow`; not raw min/max). Width≥3.5 is the
+   plateau-tolerant `scoring.IsPivotHighAllowEqual`/`IsPivotLowAllowEqual`;
+   not raw min/max). Width≥3.5 is the
    binding geometry gate for Mid targets — RR is reported but not a separate
    public reason. When `!Valid`, entry/stop/target fields are zeroed;
    `riskReward` may remain for diagnostics.
