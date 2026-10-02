@@ -10,5 +10,6 @@ abstract class RankingsApi {
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   });
 }

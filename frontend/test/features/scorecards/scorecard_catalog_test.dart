@@ -94,4 +94,29 @@ void main() {
     await second;
     expect(catalog.items.values.single.label, 'trend_up');
   });
+
+  test('a failed reload after a since-window change clears chips', () async {
+    final api = _GateApi();
+    final catalog = ScorecardCatalog();
+    final first = catalog.load(
+      api: api,
+      timeframe: '1h',
+      since: '30d',
+      notify: () {},
+    );
+    api.succeed(0, 'trend_up');
+    await first;
+    expect(catalog.items, isNotEmpty);
+
+    final second = catalog.load(
+      api: api,
+      timeframe: '1h',
+      since: '2025-08-17T08:00:00.000Z',
+      notify: () {},
+    );
+    expect(catalog.items, isEmpty);
+    api.fail(1);
+    await second;
+    expect(catalog.items, isEmpty);
+  });
 }

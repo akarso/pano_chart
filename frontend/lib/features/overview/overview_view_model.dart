@@ -32,6 +32,11 @@ class OverviewViewModel {
   /// overlay it can't show.
   bool isProUser = false;
 
+  /// Replay cutoff (unix seconds) for rankings `?asOf=` (PR-112b).
+  /// Null = live. Widget syncs from [ReplayController.asOfUnixFor].
+  /// When set, rankings are never written to or read from the offline cache.
+  int? asOfUnix;
+
   int _generation = 0;
 
   OverviewViewModel(this._getOverview);
@@ -188,7 +193,8 @@ class OverviewViewModel {
     };
   }
 
-  /// Writes [cache] only if [gen] is still the active generation.
+  /// Writes [cache] only if [gen] is still the active generation and
+  /// we are not in replay (`asOfUnix == null`).
   /// A slower SET that lands after a newer write may clobber disk; the payload
   /// is still sort-tagged, so offline restore ignores a sort mismatch.
   Future<void> _writeRankingsCacheIfCurrent(
@@ -196,7 +202,7 @@ class OverviewViewModel {
     int gen,
     Map<String, dynamic> cache,
   ) async {
-    if (_prefs == null) return;
+    if (_prefs == null || asOfUnix != null) return;
     if (gen != _generation) return;
     final payload = jsonEncode(cache);
     final gate = cacheWriteGate;
@@ -248,7 +254,8 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
-        mtf: isProUser,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
       if (currentGen != _generation) return;
 
@@ -283,6 +290,12 @@ class OverviewViewModel {
       }
     } catch (e) {
       if (currentGen != _generation) return;
+
+      // Replay must not paint live offline cache under a Replay banner.
+      if (asOfUnix != null) {
+        _setState(_state.copyWith(isLoading: false, error: e.toString()));
+        return;
+      }
 
       if (_prefs != null) {
         final cacheStr = _prefs!.getRankingsCache(timeframe);
@@ -340,7 +353,8 @@ class OverviewViewModel {
         page: 1,
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
-        mtf: isProUser,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;
@@ -428,7 +442,8 @@ class OverviewViewModel {
         sort: _state.sort,
         snapshot: _state.snapshot,
         sidewaysAlgo: _state.sidewaysAlgo,
-        mtf: isProUser,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;
@@ -539,7 +554,8 @@ class OverviewViewModel {
         sort: _state.sort,
         sidewaysAlgo: _state.sidewaysAlgo,
         symbols: missing.toList(),
-        mtf: isProUser,
+        mtf: isProUser && asOfUnix == null,
+        asOf: asOfUnix,
       );
 
       if (currentGen != _generation) return;

@@ -23,6 +23,7 @@ class _FakeGetOverview extends GetOverview {
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
     final i = calls++;
     if (i >= results.length) throw Exception('network error');
@@ -214,6 +215,44 @@ void main() {
     expect(offline.state.items.single.symbol, 'NEWUSDT');
     expect(offline.state.items.single.rs, 0.01);
     expect(offline.state.rsAvailable, true);
+  });
+
+  test('replay asOf skips cache write and offline fallback', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = PreferencesService(await SharedPreferences.getInstance());
+    const live = OverviewResult(
+      rsAvailable: true,
+      effectiveSort: 'volume',
+      hasMore: false,
+      items: [OverviewItem(symbol: 'LIVEUSDT', volume: 1, rs: 0.1)],
+    );
+    const historical = OverviewResult(
+      rsAvailable: true,
+      effectiveSort: 'volume',
+      hasMore: false,
+      items: [OverviewItem(symbol: 'PASTUSDT', volume: 2, rs: -0.1)],
+    );
+    final fake = _FakeGetOverview([live, historical]);
+    final vm = OverviewViewModel(fake);
+    vm.attachPrefs(prefs);
+    await vm.loadInitial('1h');
+    expect(prefs.getRankingsCache('1h'), isNotNull);
+
+    vm.asOfUnix = 1726473600;
+    await vm.loadInitial('1h');
+    expect(vm.state.items.single.symbol, 'PASTUSDT');
+    // Live cache must remain untouched by historical rows.
+    final cached = jsonDecode(prefs.getRankingsCache('1h')!) as Map;
+    expect((cached['items'] as List).single['symbol'], 'LIVEUSDT');
+
+    // Offline under replay must fail closed — not paint live cache.
+    final replayOffline = OverviewViewModel(_FakeGetOverview([]));
+    replayOffline.attachPrefs(prefs);
+    replayOffline.asOfUnix = 1726473600;
+    await replayOffline.loadInitial('1h');
+    expect(replayOffline.state.items, isEmpty);
+    expect(replayOffline.state.error, isNotNull);
+    expect(replayOffline.state.error, isNot(contains('Offline')));
   });
 
   test('cache write snapshots sort when user flips mid-write', () async {

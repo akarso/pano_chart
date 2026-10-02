@@ -17,6 +17,8 @@ import '../features/news/news_list_screen.dart';
 import '../features/notifications/notification_router.dart';
 import '../features/notifications/alert_context.dart';
 import '../features/overview/overview_widget.dart';
+import '../features/replay/replay_controller.dart';
+import '../features/replay/replay_flags.dart';
 import '../features/social/notification_service.dart';
 import '../features/social/social_feed_screen.dart';
 import '../features/social/social_feed_view_model.dart';
@@ -64,6 +66,8 @@ Widget bootstrapApp({
   final watchlist = prefs == null
       ? null
       : root.createWatchlistController(prefs);
+  final replayController =
+      kReplayUiEnabled ? ReplayController() : null;
   final socialVm = socialFeedViewModel;
   final component = AppComponent(
     config,
@@ -93,6 +97,7 @@ Widget bootstrapApp({
       socialFeedViewModel: socialVm,
       notificationConfigApi: notificationConfigApi,
       scorecardApi: scorecardApi,
+      replayController: replayController,
       watchlist: watchlist,
     ),
   );
@@ -139,6 +144,7 @@ Widget bootstrapApp({
         scorecardApi: scorecardApi,
         initialTimeframe: timeframe,
         isProUser: billingManager?.hasFullAccess ?? false,
+        replayController: replayController,
       ),
     );
     onRouterReady?.call(router);

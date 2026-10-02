@@ -42,5 +42,6 @@ abstract class GetOverview {
     // backend always computes), so it should only be requested for users
     // who can actually see it.
     bool mtf = false,
+    int? asOf,
   });
 }

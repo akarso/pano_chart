@@ -13,6 +13,7 @@ import 'package:pano_chart_frontend/features/market_state/participation_counts.d
 import 'package:pano_chart_frontend/features/market_state/regime_data.dart';
 import 'package:pano_chart_frontend/features/market_state/http_sector_rotation_api.dart';
 import 'package:pano_chart_frontend/features/market_state/sector_rotation_data.dart';
+import 'package:pano_chart_frontend/features/replay/replay_controller.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -369,6 +370,190 @@ void main() {
       expect(find.byKey(const Key('mp-structure-bar-Expansion')), findsOneWidget);
       expect(find.text('Compression'), findsOneWidget);
       expect(find.text('Expansion'), findsOneWidget);
+    });
+  });
+
+  group('MarketPulseScreen PR-112b replay', () {
+    testWidgets('toggle passes aligned asOf and pauses auto-refresh',
+        (tester) async {
+      final composite = _RecordingCompositeApi(_baseComposite(n: 110));
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      await _pumpTall(
+        tester,
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: composite,
+          regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+          isProUser: true,
+          replayController: replay,
+          initialTimeframe: '1m',
+        ),
+      );
+
+      expect(find.byKey(const Key('replay-toggle')), findsOneWidget);
+      final liveFetches = composite.fetchCount;
+
+      replay.enter(timeframe: '1m', now: now);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('replay-banner')), findsOneWidget);
+      expect(find.byKey(const Key('replay-scrubber')), findsOneWidget);
+      expect(
+        composite.asOfCalls.last,
+        DateTime.utc(2025, 9, 16, 10, 17).millisecondsSinceEpoch ~/ 1000,
+      );
+
+      final afterEnter = composite.fetchCount;
+      expect(afterEnter, greaterThan(liveFetches));
+      await tester.pump(const Duration(seconds: 30));
+      expect(composite.fetchCount, afterEnter,
+          reason: 'auto-refresh must stay paused in replay');
+
+      await tester.tap(find.byKey(const Key('replay-step-bar-minus')));
+      await tester.pumpAndSettle();
+      expect(composite.fetchCount, greaterThan(afterEnter));
+      expect(
+        composite.asOfCalls.last,
+        DateTime.utc(2025, 9, 16, 10, 16).millisecondsSinceEpoch ~/ 1000,
+      );
+    });
+
+    testWidgets('in-flight live auto-refresh does not overwrite replay load',
+        (tester) async {
+      final composite = _GatedCompositeApi(_baseComposite(n: 110));
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: composite,
+          regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+          isProUser: true,
+          replayController: replay,
+          initialTimeframe: '1m',
+        ),
+      ));
+      await tester.pump();
+      composite.releaseAll();
+      await tester.pumpAndSettle();
+
+      // Fire the 10s 1m auto-refresh; leave it gated.
+      await tester.pump(const Duration(seconds: 11));
+      expect(composite.pending, greaterThan(0));
+
+      replay.enter(timeframe: '1m', now: now);
+      await tester.pump();
+      composite.releaseAll();
+      await tester.pumpAndSettle();
+
+      expect(
+        composite.asOfCalls.last,
+        DateTime.utc(2025, 9, 16, 10, 17).millisecondsSinceEpoch ~/ 1000,
+      );
+      expect(find.byKey(const Key('replay-banner')), findsOneWidget);
+    });
+
+    testWidgets('stale overlapping load does not overwrite newer asOf',
+        (tester) async {
+      final older = _taggedComposite(111.0);
+      final newer = _taggedComposite(999.0);
+      final composite = _GatedCompositeApi(_baseComposite(n: 110));
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: composite,
+          regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+          isProUser: true,
+          replayController: replay,
+          initialTimeframe: '1h',
+        ),
+      ));
+      await tester.pump();
+      composite.releaseAll();
+      await tester.pumpAndSettle();
+
+      replay.enter(timeframe: '1h', now: now);
+      await tester.pump();
+      expect(composite.pending, greaterThan(0));
+      final firstGenAsOf = replay.asOfUnixFor('1h', now: now)!;
+      composite.setDataForAsOf(firstGenAsOf, older);
+
+      // Second scrub before the first load finishes.
+      replay.stepBars('1h', -1, now: now);
+      await tester.pump();
+      final secondAsOf = replay.asOfUnixFor('1h', now: now)!;
+      expect(secondAsOf, isNot(firstGenAsOf));
+      composite.setDataForAsOf(secondAsOf, newer);
+
+      // Newer generation completes first, then the stale older one.
+      composite.releasePendingWithAsOf(secondAsOf);
+      await tester.pumpAndSettle();
+      expect(_paintedLastValue(tester), 999.0);
+
+      composite.releasePendingWithAsOf(firstGenAsOf);
+      await tester.pumpAndSettle();
+      expect(_paintedLastValue(tester), 999.0,
+          reason: 'stale older response must not clobber the newer chart');
+    });
+
+    testWidgets('hides live-only cards while replaying', (tester) async {
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      await _pumpTall(
+        tester,
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 110)),
+          regimeApi: _FakeRegimeApi(_trendRegime(
+            windowBars: 110,
+            participation: const ParticipationCounts(
+              up: 62,
+              down: 8,
+              ranging: 30,
+              total: 100,
+            ),
+          )),
+          sectorRotationApi: _FakeSectorRotationApi(_baseSectors()),
+          isProUser: true,
+          replayController: replay,
+        ),
+      );
+      expect(find.byKey(const Key('mp-participation')), findsOneWidget);
+      expect(find.byKey(const Key('mp-sector-rotation')), findsOneWidget);
+
+      replay.enter(timeframe: '4h', now: DateTime.utc(2025, 9, 16, 10));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mp-participation')), findsNothing);
+      expect(find.byKey(const Key('mp-sector-rotation')), findsNothing);
+    });
+
+    testWidgets('free tier hides the replay toggle', (tester) async {
+      await _pumpTall(
+        tester,
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: _FakeCompositeApi(_baseComposite(n: 110)),
+          regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+          isProUser: false,
+          replayController: ReplayController(reloadDebounce: Duration.zero),
+        ),
+      );
+      expect(find.byKey(const Key('replay-toggle')), findsNothing);
     });
   });
 
@@ -833,7 +1018,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = compositeChartLimit,
+    int limit = compositeChartLimit, int? asOf,
   }) async =>
       _compositeForLimit(data, limit);
 }
@@ -846,7 +1031,7 @@ class _TapeFailingCompositeApi implements CompositeIndexApi {
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = compositeChartLimit,
+    int limit = compositeChartLimit, int? asOf,
   }) async {
     if (limit == tapeMetricsWindow) {
       throw Exception('tape window unavailable');
@@ -859,17 +1044,86 @@ class _RecordingCompositeApi implements CompositeIndexApi {
   _RecordingCompositeApi(this.data);
   final CompositeIndexData data;
   final limits = <int>[];
+  final asOfCalls = <int?>[];
   int fetchCount = 0;
 
   @override
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
-    int limit = compositeChartLimit,
+    int limit = compositeChartLimit, int? asOf,
   }) async {
     fetchCount++;
     limits.add(limit);
+    asOfCalls.add(asOf);
     return _compositeForLimit(data, limit);
   }
+}
+
+/// Holds each fetch until released so overlapping loads can be ordered.
+class _GatedCompositeApi implements CompositeIndexApi {
+  _GatedCompositeApi(this.data);
+  CompositeIndexData data;
+  final asOfCalls = <int?>[];
+  final _waiters = <Completer<void>>[];
+  final _asOfByWaiter = <int?>[];
+  final _dataByAsOf = <int?, CompositeIndexData>{};
+
+  int get pending => _waiters.where((c) => !c.isCompleted).length;
+
+  void setDataForAsOf(int? asOf, CompositeIndexData value) {
+    _dataByAsOf[asOf] = value;
+  }
+
+  void releaseAll() {
+    for (final c in _waiters) {
+      if (!c.isCompleted) c.complete();
+    }
+  }
+
+  void releasePendingWithAsOf(int? asOf) {
+    for (var i = 0; i < _waiters.length; i++) {
+      if (!_waiters[i].isCompleted && _asOfByWaiter[i] == asOf) {
+        _waiters[i].complete();
+      }
+    }
+  }
+
+  @override
+  Future<CompositeIndexData> fetch({
+    String timeframe = '4h',
+    int limit = compositeChartLimit,
+    int? asOf,
+  }) async {
+    asOfCalls.add(asOf);
+    final gate = Completer<void>();
+    _waiters.add(gate);
+    _asOfByWaiter.add(asOf);
+    await gate.future;
+    final source = _dataByAsOf[asOf] ?? data;
+    return _compositeForLimit(source, limit);
+  }
+}
+
+double _paintedLastValue(WidgetTester tester) {
+  final paint = tester.widget<CustomPaint>(
+    find.byKey(const Key('mp-composite-paint')),
+  );
+  final painter = paint.painter! as CompositeChartPainter;
+  return painter.points.last.value;
+}
+
+CompositeIndexData _taggedComposite(double lastValue, {int n = 110}) {
+  return CompositeIndexData(
+    timeframe: '1h',
+    symbolCount: 100,
+    points: [
+      for (var i = 0; i < n; i++)
+        IndexPoint(
+          timestamp: 1000 + i * 100,
+          value: i == n - 1 ? lastValue : 100.0 + i * 0.1,
+        ),
+    ],
+  );
 }
 
 /// Mimics backend: shorter limit = last N closes rebased to 100 at first.
@@ -903,7 +1157,7 @@ class _FakeRegimeApi implements RegimeApi {
   final RegimeData data;
 
   @override
-  Future<RegimeData> fetch({String timeframe = '4h'}) async => data;
+  Future<RegimeData> fetch({String timeframe = '4h', int? asOf}) async => data;
 }
 
 SectorRotationData _baseSectors() => const SectorRotationData(
