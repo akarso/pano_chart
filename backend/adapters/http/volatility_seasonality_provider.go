@@ -3,8 +3,12 @@ package http
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
+	"sync"
 	"time"
 
+	"pano_chart/backend/application/market/metrics"
 	vol "pano_chart/backend/infrastructure/volatility"
 )
 
@@ -16,50 +20,257 @@ type volatilityResultSource interface {
 	CurrentResult() (*vol.FullResult, error)
 }
 
+// SectorProfileHandler is a reloadable sector JSON source (production:
+// *VolatilityHandler; tests inject fakes via SetSectorHandlerFactory).
+type SectorProfileHandler interface {
+	CurrentResult() (*vol.FullResult, error)
+	Reload() error
+}
+
+// sectorEntry caches a loaded sector handler or a negative miss so Evaluate
+// does not probe disk on every request (PR-108).
+type sectorEntry struct {
+	handler SectorProfileHandler // non-nil when file was loadable
+	missing bool                 // true when file was absent/unloadable at last probe
+}
+
 // VolatilitySeasonalityProvider implements setups.SeasonalityProvider by
 // looking up the current moment's historical spike probability from the
 // same precomputed volatility profile VolatilityHandler serves — see
 // PR-082. The reported probability is the max of two independent seasonal
 // reads: the current UTC minute-of-day (intraday) and the current
 // minute-of-week (day-of-week — e.g. weekend lull, Monday-open effects).
-// Either being elevated is reason for caution on its own, so max avoids a
-// calm-looking minute-of-day diluting a genuinely risky day-of-week (or
-// vice versa) the way an average would — CR follow-up.
 //
-// The intraday half always answers from the 1-minute-of-day buckets,
-// regardless of the timeframe argument: infrastructure/volatility's coarser
-// derived timeframes (5m/15m/1h/4h — see DeriveTimeframe) group 1-minute
-// buckets by array position, not by an explicit time range each resulting
-// bucket covers, so matching "the bucket containing right now" against one
-// of them would require reverse-engineering that grouping. The 1-minute
-// data has no such ambiguity (each entry's MinuteOfDay means exactly what
-// it says) and is strictly finer-grained than any chart timeframe a caller
-// might ask for, so this is a simplification, not a loss of information.
-//
-// Also — per PR-082's own scoping note — cmd/vol_aggregate currently
-// computes this profile for a single reference symbol (BTCUSDT) and applies
-// it market-wide; this provider inherits that limitation as-is.
+// PR-108: optional sectorPrefix (path stem, e.g. "/data/vol") loads
+// metrics.SectorProfilePath(prefix, sector) files; missing/corrupt sector
+// files fall back to the market-wide source after a warn log. Misses are
+// negative-cached until ReloadSectors. Sparse-minute spike misses keep the
+// loaded handler cached and only fall back for that request.
 type VolatilitySeasonalityProvider struct {
-	source volatilityResultSource
-	now    func() time.Time // injectable for tests; defaults to time.Now
+	source       volatilityResultSource
+	sectorPrefix string // stem: "/data/vol" → "/data/vol_l1.json"
+	now          func() time.Time
+	logf         func(format string, args ...any)
+	// newSectorHandler builds a reloadable source for a profile path (tests).
+	newSectorHandler func(path string) SectorProfileHandler
+
+	mu      sync.Mutex
+	sectors map[string]*sectorEntry
 }
 
 // NewVolatilitySeasonalityProvider constructs the provider over an existing
 // *VolatilityHandler (or any type satisfying volatilityResultSource).
 func NewVolatilitySeasonalityProvider(source volatilityResultSource) *VolatilitySeasonalityProvider {
-	return &VolatilitySeasonalityProvider{source: source, now: time.Now}
+	return &VolatilitySeasonalityProvider{
+		source:  source,
+		now:     time.Now,
+		logf:    log.Printf,
+		sectors: make(map[string]*sectorEntry),
+		newSectorHandler: func(path string) SectorProfileHandler {
+			return NewVolatilityHandler(path)
+		},
+	}
 }
 
 // NewVolatilitySeasonalityProviderWithClock is NewVolatilitySeasonalityProvider
 // with an injectable clock, so tests can pin "now" instead of racing
 // time.Now() against a minute boundary — CR follow-up.
 func NewVolatilitySeasonalityProviderWithClock(source volatilityResultSource, now func() time.Time) *VolatilitySeasonalityProvider {
-	return &VolatilitySeasonalityProvider{source: source, now: now}
+	p := NewVolatilitySeasonalityProvider(source)
+	p.now = now
+	return p
 }
 
-// CurrentSpikeProbability implements setups.SeasonalityProvider.
+// SetSectorPrefix configures the path stem shared with vol_aggregate --out
+// (e.g. "/data/vol" → "/data/vol_l1.json" via SectorProfilePath). Empty
+// disables sector lookup.
+func (p *VolatilitySeasonalityProvider) SetSectorPrefix(prefix string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sectorPrefix = strings.TrimSpace(prefix)
+	p.sectors = make(map[string]*sectorEntry)
+}
+
+// SectorPrefix returns the configured stem (tests / startup diagnostics).
+func (p *VolatilitySeasonalityProvider) SectorPrefix() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sectorPrefix
+}
+
+// SetLogger overrides the warn logger (tests).
+func (p *VolatilitySeasonalityProvider) SetLogger(fn func(string, ...any)) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if fn == nil {
+		p.logf = log.Printf
+		return
+	}
+	p.logf = fn
+}
+
+// SetSectorHandlerFactory overrides how sector profile paths are opened (tests).
+func (p *VolatilitySeasonalityProvider) SetSectorHandlerFactory(fn func(path string) SectorProfileHandler) {
+	if p == nil || fn == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.newSectorHandler = fn
+}
+
+// ReloadSectors clears negative misses so newly written files can be
+// discovered, and refreshes every loaded sector handler. A transient reload
+// failure keeps the last-good handler in cache (same as VolatilityHandler.Reload
+// preserving its snapshot) rather than dropping it into a miss that would force
+// market-wide for up to an hour — PR-108.
+func (p *VolatilitySeasonalityProvider) ReloadSectors() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	logf := p.logf
+	type item struct {
+		id string
+		h  SectorProfileHandler
+	}
+	var toReload []item
+	for id, e := range p.sectors {
+		if e == nil || e.missing || e.handler == nil {
+			delete(p.sectors, id)
+			continue
+		}
+		toReload = append(toReload, item{id: id, h: e.handler})
+	}
+	p.mu.Unlock()
+
+	if logf == nil {
+		logf = log.Printf
+	}
+	for _, it := range toReload {
+		if err := it.h.Reload(); err != nil {
+			// Keep the cached handler: Reload already left last-good data on it.
+			logf("[seasonality] sector %s reload failed (%v); keeping last-good profile", it.id, err)
+		}
+	}
+}
+
+// CurrentSpikeProbability implements setups.SeasonalityProvider (market-wide).
 func (p *VolatilitySeasonalityProvider) CurrentSpikeProbability(_ context.Context, _ string) (float64, error) {
-	result, err := p.source.CurrentResult()
+	return p.spikeFrom(p.source, "market")
+}
+
+// CurrentSpikeProbabilityFor prefers a sector profile when present; otherwise
+// falls back to the market-wide curve (missing file, "other", empty sector,
+// or per-request spike lookup failure — the latter keeps the handler cached).
+func (p *VolatilitySeasonalityProvider) CurrentSpikeProbabilityFor(ctx context.Context, sector, timeframe string) (float64, error) {
+	id, err := metrics.NormalizeSectorID(sector)
+	if err != nil {
+		p.warnf("invalid sector id %q (%v); using market-wide", sector, err)
+		return p.CurrentSpikeProbability(ctx, timeframe)
+	}
+	if id == "other" {
+		return p.CurrentSpikeProbability(ctx, timeframe)
+	}
+	src, ok := p.sectorSource(id)
+	if !ok {
+		return p.CurrentSpikeProbability(ctx, timeframe)
+	}
+	v, err := p.spikeFrom(src, "sector:"+id)
+	if err != nil {
+		// Keep the loaded handler: sparse buckets / minute misses are expected
+		// after intersection averaging; only fall back for this request.
+		p.warnf("sector %s spike lookup failed (%v); falling back to market-wide", id, err)
+		return p.CurrentSpikeProbability(ctx, timeframe)
+	}
+	return v, nil
+}
+
+func (p *VolatilitySeasonalityProvider) warnf(format string, args ...any) {
+	p.mu.Lock()
+	logf := p.logf
+	p.mu.Unlock()
+	if logf == nil {
+		logf = log.Printf
+	}
+	logf("[seasonality] "+format, args...)
+}
+
+func (p *VolatilitySeasonalityProvider) sectorSource(sector string) (volatilityResultSource, bool) {
+	p.mu.Lock()
+	prefix := p.sectorPrefix
+	if prefix == "" {
+		p.mu.Unlock()
+		return nil, false
+	}
+	if e, ok := p.sectors[sector]; ok {
+		h := e.handler
+		missing := e.missing || h == nil
+		p.mu.Unlock()
+		if missing {
+			return nil, false
+		}
+		return h, true
+	}
+	factory := p.newSectorHandler
+	logf := p.logf
+	p.mu.Unlock()
+
+	if factory == nil {
+		factory = func(path string) SectorProfileHandler { return NewVolatilityHandler(path) }
+	}
+	if logf == nil {
+		logf = log.Printf
+	}
+
+	path, err := metrics.SectorProfilePath(prefix, sector)
+	if err != nil {
+		p.storeSectorMiss(sector)
+		return nil, false
+	}
+
+	h := factory(path)
+	if _, err := h.CurrentResult(); err != nil {
+		logf("[seasonality] sector profile %s unavailable (%v); market-wide until reload", path, err)
+		p.storeSectorMiss(sector)
+		return nil, false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Another goroutine may have won the probe. Prefer a successful load over
+	// a concurrent miss (file may have appeared mid-probe).
+	if e, ok := p.sectors[sector]; ok && !e.missing && e.handler != nil {
+		return e.handler, true
+	}
+	p.sectors[sector] = &sectorEntry{handler: h}
+	return h, true
+}
+
+func (p *VolatilitySeasonalityProvider) storeSectorMiss(sector string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Do not overwrite a concurrent successful load with a miss.
+	if e, ok := p.sectors[sector]; ok && !e.missing && e.handler != nil {
+		return
+	}
+	p.sectors[sector] = &sectorEntry{missing: true}
+}
+
+func (p *VolatilitySeasonalityProvider) spikeFrom(source volatilityResultSource, label string) (float64, error) {
+	if source == nil {
+		return 0, fmt.Errorf("volatility seasonality: nil source (%s)", label)
+	}
+	result, err := source.CurrentResult()
 	if err != nil {
 		return 0, fmt.Errorf("volatility seasonality: %w", err)
 	}
@@ -87,11 +298,6 @@ func (p *VolatilitySeasonalityProvider) CurrentSpikeProbability(_ context.Contex
 		return 0, fmt.Errorf("volatility seasonality: no bucket for minute-of-day %d", minuteOfDay)
 	}
 
-	// Day-of-week convention matches BuildWeekly/DeriveDailyOfWeek
-	// (infrastructure/volatility/weekly.go): dow*1440+minute, dow from
-	// time.Weekday() (0=Sunday). Weekly data is optional — Weekly.Buckets
-	// can be empty (e.g. not enough history yet) without failing the call;
-	// the intraday read alone is still a valid, if narrower, signal.
 	minuteOfWeek := int(t.Weekday())*1440 + minuteOfDay
 	if weeklySpikeProb, ok := lookupWeeklyBucketSpikeProb(result.Weekly.Buckets, minuteOfWeek); ok && weeklySpikeProb > spikeProb {
 		spikeProb = weeklySpikeProb
@@ -100,30 +306,8 @@ func (p *VolatilitySeasonalityProvider) CurrentSpikeProbability(_ context.Contex
 	return spikeProb, nil
 }
 
-// maxMinuteSearchRadius bounds how far lookupBucketSpikeProb/
-// lookupWeeklyBucketSpikeProb search outward for a nearby minute when the
-// exact one requested has no data. hasUsable1mBuckets (volatility_handler.go)
-// only checks that a profile has *some* 1m buckets, not that every minute
-// (in particular whatever minute happens to be "current" at some later,
-// unpredictable moment) is covered — a profile that's genuinely sparse in
-// a few scattered minutes (a thin market, a brief exchange data hole
-// during the aggregation window) is still a healthy, usable profile
-// overall. Failing outright on one unlucky exact-minute miss would throw
-// away all seasonal information for that request and fall back to a flat
-// neutral reading; a bounded nearby-minute substitute is a much closer
-// approximation of "what does this time of day usually look like" than
-// that — CR follow-up.
 const maxMinuteSearchRadius = 15
 
-// lookupBucketSpikeProb finds the intraday bucket for minuteOfDay, or the
-// nearest one within maxMinuteSearchRadius minutes (cyclic across the
-// 1440-minute day) if the exact minute has no data. Aggregate builds a
-// full 1440-slot array pre-indexed by MinuteOfDay before filtering out
-// empty minutes, so a dense/gapless result (the common case) resolves via
-// direct index in O(1); the MinuteOfDay equality check guards against a
-// data gap having shifted that alignment, falling back to a map lookup
-// (built once, reused for both the exact check and the radius search)
-// only then.
 func lookupBucketSpikeProb(buckets []vol.BucketResult, minuteOfDay int) (float64, bool) {
 	if minuteOfDay >= 0 && minuteOfDay < len(buckets) && buckets[minuteOfDay].MinuteOfDay == minuteOfDay {
 		return buckets[minuteOfDay].SpikeProb, true
@@ -147,9 +331,6 @@ func lookupBucketSpikeProb(buckets []vol.BucketResult, minuteOfDay int) (float64
 	return 0, false
 }
 
-// lookupWeeklyBucketSpikeProb is lookupBucketSpikeProb's counterpart for
-// the (up to 10 080-slot) weekly buckets — same fast-path/map/bounded-
-// radius rationale, cyclic across the 10080-minute week instead.
 func lookupWeeklyBucketSpikeProb(buckets []vol.WeeklyBucket, minuteOfWeek int) (float64, bool) {
 	const minutesPerWeek = 7 * 1440
 

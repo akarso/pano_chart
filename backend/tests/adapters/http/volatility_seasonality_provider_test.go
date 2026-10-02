@@ -3,10 +3,13 @@ package http_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	httpAdapter "pano_chart/backend/adapters/http"
+	"pano_chart/backend/application/market/metrics"
 	"pano_chart/backend/application/setups"
 	vol "pano_chart/backend/infrastructure/volatility"
 )
@@ -307,3 +310,357 @@ func TestVolatilitySeasonalityProvider_NoMatchingWeeklyBucket_FallsBackToDailyOn
 		t.Errorf("expected the daily-only reading 0.3 when no weekly bucket matches, got %v", got)
 	}
 }
+
+func TestVolatilitySeasonalityProvider_MissingSectorFile_FallsBackToMarket(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.21}}},
+		},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol") // no files written
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "defi", "15m")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0.21 {
+		t.Errorf("missing sector file must equal market-wide value, got %v want 0.21", got)
+	}
+
+	// Second call must not re-probe (negative cache); still market.
+	got2, err := p.CurrentSpikeProbabilityFor(context.Background(), "defi", "15m")
+	if err != nil || got2 != 0.21 {
+		t.Fatalf("neg-cached miss: got=%v err=%v", got2, err)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_SectorFileOverridesMarket(t *testing.T) {
+	dir := t.TempDir()
+	prefix := dir + "/vol"
+	sectorPath, err := metrics.SectorProfilePath(prefix, "defi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sector := vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.77}}},
+		},
+	}
+	if err := vol.SaveFullResult(sector, sectorPath); err != nil {
+		t.Fatal(err)
+	}
+
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.21}}},
+		},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(prefix)
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "DeFi", "15m") // mixed case
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 0.77 {
+		t.Errorf("sector file should win, got %v want 0.77", got)
+	}
+
+	fb, err := p.CurrentSpikeProbabilityFor(context.Background(), "meme", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fb != 0.21 {
+		t.Errorf("fallback=%v want 0.21", fb)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_CorruptSectorJSON_FallsBackAndLogs(t *testing.T) {
+	dir := t.TempDir()
+	prefix := dir + "/vol"
+	path, err := metrics.SectorProfilePath(prefix, "l1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{
+			{Timeframe: vol.TF1m, Buckets: []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.11}}},
+		},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(prefix)
+	p.SetLogger(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0.11 {
+		t.Fatalf("corrupt sector must fall back to market, got %v", got)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected warn log for corrupt sector profile")
+	}
+}
+
+func TestVolatilitySeasonalityProvider_PathContractWithOutStem(t *testing.T) {
+	// Round-trip: write as vol_aggregate --out does, read as API does.
+	dir := t.TempDir()
+	outStem := dir + "/vol"
+	path, err := metrics.SectorProfilePath(outStem, "ai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := vol.SaveFullResult(vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.55}},
+		}},
+	}, path); err != nil {
+		t.Fatal(err)
+	}
+
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.01}},
+		}},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(outStem) // VOL_SECTOR_PREFIX == --out
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "ai", "1h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0.55 {
+		t.Fatalf("path contract broken: got %v want 0.55 (path=%s)", got, path)
+	}
+}
+
+type countingSectorHandler struct {
+	result    *vol.FullResult
+	reloadErr error
+	opens     *int
+	reloads   *int
+}
+
+func (c *countingSectorHandler) CurrentResult() (*vol.FullResult, error) {
+	return c.result, nil
+}
+
+func (c *countingSectorHandler) Reload() error {
+	if c.reloads != nil {
+		*c.reloads++
+	}
+	return c.reloadErr
+}
+
+func TestVolatilitySeasonalityProvider_ReloadSectors_ReloadFailureKeepsLastGood(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.2}},
+		}},
+	}}
+	opens, reloads := 0, 0
+	var logs []string
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol")
+	p.SetLogger(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		opens++
+		return &countingSectorHandler{
+			result: &vol.FullResult{
+				Intraday: []vol.TimeframeResult{{
+					Timeframe: vol.TF1m,
+					Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.9}},
+				}},
+			},
+			reloadErr: errors.New("disk mid-write"),
+			opens:     &opens,
+			reloads:   &reloads,
+		}
+	})
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0.9 {
+		t.Fatalf("got %v want 0.9", got)
+	}
+	if opens != 1 {
+		t.Fatalf("opens=%d want 1", opens)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.ReloadSectors()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReloadSectors hung (likely mutex re-lock on warnf)")
+	}
+	if reloads != 1 {
+		t.Fatalf("reloads=%d want 1", reloads)
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected reload-failure log")
+	}
+
+	// After failed reload, last-good sector profile must still be served.
+	got2, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != 0.9 {
+		t.Fatalf("must keep last-good sector after reload fail, got %v", got2)
+	}
+	if opens != 1 {
+		t.Fatalf("must not reopen after failed reload, opens=%d", opens)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_SparseMinuteKeepsCachedHandler(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.33}},
+		}},
+	}}
+	opens := 0
+	// Sector profile has only minute 0 — fixedClock minute misses → market fallback.
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol")
+	p.SetLogger(func(string, ...any) {}) // silence sparse-minute warnings
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		opens++
+		return &countingSectorHandler{
+			result: &vol.FullResult{
+				Intraday: []vol.TimeframeResult{{
+					Timeframe: vol.TF1m,
+					Buckets:   []vol.BucketResult{{MinuteOfDay: 0, SpikeProb: 0.99}},
+				}},
+			},
+			opens: &opens,
+		}
+	})
+
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 0.33 {
+		t.Fatalf("sparse sector must fall back to market, got %v", got)
+	}
+	if opens != 1 {
+		t.Fatalf("first opens=%d want 1", opens)
+	}
+
+	got2, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != 0.33 {
+		t.Fatalf("second call got %v", got2)
+	}
+	if opens != 1 {
+		t.Fatalf("sparse-minute fallback must not drop/reopen handler, opens=%d", opens)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_MissingFileNegCacheSkipsSecondOpen(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.12}},
+		}},
+	}}
+	opens := 0
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol")
+	p.SetLogger(func(string, ...any) {})
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		opens++
+		return &failingSectorHandler{err: errors.New("no such file")}
+	})
+
+	_, _ = p.CurrentSpikeProbabilityFor(context.Background(), "defi", "15m")
+	_, _ = p.CurrentSpikeProbabilityFor(context.Background(), "defi", "15m")
+	if opens != 1 {
+		t.Fatalf("neg-cache must open once, opens=%d", opens)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_SuccessfulLoadWinsOverConcurrentMiss(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.05}},
+		}},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol")
+	p.SetLogger(func(string, ...any) {})
+
+	// First probe fails → miss cached.
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		return &failingSectorHandler{err: errors.New("not yet")}
+	})
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.05 {
+		t.Fatalf("miss → market: got=%v err=%v", got, err)
+	}
+
+	// Clear only the miss by simulating ReloadSectors miss clear, then a
+	// successful load must stick even if a stale miss race tried to win.
+	p.ReloadSectors()
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		return &countingSectorHandler{
+			result: &vol.FullResult{
+				Intraday: []vol.TimeframeResult{{
+					Timeframe: vol.TF1m,
+					Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.88}},
+				}},
+			},
+		}
+	})
+	got, err = p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.88 {
+		t.Fatalf("success after miss clear: got=%v err=%v", got, err)
+	}
+
+	// A concurrent miss store must not clobber the loaded handler.
+	// storeSectorMiss is unexported; exercise via a second factory that would
+	// fail if reopened — cached success must short-circuit.
+	opens := 0
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		opens++
+		return &failingSectorHandler{err: errors.New("should not reopen")}
+	})
+	got, err = p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.88 {
+		t.Fatalf("cached success: got=%v err=%v", got, err)
+	}
+	if opens != 0 {
+		t.Fatalf("must not reopen cached sector, opens=%d", opens)
+	}
+}
+
+type failingSectorHandler struct{ err error }
+
+func (f *failingSectorHandler) CurrentResult() (*vol.FullResult, error) { return nil, f.err }
+func (f *failingSectorHandler) Reload() error                           { return f.err }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -435,8 +436,9 @@ func main() {
 	log.Println("[main] Market composite index service initialized")
 
 	// --- Sector composites (PR-098) — missing auto path skips; explicit/bad fatal ---
+	var sectorCatalog *metrics.SectorCatalog
 	var sectorsHandler http.Handler
-	if sectorCatalog, sectorErr := metrics.LoadSectorCatalog(metrics.SectorsPath()); sectorErr != nil {
+	if cat, sectorErr := metrics.LoadSectorCatalog(metrics.SectorsPath()); sectorErr != nil {
 		explicit := os.Getenv("SECTORS_CONFIG_PATH") != ""
 		if !explicit && errors.Is(sectorErr, fs.ErrNotExist) {
 			log.Printf("[main] sectors disabled (no catalog): %v", sectorErr)
@@ -444,6 +446,7 @@ func main() {
 			log.Fatalf("[main] sectors config: %v", sectorErr)
 		}
 	} else {
+		sectorCatalog = cat
 		sectorService := metrics.NewSectorIndexService(compositeService, sectorCatalog)
 		sectorsUC := market.NewRedisCachedSectors(sectorService, redisClient, compositeCacheTTL, "market_sectors_v1")
 		sectorsHandler = adhttp.NewMarketSectorsHandler(sectorsUC)
@@ -529,6 +532,24 @@ func main() {
 		volPath = "volatility_1m.json"
 	}
 	volatilityHandler := adhttp.NewVolatilityHandler(volPath)
+	seasonalityProvider := adhttp.NewVolatilitySeasonalityProvider(volatilityHandler)
+	sectorPrefix := os.Getenv("VOL_SECTOR_PREFIX")
+	if sectorPrefix == "" {
+		// Same stem as vol_aggregate --out (SectorProfilePath inserts "_").
+		sectorPrefix = filepath.Join(filepath.Dir(volPath), "vol")
+	}
+	seasonalityProvider.SetSectorPrefix(sectorPrefix)
+	if sectorCatalog != nil {
+		for _, sec := range sectorCatalog.Sectors() {
+			path, perr := metrics.SectorProfilePath(sectorPrefix, sec.ID)
+			if perr != nil {
+				continue
+			}
+			if _, serr := os.Stat(path); serr != nil {
+				log.Printf("[main] WARNING: sector seasonality file missing for %s (%s) — setups fall back to market-wide until written", sec.ID, path)
+			}
+		}
+	}
 
 	// --- Setup quality engine ---
 	setupEngine := setups.NewEngine()
@@ -537,7 +558,10 @@ func main() {
 	setupService.SetTrendAlgo(string(trendAlgo))
 	setupService.SetCompressionAlgo(string(compAlgo))
 	setupService.SetMarketProvider(marketService)
-	setupService.SetSeasonalityProvider(adhttp.NewVolatilitySeasonalityProvider(volatilityHandler))
+	setupService.SetSeasonalityProvider(seasonalityProvider)
+	if sectorCatalog != nil {
+		setupService.SetSectorResolver(sectorCatalog)
+	}
 	setupService.SetEvaluationStore(evalStore)
 	setupService.SetSignalEmitter(signalEmitter)
 	setupHandler := adhttp.NewSetupHandler(setupService)
@@ -678,7 +702,7 @@ func main() {
 	backgroundWG.Add(1)
 	go func() {
 		defer backgroundWG.Done()
-		volatilityReloadLoop(socialCtx, volatilityHandler, time.Hour)
+		volatilityReloadLoop(socialCtx, volatilityHandler, seasonalityProvider, time.Hour)
 	}()
 	log.Println("[main] Volatility profile periodic reload started (interval=1h)")
 
@@ -1012,12 +1036,15 @@ func hostnameOr(fallback string) string {
 	return fallback
 }
 
-// volatilityReloadLoop periodically calls h.Reload() until ctx is done, so
-// an out-of-band vol_aggregate re-run is eventually picked up without
-// requiring a server restart — see PR-082 CR follow-up. Reload errors
-// (e.g. the file briefly missing mid-write) are logged, not fatal: the
-// handler keeps serving its last-good cached snapshot either way.
-func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, interval time.Duration) {
+// volatilityReloadLoop periodically reloads the market-wide profile and any
+// cached sector profiles until ctx is done, so an out-of-band vol_aggregate
+// re-run is eventually picked up without a server restart (PR-082 / PR-108).
+func volatilityReloadLoop(
+	ctx context.Context,
+	h *adhttp.VolatilityHandler,
+	seasonality *adhttp.VolatilitySeasonalityProvider,
+	interval time.Duration,
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1027,6 +1054,9 @@ func volatilityReloadLoop(ctx context.Context, h *adhttp.VolatilityHandler, inte
 		case <-ticker.C:
 			if err := h.Reload(); err != nil {
 				log.Printf("[main] volatility profile reload failed: %v", err)
+			}
+			if seasonality != nil {
+				seasonality.ReloadSectors()
 			}
 		}
 	}
