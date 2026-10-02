@@ -97,9 +97,68 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 	}
 
 	tape := classifyTape(trendScore, trendBias, sideways, compression, expansion, effectiveTrend, breakdownRate)
+	if model := scoring.ActiveRegimeModel(); model != nil {
+		features := scoring.BuildRegimeFeatures(
+			trendScore, sideways, compression, expansion,
+			closes, atr14, price,
+		)
+		if learned, ok := classifyTapeLearned(features, *model, trendBias, effectiveTrend, breakdownRate, trendScore); ok {
+			tape = learned
+		}
+	}
 	tape.Source = source
 	tape.WindowBars = series.Len()
 	return tape
+}
+
+// classifyTapeLearned replaces Structure from a one-vs-rest model, then reapplies
+// PR-115 State rules: StateTrend only when trendScore ≥ tapeTrendGate; otherwise
+// dominant among non-trend structure with the same indecisive margin rules as
+// classifyTape. Bias, health, and TrendScore stay from the heuristic tape path.
+// ok is false when the model cannot classify — keep heuristic.
+func classifyTapeLearned(
+	features map[string]float64,
+	model scoring.Model,
+	trendBias string,
+	effectiveTrend, breakdownRate, trendScore float64,
+) (TapeRegime, bool) {
+	t, s, c, e, _, ok := scoring.ClassifyStructure(features, model)
+	if !ok {
+		return TapeRegime{}, false
+	}
+	structure := mkt.Breadth{Trend: t, Sideways: s, Compression: c, Expansion: e}
+
+	bias := trendBias
+	if bias == "" {
+		bias = "neutral"
+	}
+
+	var dominant mkt.State
+	var confidence float64
+	if trendScore >= tapeTrendGate {
+		dominant = mkt.StateTrend
+		confidence = trendScore
+	} else {
+		dominant, confidence = dominantNonTrend(structure)
+		first, second := topTwo([]float64{
+			structure.Sideways, structure.Compression, structure.Expansion,
+		})
+		if first < 0.50 || (first-second) < 0.30 {
+			dominant = mkt.StateIndecisive
+			confidence = first
+		}
+	}
+
+	return TapeRegime{
+		Structure:      structure,
+		State:          dominant,
+		Confidence:     confidence,
+		Bias:           bias,
+		TrendScore:     trendScore,
+		EffectiveTrend: effectiveTrend,
+		BreakdownRate:  breakdownRate,
+		Label:          BuildTapeLabel(dominant, effectiveTrend),
+	}, true
 }
 
 // classifyTape turns raw calculator scores into a TapeRegime.

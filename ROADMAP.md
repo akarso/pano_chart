@@ -1071,25 +1071,27 @@ periods with durations.
 
 **Layer:** tooling + domain. **Depends on:** PR-090–092 (≥ 4 weeks of outcomes), PR-088.
 
+**Spec file:** `backend/docs/v2/PR-109.md`.
+
 **Spec.**
-1. Export tool `cmd/export_dataset`: joins `signals` + `outcomes` + the `EvaluationSnapshot`
-   fields at emission into a CSV: features = the four raw scores, ER, VR, ATR pct, RS,
-   alignment; label = `Success`.
-2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`:
-   ```yaml
-   model: logistic
-   features: [trend, sideways, compression, expansion, er, vr, atr_pct]
-   weights: {...}
-   bias: -1.23
-   ```
-3. `domain/scoring/logistic.go`: `Predict(features map[string]float64, model Model) float64`.
-4. `ScoreMarketTape` and per-symbol classification gain an optional `Model`; when present, the
-   dominant regime is the class with highest predicted success probability among the four; the
-   four probabilities normalized become `Structure`. Flag `scoring.regime_model: heuristic|learned`.
+1. Export tool `cmd/export_dataset`: resolved **setup** signals (default); features from
+   `signal.Context` at emission (four raw scores, ER, VR, ATR pct);
+   `regime_label` is the raw-score structure argmax (independent of
+   `regime_model`); `success` is a separate outcome column.
+   Query is paged; `-max-rows` caps eligible written rows.
+2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`
+   with one-vs-rest `classes` (plus optional binary `weights`/`bias` for success-only
+   notebooks). Shipped stub is `placeholder: true` (not usable for inference).
+3. `domain/scoring/logistic.go`: `Predict` (binary head); `ClassifyStructure` (OVR
+   `classes` → Structure).
+4. `ScoreMarketTape` / setup `dominantRegime` use an optional Model for **Structure**;
+   tape **State** still applies PR-115 trend gate + indecisive margins. Flag
+   `scoring.regime_model: heuristic|learned` — `learned` fails startup if the model
+   file is missing, placeholder, or incomplete.
 5. Never ship `learned` as default without a scorecard A/B showing ≥ +5pp hit rate.
 
 **Tests.** `Predict` matches hand-computed sigmoid; classifier falls back to heuristic when
-model file is absent.
+model is absent / placeholder; learned Structure keeps trend gate; export Query unlimited.
 
 ---
 

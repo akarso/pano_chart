@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	mkt "pano_chart/backend/domain/market"
+	"pano_chart/backend/domain/scoring"
 )
 
 func TestClassifyTape_TinyPositiveTotalNormalizes(t *testing.T) {
@@ -101,5 +102,51 @@ func isTrendCaption(label string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func TestClassifyTapeLearned_LowTrendIndecisive(t *testing.T) {
+	// Equal class logits → flat Structure; TapeTrend below gate → indecisive.
+	model := scoring.Model{
+		Type: "logistic",
+		Classes: map[string]scoring.ClassParams{
+			"trend":       {Weights: map[string]float64{"trend": 1}},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}},
+			"compression": {Weights: map[string]float64{"compression": 1}},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}},
+		},
+	}
+	tape, ok := classifyTapeLearned(nil, model, "neutral", 0, 0, 0.2)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if tape.State != mkt.StateIndecisive {
+		t.Fatalf("state=%q want indecisive structure=%+v", tape.State, tape.Structure)
+	}
+	sum := tape.Structure.Trend + tape.Structure.Sideways + tape.Structure.Compression + tape.Structure.Expansion
+	if math.Abs(sum-1) > 1e-9 {
+		t.Fatalf("structure sum=%v", sum)
+	}
+}
+
+func TestClassifyTapeLearned_LowTrendCompressionDominant(t *testing.T) {
+	model := scoring.Model{
+		Type: "logistic",
+		Classes: map[string]scoring.ClassParams{
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: -8},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: 5},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}, Bias: -8},
+		},
+	}
+	tape, ok := classifyTapeLearned(nil, model, "neutral", 0, 0, 0.2)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if tape.State != mkt.StateCompression {
+		t.Fatalf("state=%q want compression structure=%+v", tape.State, tape.Structure)
+	}
+	if tape.Structure.Compression <= 0.5 {
+		t.Fatalf("compression mass=%.3f want clear majority", tape.Structure.Compression)
 	}
 }

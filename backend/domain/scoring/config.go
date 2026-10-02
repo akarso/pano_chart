@@ -23,10 +23,15 @@ type AppConfig struct {
 	Composite   CompositeYAML   `yaml:"composite"`
 }
 
-// ScoringYAML selects optional scoring engine variants (PR-103 / PR-105).
+// ScoringYAML selects optional scoring engine variants (PR-103 / PR-105 / PR-109).
 type ScoringYAML struct {
 	TrendAlgo       string `yaml:"trend_algo"`       // predictability (default) | strength
 	CompressionAlgo string `yaml:"compression_algo"` // absolute (default) | percentile
+	// RegimeModel selects tape / symbol classification: heuristic (default) | learned.
+	// Never ship learned as default without a scorecard A/B ≥ +5pp hit rate.
+	RegimeModel string `yaml:"regime_model"`
+	// RegimeModelPath overrides the default regime_model.yaml location.
+	RegimeModelPath string `yaml:"regime_model_path"`
 }
 
 // CompositeYAML configures CompositeIndexService exclusions (PR-095).
@@ -245,6 +250,7 @@ func DefaultAppConfig() *AppConfig {
 		Scoring: ScoringYAML{
 			TrendAlgo:       "predictability",
 			CompressionAlgo: "absolute",
+			RegimeModel:     "heuristic",
 		},
 		Sideways: SidewaysYAML{
 			ExtremaWindow:   3,
