@@ -7,6 +7,13 @@ import 'plan_data.dart';
 const double kPlanRiskMin = 0.01;
 const double kPlanRiskMax = 1e7;
 
+/// Formats [risk] for the Plan risk field. Whole numbers stay integer;
+/// fractions use 2 decimal places — callers must size/persist this value.
+String formatPlanRisk(double risk) {
+  if (risk == risk.roundToDouble()) return risk.toStringAsFixed(0);
+  return risk.toStringAsFixed(2);
+}
+
 /// Range trade plan panel (Long/Short, levels, risk → size).
 class PlanPanel extends StatelessWidget {
   final PlanData data;
@@ -208,17 +215,15 @@ class PlanPanel extends StatelessWidget {
   void _submitRisk(String raw) {
     final parsed = double.tryParse(raw.trim());
     if (parsed == null || !parsed.isFinite || parsed < kPlanRiskMin) {
-      riskController.text = _formatRisk(risk);
+      riskController.text = formatPlanRisk(risk);
       return;
     }
     final clamped = parsed > kPlanRiskMax ? kPlanRiskMax : parsed;
-    riskController.text = _formatRisk(clamped);
-    onRiskChanged(clamped);
-  }
-
-  static String _formatRisk(double risk) {
-    if (risk == risk.roundToDouble()) return risk.toStringAsFixed(0);
-    return risk.toStringAsFixed(2);
+    // Persist/size the same value the field shows (2 d.p. for fractions).
+    final text = formatPlanRisk(clamped);
+    final used = double.parse(text);
+    riskController.text = text;
+    onRiskChanged(used);
   }
 
   static Widget _row(String label, String value) {

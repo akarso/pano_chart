@@ -7,6 +7,8 @@ import 'package:http/testing.dart';
 import 'package:pano_chart_frontend/domain/symbol.dart';
 import 'package:pano_chart_frontend/domain/timeframe.dart';
 import 'package:pano_chart_frontend/features/candles/api/candle_response.dart';
+import 'package:pano_chart_frontend/features/candles/application/get_candle_series.dart';
+import 'package:pano_chart_frontend/features/candles/application/get_candle_series_input.dart';
 import 'package:pano_chart_frontend/features/detail/chart/interactive_chart.dart';
 import 'package:pano_chart_frontend/features/detail/chart/chart_config.dart';
 import 'package:pano_chart_frontend/features/detail/chart/plan_levels_painter.dart';
@@ -168,6 +170,22 @@ void main() {
       // Y-scale must have expanded to include the channel.
       expect(painter.priceLo, lessThanOrEqualTo(89));
       expect(painter.priceHi, greaterThanOrEqualTo(110));
+
+      final size = paint.size ?? const Size(400, 360 * 0.78);
+      final lines = painter.channelLines(size);
+      expect(lines, hasLength(3),
+          reason: 'must draw Low, Mid, and High channel lines');
+      expect(lines.map((l) => l.price).toList(), [90, 100, 110]);
+      expect(lines[0].color, PlanLevelsPainter.channelLowColor);
+      expect(lines[1].color, PlanLevelsPainter.channelMidColor);
+      expect(lines[2].color, PlanLevelsPainter.channelHighColor);
+      for (final line in lines) {
+        expect(line.y, inInclusiveRange(0, size.height));
+        expect(line.start.dx, 0);
+        expect(line.end.dx, greaterThan(line.start.dx));
+        expect(line.start.dy, line.y);
+        expect(line.end.dy, line.y);
+      }
     });
 
     testWidgets('InteractiveChart omits overlay when planLevels is null',
@@ -299,6 +317,32 @@ void main() {
       expect(risk, 100);
       expect(riskCtrl.text, '100');
     });
+
+    testWidgets('sizes with displayed risk when input has extra precision',
+        (tester) async {
+      final riskCtrl = TextEditingController(text: '100');
+      var risk = 100.0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PlanPanel(
+              data: _validPlan(),
+              isLong: true,
+              risk: risk,
+              riskController: riskCtrl,
+              onLongChanged: (_) {},
+              onRiskChanged: (v) => risk = v,
+            ),
+          ),
+        ),
+      );
+      await tester.enterText(find.byKey(const Key('plan-risk-input')), '0.012');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      expect(riskCtrl.text, '0.01');
+      expect(risk, 0.01);
+      expect(formatPlanRisk(0.012), '0.01');
+    });
   });
 
   group('DetailScreen Plan integration', () {
@@ -309,13 +353,14 @@ void main() {
       series = _tightSeries();
     });
 
-    Widget app({required PlanApi planApi}) {
+    Widget app({required PlanApi planApi, GetCandleSeries? getCandleSeries}) {
       return MaterialApp(
         home: DetailScreen(
           symbol: AppSymbol('BTCUSDT'),
           timeframe: Timeframe('1h'),
           series: series,
           planApi: planApi,
+          getCandleSeries: getCandleSeries,
           isProUser: true,
           detailContext: const DetailContext(
             rank: 1,
@@ -343,6 +388,25 @@ void main() {
       expect(find.byKey(const Key('plan-panel')), findsOneWidget);
       expect(find.byKey(const Key('plan-reason')), findsOneWidget);
       expect(find.byKey(const Key('plan-levels-overlay')), findsNothing);
+    });
+
+    testWidgets('fetch error clears stale plan and shows retry', (tester) async {
+      final api = _FailAfterSuccessPlanApi();
+      await tester.pumpWidget(
+        app(planApi: api, getCandleSeries: _FakeGetCandleSeries(series)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('plan-panel')), findsOneWidget);
+      expect(find.byKey(const Key('plan-levels-overlay')), findsOneWidget);
+
+      // Same-timeframe refresh: candles succeed, plan fails.
+      await tester.tap(find.byTooltip('Reload chart'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('plan-panel')), findsNothing);
+      expect(find.byKey(const Key('plan-levels-overlay')), findsNothing);
+      expect(find.byKey(const Key('plan-error')), findsOneWidget);
+      expect(find.byKey(const Key('plan-retry')), findsOneWidget);
     });
 
     testWidgets('fetch error shows retry, not silent absence', (tester) async {
@@ -488,5 +552,33 @@ class _FailingPlanApi implements PlanApi {
     double risk = 100,
   }) async {
     throw HttpPlanApiException('Plan API error: 500');
+  }
+}
+
+class _FailAfterSuccessPlanApi implements PlanApi {
+  int calls = 0;
+
+  @override
+  Future<PlanData> fetch({
+    required String symbol,
+    required String timeframe,
+    double risk = 100,
+  }) async {
+    calls++;
+    if (calls == 1) {
+      return _FakePlanApi(valid: true)
+          .fetch(symbol: symbol, timeframe: timeframe, risk: risk);
+    }
+    throw HttpPlanApiException('Plan API error: 500');
+  }
+}
+
+class _FakeGetCandleSeries implements GetCandleSeries {
+  final CandleSeriesResponse series;
+  _FakeGetCandleSeries(this.series);
+
+  @override
+  Future<CandleSeriesResponse> execute(GetCandleSeriesInput input) async {
+    return series;
   }
 }

@@ -748,10 +748,9 @@ class _DetailScreenState extends State<DetailScreen> {
       setState(() {
         _isLoadingPlan = false;
         _planLoadFailed = true;
-        // Leave _planFetched false so Retry / refresh can try again.
-        if (_planData != null && _planData!.timeframe != _timeframe) {
-          _planData = null;
-        }
+        // Always drop stale levels so Retry is visible and the chart
+        // cannot keep showing an outdated plan after a failed refresh.
+        _planData = null;
       });
     }
   }
