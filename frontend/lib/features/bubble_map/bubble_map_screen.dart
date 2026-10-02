@@ -17,6 +17,7 @@ import '../detail/detail_screen.dart';
 import '../detail/http_fragility_api.dart';
 import '../detail/http_behavior_api.dart';
 import '../detail/http_mtf_regimes_api.dart';
+import '../detail/http_plan_api.dart';
 import '../detail/http_setup_api.dart';
 import '../volatility/http_volatility_api.dart';
 import '../scorecards/http_scorecard_api.dart';
@@ -44,6 +45,7 @@ class BubbleMapScreen extends StatefulWidget {
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
   final MtfRegimesApi? mtfRegimesApi;
+  final PlanApi? planApi;
   final ScorecardApi? scorecardApi;
   final WatchlistController? watchlist;
 
@@ -60,6 +62,7 @@ class BubbleMapScreen extends StatefulWidget {
     this.behaviorApi,
     this.volatilityApi,
     this.mtfRegimesApi,
+    this.planApi,
     this.scorecardApi,
     this.isProUser = false,
     this.watchlist,
@@ -313,6 +316,7 @@ class _BubbleMapScreenState extends State<BubbleMapScreen>
             behaviorApi: widget.behaviorApi,
             volatilityApi: widget.volatilityApi,
             mtfRegimesApi: widget.mtfRegimesApi,
+            planApi: widget.planApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
             isFavourite: widget.watchlist?.contains(token.symbol) ?? false,

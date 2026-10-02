@@ -24,6 +24,7 @@ import '../../features/market_state/http_transition_api.dart';
 import '../../features/detail/http_fragility_api.dart';
 import '../../features/detail/http_behavior_api.dart';
 import '../../features/detail/http_mtf_regimes_api.dart';
+import '../../features/detail/http_plan_api.dart';
 import '../../features/detail/http_setup_api.dart';
 import '../../features/volatility/http_volatility_api.dart';
 import '../../features/news/application/get_news.dart';
@@ -197,6 +198,11 @@ class CompositionRoot {
   /// regime stack (PR-100).
   MtfRegimesApi createMtfRegimesApi() {
     return HttpMtfRegimesApi(client: httpClient, baseUrl: apiBaseUrl);
+  }
+
+  /// Creates a wired [PlanApi] for the range trade planner (PR-110/111).
+  PlanApi createPlanApi() {
+    return HttpPlanApi(client: httpClient, baseUrl: apiBaseUrl);
   }
 
   /// Creates a wired [SocialApi].

@@ -27,9 +27,12 @@ import 'http_setup_api.dart';
 import 'http_fragility_api.dart';
 import 'http_behavior_api.dart';
 import 'http_mtf_regimes_api.dart';
+import 'http_plan_api.dart';
 import 'fragility_data.dart';
 import 'behavior_data.dart';
 import 'mtf_regimes_data.dart';
+import 'plan_data.dart';
+import 'plan_panel.dart';
 import 'mtf_strip_presentation.dart';
 import 'setup_data.dart';
 import '../market_state/regime_colors.dart';
@@ -67,6 +70,9 @@ class DetailScreen extends StatefulWidget {
   /// API for fetching the multi-timeframe regime stack (PR-100).
   final MtfRegimesApi? mtfRegimesApi;
 
+  /// API for fetching the range trade plan (PR-111).
+  final PlanApi? planApi;
+
   /// Service used to fetch candles when the user switches timeframe.
   final GetCandleSeries? getCandleSeries;
 
@@ -103,6 +109,7 @@ class DetailScreen extends StatefulWidget {
     this.fragilityApi,
     this.behaviorApi,
     this.mtfRegimesApi,
+    this.planApi,
     this.getCandleSeries,
     this.warmupCount = 0,
     this.initialVisibleCount = 30,
@@ -173,6 +180,17 @@ class _DetailScreenState extends State<DetailScreen> {
   int _mtfRequestSeq = 0;
   int _mtfAppliedSeq = 0;
 
+  // ---- range plan state (PR-111) ----
+  PlanData? _planData;
+  bool _isLoadingPlan = false;
+  bool _planFetched = false;
+  bool _planLoadFailed = false;
+  int _planGeneration = 0;
+  double _planRisk = 100;
+  bool _planIsLong = true;
+  final TextEditingController _planRiskController =
+      TextEditingController(text: '100');
+
   // ---- auto-refresh (pro only) ----
   AutoRefreshTimer? _autoRefreshTimer;
 
@@ -195,6 +213,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadChartConfig();
     _loadExchangePreference();
     _loadExchangeConfigs();
+    _loadPlanRisk();
     _loadEvents();
     _wireSocialFeedCallback();
     _loadSetupData();
@@ -203,6 +222,7 @@ class _DetailScreenState extends State<DetailScreen> {
     _loadBehaviorData();
     _loadVolatilityData();
     _loadMtfRegimes();
+    _loadPlanData();
     _startAutoRefresh();
     _startEventsRefreshTimer();
   }
@@ -235,6 +255,7 @@ class _DetailScreenState extends State<DetailScreen> {
     if (_pausable != null) _lifecycle?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     _eventsRefreshTimer?.dispose();
+    _planRiskController.dispose();
     widget.socialFeedViewModel?.onChanged = null;
     super.dispose();
   }
@@ -265,6 +286,9 @@ class _DetailScreenState extends State<DetailScreen> {
         _volatilityData = null;
         _volatilityTimeframe = null;
         _volatilityFetched = false;
+        _planData = null;
+        _planFetched = false;
+        _planLoadFailed = false;
       });
       _loadEvents(); // reload events for new date range
       _loadSetupData(); // reload setup for new timeframe
@@ -272,6 +296,7 @@ class _DetailScreenState extends State<DetailScreen> {
       _loadFragilityData(); // reload fragility for new timeframe
       _loadBehaviorData(); // reload behavior for new timeframe
       _loadVolatilityData(); // reload volatility for new timeframe
+      _loadPlanData();
       _startAutoRefresh(); // restart with new timeframe interval
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
@@ -326,6 +351,8 @@ class _DetailScreenState extends State<DetailScreen> {
       // prior failure (still _mtfFetched == false) gets retried here
       // (PR-100 CR).
       _loadMtfRegimes();
+      _planFetched = false;
+      _loadPlanData();
     } catch (_) {
       // Silently ignore — next tick will retry.
     }
@@ -658,6 +685,96 @@ class _DetailScreenState extends State<DetailScreen> {
     }
   }
 
+  Future<void> _loadPlanRisk() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final svc = PreferencesService(prefs);
+      if (!mounted) return;
+      final risk = svc.planAccountRisk;
+      setState(() {
+        _planRisk = risk;
+        _planRiskController.text = _formatRisk(risk);
+      });
+    } catch (_) {
+      // Keep default 100 already shown in the controller.
+    }
+  }
+
+  String _formatRisk(double risk) {
+    if (risk == risk.roundToDouble()) return risk.toStringAsFixed(0);
+    return risk.toStringAsFixed(2);
+  }
+
+  Future<void> _persistPlanRisk(double risk) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      PreferencesService(prefs).planAccountRisk = risk;
+    } catch (_) {}
+  }
+
+  Future<void> _loadPlanData() async {
+    final api = widget.planApi;
+    if (api == null || _planFetched) return;
+    final generation = ++_planGeneration;
+    final timeframe = _timeframe;
+    setState(() {
+      _isLoadingPlan = true;
+      _planLoadFailed = false;
+    });
+    try {
+      // Size is computed locally; risk query is advisory for the contract.
+      final data = await api.fetch(
+        symbol: widget.symbol.value,
+        timeframe: timeframe,
+        risk: _planRisk,
+      );
+      if (!mounted ||
+          generation != _planGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      setState(() {
+        _planData = data;
+        _planFetched = true;
+        _planLoadFailed = false;
+        _isLoadingPlan = false;
+      });
+    } catch (_) {
+      if (!mounted ||
+          generation != _planGeneration ||
+          _timeframe != timeframe) {
+        return;
+      }
+      setState(() {
+        _isLoadingPlan = false;
+        _planLoadFailed = true;
+        // Always drop stale levels so Retry is visible and the chart
+        // cannot keep showing an outdated plan after a failed refresh.
+        _planData = null;
+      });
+    }
+  }
+
+  void _retryPlan() {
+    _planFetched = false;
+    _planLoadFailed = false;
+    _loadPlanData();
+  }
+
+  PlanChartLevels? _planChartLevels() {
+    final data = _planData;
+    if (data == null || !data.valid) return null;
+    return PlanChartLevels(
+      low: data.low,
+      mid: data.mid,
+      high: data.high,
+      valid: true,
+      entry: _planIsLong ? data.longEntry : data.shortEntry,
+      stop: _planIsLong ? data.longStop : data.shortStop,
+      target: _planIsLong ? data.longTarget : data.shortTarget,
+    );
+  }
+
   Future<void> _loadVolatilityData() async {
     final api = widget.volatilityApi;
     if (api == null || _volatilityFetched) return;
@@ -717,6 +834,7 @@ class _DetailScreenState extends State<DetailScreen> {
         _fragilityFetched = false;
         _behaviorFetched = false;
         _volatilityFetched = false;
+        _planFetched = false;
       });
       _loadEvents();
       _loadSetupData();
@@ -731,6 +849,7 @@ class _DetailScreenState extends State<DetailScreen> {
       // guard only retries when the previous attempt hadn't succeeded
       // (PR-100 CR).
       _loadMtfRegimes();
+      _loadPlanData();
     } catch (_) {
       if (mounted) setState(() => _isLoadingTf = false);
     }
@@ -1035,6 +1154,7 @@ class _DetailScreenState extends State<DetailScreen> {
                   warmupCount: _warmupCount,
                   initialVisibleCount: widget.initialVisibleCount,
                   referenceStartIndex: _referenceStartIndex,
+                  planLevels: _planChartLevels(),
                 ),
               // Overlay controls (social feed + macro events)
               if (widget.socialFeedViewModel != null ||
@@ -1176,6 +1296,38 @@ class _DetailScreenState extends State<DetailScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
+              ],
+              if (_planData != null) ...[
+                const SizedBox(height: 20),
+                _fieldset(
+                  'Plan',
+                  [
+                    PlanPanel(
+                      data: _planData!,
+                      isLong: _planIsLong,
+                      risk: _planRisk,
+                      riskController: _planRiskController,
+                      onLongChanged: (long) =>
+                          setState(() => _planIsLong = long),
+                      onRiskChanged: (risk) {
+                        setState(() => _planRisk = risk);
+                        _persistPlanRisk(risk);
+                      },
+                    ),
+                  ],
+                ),
+              ] else if (_isLoadingPlan) ...[
+                const SizedBox(height: 20),
+                const Center(
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ] else if (_planLoadFailed && widget.planApi != null) ...[
+                const SizedBox(height: 20),
+                PlanLoadError(onRetry: _retryPlan),
               ],
             ],
           ),

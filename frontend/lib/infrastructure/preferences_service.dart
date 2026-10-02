@@ -89,6 +89,7 @@ class PreferencesService {
   static const _keyShowEvents = 'settings.showEvents';
   static const _keyEventFilter = 'settings.eventFilter';
   static const _keyPreferredExchange = 'settings.preferredExchange';
+  static const _keyPlanAccountRisk = 'settings.planAccountRisk';
   static const _keySelectedCountries = 'settings.selectedCountries';
   static const _keyMacroInfluence = 'settings.macroInfluenceFilter';
   static const _keyCustomExchangeName = 'settings.customExchangeName';
@@ -147,6 +148,23 @@ class PreferencesService {
   String get preferredExchange =>
       _prefs.getString(_keyPreferredExchange) ?? 'binance';
   set preferredExchange(String v) => _prefs.setString(_keyPreferredExchange, v);
+
+  // ---- range plan account risk (PR-111) ----
+
+  /// Account risk in quote currency for the Plan panel. Default: 100 USDT.
+  /// Clamped to (0, 1e7]; rejects non-finite and non-positive values.
+  double get planAccountRisk {
+    final v = _prefs.getDouble(_keyPlanAccountRisk);
+    if (v == null || !v.isFinite || v < 0.01) return 100;
+    if (v > 1e7) return 1e7;
+    return v;
+  }
+
+  set planAccountRisk(double v) {
+    if (!v.isFinite || v < 0.01) return;
+    final clamped = v > 1e7 ? 1e7 : v;
+    _prefs.setDouble(_keyPlanAccountRisk, clamped);
+  }
 
   // ---- custom exchange ----
 

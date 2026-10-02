@@ -9,6 +9,7 @@ import 'detail_screen.dart';
 import 'http_behavior_api.dart';
 import 'http_fragility_api.dart';
 import 'http_mtf_regimes_api.dart';
+import 'http_plan_api.dart';
 import 'http_setup_api.dart';
 import '../scorecards/http_scorecard_api.dart';
 import '../watchlist/watchlist_controller.dart';
@@ -27,6 +28,7 @@ class SetupDetailLoader extends StatefulWidget {
   final BehaviorApi? behaviorApi;
   final VolatilityApi? volatilityApi;
   final MtfRegimesApi? mtfRegimesApi;
+  final PlanApi? planApi;
   final ScorecardApi? scorecardApi;
   final bool isProUser;
   final WatchlistController? watchlist;
@@ -41,6 +43,7 @@ class SetupDetailLoader extends StatefulWidget {
     this.behaviorApi,
     this.volatilityApi,
     this.mtfRegimesApi,
+    this.planApi,
     this.scorecardApi,
     this.isProUser = false,
     this.watchlist,
@@ -82,6 +85,7 @@ class _SetupDetailLoaderState extends State<SetupDetailLoader> {
             behaviorApi: widget.behaviorApi,
             volatilityApi: widget.volatilityApi,
             mtfRegimesApi: widget.mtfRegimesApi,
+            planApi: widget.planApi,
             scorecardApi: widget.scorecardApi,
             isProUser: widget.isProUser,
             isFavourite: widget.watchlist?.contains(widget.symbol) ?? false,
