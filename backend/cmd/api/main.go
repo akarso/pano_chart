@@ -511,6 +511,11 @@ func main() {
 	transitionEngine := transition.NewTransitionEngine()
 	transitionService := transition.NewTransitionService(marketService, transitionEngine)
 	transitionService.SetAgeProvider(regimeHistoryService)
+	transitionService.SetMatrixCache(transition.NewMatrixCache(
+		transition.HistoryFromService{Service: regimeHistoryService},
+		15*time.Minute,
+		500,
+	))
 	transitionService.SetSignalEmitter(signalEmitter)
 	transitionHandler := adhttp.NewMarketTransitionHandler(transitionService)
 	log.Println("[main] Market transition engine initialized")

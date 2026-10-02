@@ -1032,12 +1032,17 @@ periods with durations.
    func BuildMatrix(periods []mkt.RegimePeriod) Matrix // Matrix[from][ageBucket][to] = P
    ```
    Count transitions `from → to` grouped by the age bucket the `from` period had when it
-   ended. Laplace smoothing `+1` per cell. Need ≥ 30 transitions per `from` row to be
-   "confident"; else mark row as low-confidence.
+   ended. Laplace smoothing `+1` per cell **only when the bucket has raw counts**; empty
+   buckets fall back to a pooled all-age row. Blend only when the row used has ≥ 30 samples;
+   `sampleSize` / `w` come from that row (bucket or pooled), not global `n_from`.
+   Remap silent/indecisive → sideways and merge adjacent equals before counting.
 2. Blend: `P = w × P_empirical + (1 − w) × P_heuristic` with
-   `w = clamp(n_from / 100, 0, 0.7)` (never fully trust history).
+   `w = clamp(n_row / 100, 0, 0.7)` where `n_row` is the sample count of the
+   age bucket or pooled all-age row actually used (never fully trust history).
+   Blend only when `n_row ≥ 30`.
 3. `TransitionService.Calculate` uses the blend; response adds `"source":"blend"`,
-   `"empiricalWeight": w`, `"sampleSize": n_from`.
+   `"empiricalWeight": w`, `"sampleSize": n_row`, `"pooled": true|false`
+   (`pooled` when the all-age row was used).
 4. Rebuild matrix every 15 min per timeframe (cache in memory).
 
 **Tests.** 40 synthetic periods `compression → expansion` (all) → P(expansion | compression)

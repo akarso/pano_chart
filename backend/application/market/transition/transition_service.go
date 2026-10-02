@@ -32,6 +32,7 @@ type TransitionService struct {
 	engine         *TransitionEngine
 	ageProvider    AgeProvider         // optional — falls back to default when nil
 	signalEmitter  ports.SignalEmitter // optional — PR-090
+	matrixCache    *MatrixCache        // optional — PR-107 empirical blend
 }
 
 // NewTransitionService wires the service.
@@ -50,6 +51,11 @@ func (s *TransitionService) SetAgeProvider(ap AgeProvider) {
 // SetSignalEmitter attaches an optional signal logger (PR-090).
 func (s *TransitionService) SetSignalEmitter(e ports.SignalEmitter) {
 	s.signalEmitter = e
+}
+
+// SetMatrixCache attaches an empirical transition matrix cache (PR-107).
+func (s *TransitionService) SetMatrixCache(c *MatrixCache) {
+	s.matrixCache = c
 }
 
 // Calculate fetches the current regime summary and returns transition
@@ -73,12 +79,32 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	}
 
 	currentRegime := mkt.Regime(summary.State)
-	probs := s.engine.Calculate(
+	heuristic := s.engine.Calculate(
 		currentRegime,
 		summary.Breadth.Compression,
 		volSlope,
 		regimeAge,
 	)
+
+	probs := heuristic
+	source := "heuristic"
+	var empiricalWeight float64
+	var sampleSize int
+	var pooled bool
+
+	if s.matrixCache != nil {
+		matrix := s.matrixCache.Matrix(timeframe)
+		if look, ok := matrix.Lookup(currentRegime, regimeAge); ok {
+			sampleSize = look.SampleSize
+			pooled = look.Pooled
+			// Blend only when the row actually used is confident (≥ 30 samples).
+			if look.SampleSize >= minBlendSamples {
+				empiricalWeight = WeightFromSamples(look.SampleSize)
+				probs = Blend(look.Probabilities, heuristic, empiricalWeight)
+				source = "blend"
+			}
+		}
+	}
 
 	s.emitTransitionSignals(ctx, summary.Timeframe, probs)
 
@@ -88,10 +114,14 @@ func (s *TransitionService) Calculate(ctx context.Context, timeframe string) (mk
 	}
 
 	return mkt.MarketTransition{
-		Timeframe:     summary.Timeframe,
-		CurrentRegime: currentRegime,
-		Probabilities: probs,
-		Horizon:       horizon,
+		Timeframe:       summary.Timeframe,
+		CurrentRegime:   currentRegime,
+		Probabilities:   probs,
+		Horizon:         horizon,
+		Source:          source,
+		EmpiricalWeight: empiricalWeight,
+		SampleSize:      sampleSize,
+		Pooled:          pooled,
 	}, nil
 }
 
