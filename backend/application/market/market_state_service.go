@@ -194,7 +194,9 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 			if w.Trend < w.Sideways || w.Trend < w.Compression || w.Trend < w.Expansion {
 				continue
 			}
-			if e.ATR == 0 {
+			// Prefer sparkline V2 when present even if ATR was never enriched
+			// (hand-built / partially migrated rows).
+			if e.ATR == 0 && len(e.Sparkline) < tapeMinBars {
 				continue
 			}
 			healthyTrendCount++
@@ -202,7 +204,7 @@ func (s *MarketStateService) Calculate(ctx context.Context, timeframe string) (m
 			if e.Bias == "down" {
 				state = "downtrend"
 			}
-			h := ComputeTrendHealth(state, e.Price, e.RecentHigh, e.RecentLow, e.ATR, e.RecentReturn)
+			h := TrendHealthFromSnapshot(state, e)
 			effectiveSum += h
 			if h < 0.4 {
 				breakdowns++

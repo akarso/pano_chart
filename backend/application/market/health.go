@@ -49,10 +49,9 @@ func ComputeTrendHealth(state string, price, recentHigh, recentLow, atr, recentR
 	return clamp(health, 0, 1)
 }
 
-// ComputeTrendHealthV2 is the tape health formula (PR-115 / PR-106 items 1–3).
+// ComputeTrendHealthV2 is the trend health formula (PR-106 / PR-115 tape).
 // Full credit while drawdown ≤ 1 ATR, zero by 3.5 ATR; stale trends lose up
 // to half their health. Crash / squeeze penalty matches V1.
-// Participation fallback keeps ComputeTrendHealth (V1) until PR-106.
 func ComputeTrendHealthV2(state string, price, recentHigh, recentLow, atr14, recentReturn float64, barsSinceExtreme int) float64 {
 	if atr14 == 0 {
 		return 0
@@ -87,14 +86,15 @@ func ComputeTrendHealthV2(state string, price, recentHigh, recentLow, atr14, rec
 }
 
 // BuildMarketLabel produces a human-readable label for the participation
-// fallback (V1 thresholds). The tape path uses BuildTapeLabel (V2) instead
-// so PR-115 does not silently retune fallback copy before PR-106.
+// fallback. Trend captions use the same V2 health thresholds as BuildTapeLabel
+// (strong > 0.75, weakening > 0.4) so the same effectiveTrend yields the same
+// copy on both paths (PR-106).
 func BuildMarketLabel(trendPrevalence, effectiveTrend float64) string {
 	if trendPrevalence > 0.6 {
-		if effectiveTrend > 0.5 {
+		if effectiveTrend > 0.75 {
 			return "Strong trend"
 		}
-		if effectiveTrend > 0.3 {
+		if effectiveTrend > 0.4 {
 			return "Trend weakening"
 		}
 		return "Trend breaking down"
@@ -161,7 +161,7 @@ func DampenTrendByHealth(b mkt.Breadth, effectiveTrend, breakdownRate float64) m
 	// Breakdown penalty: high breakdown rate → extra reduction.
 	healthFactor := clamp(effectiveTrend*1.5, 0, 1) // 0.67+ health → full credit
 	breakdownPenalty := breakdownRate * 0.5         // up to 50% penalty from breakdowns
-	dampFactor := clamp(healthFactor-breakdownPenalty, 0.1, 1.0)
+	dampFactor := clamp(healthFactor-breakdownPenalty, 0.35, 1.0)
 
 	lost := b.Trend * (1.0 - dampFactor)
 	b.Trend *= dampFactor

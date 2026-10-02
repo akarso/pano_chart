@@ -69,12 +69,42 @@ func TestEnrichFromSparkline_TooShort(t *testing.T) {
 }
 
 func TestEnrichFromSparkline_ATRComputation(t *testing.T) {
-	// Sparkline: 100, 102, 100, 102 → moves: 2, 2, 2 → ATR = 2.0
+	// Sparkline: 100, 102, 100, 102 → moves: 2, 2, 2 → mean |Δ| ATR = 2.0
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{100, 102, 100, 102}
 	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if math.Abs(snap.ATR-2.0) > 0.01 {
 		t.Errorf("expected ATR≈2.0, got %f", snap.ATR)
+	}
+}
+
+func TestEnrichFromSparkline_WilderATR14WhenLong(t *testing.T) {
+	// Constant |Δclose|=1 for 20 bars → Wilder ATR14 ≈ 1 (not mean of full window alone).
+	spark := make([]float64, 20)
+	for i := range spark {
+		spark[i] = 100 + float64(i)
+	}
+	snap := domain.EvaluationSnapshot{}
+	appmarket.EnrichFromSparkline(&snap, spark)
+	if math.Abs(snap.ATR-1.0) > 0.05 {
+		t.Fatalf("expected Wilder ATR≈1.0, got %f", snap.ATR)
+	}
+}
+
+func TestEnrichFromSparkline_RecentReturnIsFullWindow(t *testing.T) {
+	// Full-window return in ATR units — not the 8-bar health tail.
+	spark := make([]float64, 20)
+	for i := range spark {
+		spark[i] = 100 + float64(i) // +19 over window; ATR≈1 → RecentReturn≈19
+	}
+	snap := domain.EvaluationSnapshot{}
+	appmarket.EnrichFromSparkline(&snap, spark)
+	want := (spark[19] - spark[0]) / snap.ATR
+	if math.Abs(snap.RecentReturn-want) > 0.01 {
+		t.Fatalf("RecentReturn=%f want full-window %f", snap.RecentReturn, want)
+	}
+	if snap.RecentReturn < 10 {
+		t.Fatalf("full-window return should be ≫ 8-bar tail scale, got %f", snap.RecentReturn)
 	}
 }

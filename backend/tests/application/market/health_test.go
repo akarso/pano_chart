@@ -88,14 +88,14 @@ func TestTrendHealth_Sideways_ReturnsZero(t *testing.T) {
 // ---------- BuildMarketLabel ----------
 
 func TestBuildMarketLabel_StrongTrend(t *testing.T) {
-	l := appmarket.BuildMarketLabel(0.7, 0.6)
+	l := appmarket.BuildMarketLabel(0.7, 0.8)
 	if l != "Strong trend" {
 		t.Errorf("expected 'Strong trend', got %q", l)
 	}
 }
 
 func TestBuildMarketLabel_TrendWeakening(t *testing.T) {
-	l := appmarket.BuildMarketLabel(0.7, 0.4)
+	l := appmarket.BuildMarketLabel(0.7, 0.6)
 	if l != "Trend weakening" {
 		t.Errorf("expected 'Trend weakening', got %q", l)
 	}
@@ -228,14 +228,14 @@ func TestCalculate_BreakdownRate(t *testing.T) {
 				RecentReturn: 0.5,
 			},
 			{
-				// Breaking uptrend: price far from high.
+				// 3.5 ATR under high → V2 ddScore 0 → breakdown (h < 0.4).
 				TrendScore:   0.9,
 				Bias:         "up",
-				Price:        90,
+				Price:        82.5,
 				RecentHigh:   100,
 				RecentLow:    80,
 				ATR:          5,
-				RecentReturn: -2.0, // drawdown = (100-90)/5 = 2.0 ATR → health = 0
+				RecentReturn: 0.2,
 			},
 		},
 	}
@@ -244,9 +244,136 @@ func TestCalculate_BreakdownRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 1 healthy token, 1 breaking token → 50% breakdown rate.
 	if s.BreakdownRate != 0.5 {
 		t.Errorf("expected breakdownRate 0.5, got %f", s.BreakdownRate)
+	}
+}
+
+func TestCalculate_TwoATRDrawdown_NotBreakdown(t *testing.T) {
+	provider := &fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{
+				TrendScore:   0.9,
+				Bias:         "up",
+				Price:        100,
+				RecentHigh:   100,
+				RecentLow:    80,
+				ATR:          5,
+				RecentReturn: 0.5,
+			},
+			{
+				// 2 ATR under high: V2 health ≈ 0.6 — not a breakdown.
+				TrendScore:   0.9,
+				Bias:         "up",
+				Price:        90,
+				RecentHigh:   100,
+				RecentLow:    80,
+				ATR:          5,
+				RecentReturn: 0.2,
+			},
+		},
+	}
+	svc := appmarket.NewMarketStateService(provider)
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.BreakdownRate != 0 {
+		t.Errorf("expected breakdownRate 0 with 2 ATR V2 tolerance, got %f", s.BreakdownRate)
+	}
+}
+
+func TestCalculate_SparklinePath_BrokenBookDampens(t *testing.T) {
+	// Production-shaped sparklines (≥15): unit bar steps → Wilder ATR ≈ 1.
+	healthy := make([]float64, 20)
+	for i := range healthy {
+		healthy[i] = 100 + float64(i) // ends at window high
+	}
+	broken := make([]float64, 20)
+	for i := 0; i < 16; i++ {
+		broken[i] = 100 + float64(i) // high 115 at index 15
+	}
+	for i := 16; i < 19; i++ {
+		broken[i] = 115 - float64(i-15)
+	}
+	broken[19] = 115 - 3.5 // 3.5 ATR under high → V2 health 0
+
+	provider := &fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.9, Bias: "up", Sparkline: healthy},
+			{TrendScore: 0.9, Bias: "up", Sparkline: broken},
+		},
+	}
+	svc := appmarket.NewMarketStateService(provider)
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.BreakdownRate != 0.5 {
+		t.Fatalf("sparkline path: expected breakdownRate 0.5, got %f effective=%f",
+			s.BreakdownRate, s.EffectiveTrend)
+	}
+	if s.Label == "Strong trend" {
+		t.Fatalf("half-broken book must not label Strong trend, got %q et=%f", s.Label, s.EffectiveTrend)
+	}
+}
+
+func TestCalculate_BrokenParticipation_FloorAndDeclassify(t *testing.T) {
+	// All trend-dominant tokens fully broken under V2 (dd ≥ 3.5 ATR).
+	evals := make([]domain.EvaluationSnapshot, 8)
+	for i := range evals {
+		evals[i] = domain.EvaluationSnapshot{
+			TrendScore:    0.85,
+			SidewaysScore: 0.15,
+			Bias:          "up",
+			Price:         80,
+			RecentHigh:    100,
+			RecentLow:     75,
+			ATR:           5, // dd = 4 ATR → ddScore 0
+			RecentReturn:  -0.2,
+		}
+	}
+	svc := appmarket.NewMarketStateService(&fakeEvalProvider{evals: evals})
+	s, err := svc.Calculate(context.Background(), "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.BreakdownRate != 1 {
+		t.Fatalf("expected breakdownRate 1, got %f", s.BreakdownRate)
+	}
+	if s.EffectiveTrend != 0 {
+		t.Fatalf("expected EffectiveTrend 0, got %f", s.EffectiveTrend)
+	}
+	// Floor keeps exactly 35% of pre-dampen trend share:
+	// ScoreWeights → Trend = 0.85/(0.85+0.15) = 0.85 → 0.85×0.35 = 0.2975.
+	if math.Abs(s.Breadth.Trend-0.2975) > 0.01 {
+		t.Fatalf("expected Trend breadth ≈ 0.2975 (0.85×0.35), got %f", s.Breadth.Trend)
+	}
+	if s.Label == "Strong trend" {
+		t.Fatalf("fully broken book must not label Strong trend, got %q state=%s", s.Label, s.State)
+	}
+	if s.State == mkt.StateTrend && s.Label != "Trend breaking down" {
+		t.Fatalf("if still State=trend, caption must be breaking down, got %q", s.Label)
+	}
+}
+
+func TestCalculate_SparklineScoresWhenATRUnset(t *testing.T) {
+	spark := make([]float64, 20)
+	for i := range spark {
+		spark[i] = 100 + float64(i)
+	}
+	provider := &fakeEvalProvider{
+		evals: []domain.EvaluationSnapshot{
+			{TrendScore: 0.9, Bias: "up", Sparkline: spark}, // ATR left 0
+		},
+	}
+	svc := appmarket.NewMarketStateService(provider)
+	s, err := svc.Calculate(context.Background(), "4h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.EffectiveTrend <= 0 {
+		t.Fatalf("expected sparkline path to score without ATR, got et=%f", s.EffectiveTrend)
 	}
 }
 
@@ -300,6 +427,59 @@ func TestTrendHealthV2_StalenessHalves(t *testing.T) {
 	}
 }
 
+func TestTrendHealthFromSnapshot_SparklineTwoATR(t *testing.T) {
+	// Unit steps throughout → Wilder ATR stays 1; last = high − 2
+	// (ddScore 0.6). High is 2 bars back → staleScore = 1 − 0.5×(2/40) = 0.975
+	// → health ≈ 0.6 × 0.975 ≈ 0.585.
+	spark := make([]float64, 20)
+	for i := 0; i < 18; i++ {
+		spark[i] = 100 + float64(i) // high 117 at index 17
+	}
+	spark[18] = 116
+	spark[19] = 115
+	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
+		Sparkline:  spark,
+		Price:      999, // must be ignored on sparkline path
+		RecentHigh: 999,
+		ATR:        99,
+	})
+	if math.Abs(h-0.6) > 0.02 {
+		t.Fatalf("expected ≈0.6 after light staleness (≈0.585), got %f", h)
+	}
+}
+
+func TestTrendHealthFromSnapshot_SparklineStaleness(t *testing.T) {
+	// Exclusive high at index 0; last within 1 ATR so ddScore≈1; barsSince=40.
+	spark := make([]float64, 41)
+	spark[0] = 150
+	for i := 1; i < 41; i++ {
+		if i%2 == 0 {
+			spark[i] = 149
+		} else {
+			spark[i] = 148
+		}
+	}
+	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{Sparkline: spark})
+	if math.Abs(h-0.5) > 0.08 {
+		t.Fatalf("expected ~0.5 with full staleness, got %f", h)
+	}
+}
+
+func TestTrendHealthFromSnapshot_ShortUsesEnrichedFields(t *testing.T) {
+	h := appmarket.TrendHealthFromSnapshot("uptrend", domain.EvaluationSnapshot{
+		Sparkline:  []float64{100, 101, 102}, // < tapeMinBars
+		Price:      100,
+		RecentHigh: 110,
+		RecentLow:  90,
+		ATR:        5,
+		RecentReturn: 0.5,
+	})
+	// dd = 2 ATR → 0.6; barsSinceExtreme forced 0 (no staleness on short path).
+	if math.Abs(h-0.6) > 0.01 {
+		t.Fatalf("expected ~0.6 from enriched fields, got %f", h)
+	}
+}
+
 // ---------- DampenTrendByHealth ----------
 
 func TestDampenTrendByHealth_HealthyTrend_MinimalDampening(t *testing.T) {
@@ -315,12 +495,12 @@ func TestDampenTrendByHealth_HealthyTrend_MinimalDampening(t *testing.T) {
 	}
 }
 
-func TestDampenTrendByHealth_BreakingTrend_StrongDampening(t *testing.T) {
+func TestDampenTrendByHealth_BreakingTrend_HitsFloor(t *testing.T) {
 	b := mkt.Breadth{Trend: 0.80, Sideways: 0.10, Compression: 0.05, Expansion: 0.05}
 	result := appmarket.DampenTrendByHealth(b, 0.1, 0.9) // breaking market
-	// Low health + high breakdowns → aggressive dampening.
-	if result.Trend >= 0.30 {
-		t.Errorf("expected Trend < 0.30 for breaking market, got %f", result.Trend)
+	// healthFactor≈0.15, penalty 0.45 → raw negative → floor 0.35 → Trend = 0.28.
+	if math.Abs(result.Trend-0.28) > 0.01 {
+		t.Errorf("expected Trend ≈ 0.28 (0.80×0.35 floor), got %f", result.Trend)
 	}
 	sum := result.Trend + result.Sideways + result.Compression + result.Expansion
 	if math.Abs(sum-1.0) > 0.01 {
@@ -331,9 +511,9 @@ func TestDampenTrendByHealth_BreakingTrend_StrongDampening(t *testing.T) {
 func TestDampenTrendByHealth_ZeroHealth_FloorApplied(t *testing.T) {
 	b := mkt.Breadth{Trend: 0.90, Sideways: 0.05, Compression: 0.03, Expansion: 0.02}
 	result := appmarket.DampenTrendByHealth(b, 0.0, 1.0) // total breakdown
-	// dampFactor floored at 0.1.
-	if result.Trend < 0.08 || result.Trend > 0.10 {
-		t.Errorf("expected Trend near 0.09 (floor), got %f", result.Trend)
+	// dampFactor floored at 0.35 → Trend = 0.90 × 0.35 = 0.315.
+	if math.Abs(result.Trend-0.315) > 0.01 {
+		t.Errorf("expected Trend ≈ 0.315 (35%% floor), got %f", result.Trend)
 	}
 }
 
