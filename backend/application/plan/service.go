@@ -29,8 +29,8 @@ type PlanResult struct {
 	ShortSize float64
 }
 
-// Evaluate fetches PlanWindowBars candles and builds a RangePlan.
-// risk ≤ 0 skips size computation (sizes stay 0).
+// Evaluate fetches WindowBars(timeframe) candles (Sideways CandleCount) and
+// builds a RangePlan. risk ≤ 0 skips size computation (sizes stay 0).
 func (s *Service) Evaluate(ctx context.Context, symbol, timeframe string, risk float64) (PlanResult, error) {
 	if s == nil || s.candles == nil {
 		return PlanResult{}, fmt.Errorf("plan service not configured")
@@ -43,7 +43,7 @@ func (s *Service) Evaluate(ctx context.Context, symbol, timeframe string, risk f
 	if err != nil {
 		return PlanResult{}, fmt.Errorf("timeframe: %w", err)
 	}
-	series, err := s.candles.GetLastNCandles(ctx, sym, tf, PlanWindowBars)
+	series, err := s.candles.GetLastNCandles(ctx, sym, tf, WindowBars(tf.String()))
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return PlanResult{}, err

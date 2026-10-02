@@ -8,7 +8,8 @@ import (
 )
 
 const (
-	// PlanWindowBars is the swing/channel lookback (ROADMAP PR-110).
+	// PlanWindowBars is the default swing/channel lookback when Sideways
+	// CandleCount is unset (ROADMAP PR-110; matches config.yaml default).
 	PlanWindowBars = 110
 	planATRPeriod  = 14
 	// swingPivot is the half-window for confirmed local extrema (same as
@@ -23,6 +24,16 @@ const (
 	// public "risk reward" reason — width is the binding gate.
 	minWidthATR = 3.5
 )
+
+// WindowBars returns the plan/channel lookback for timeframe, tied to the
+// Sideways V5 CandleCount so quality and geometry describe the same window.
+func WindowBars(timeframe string) int {
+	n := scoring.NewSidewaysV5ConfigForTimeframe(timeframe).CandleCount
+	if n <= 0 {
+		return PlanWindowBars
+	}
+	return n
+}
 
 // RangePlan is a long/short range-reversion sketch from swing structure.
 type RangePlan struct {
@@ -44,7 +55,7 @@ type RangePlan struct {
 }
 
 // Size returns units to risk accountRisk (quote) between entry and stop.
-// Returns 0 when the stop distance is non-positive or non-finite.
+// Returns 0 when the stop distance is non-positive or the result is non-finite.
 func Size(accountRisk, entry, stop float64) float64 {
 	dist := math.Abs(entry - stop)
 	if dist <= 0 || math.IsNaN(dist) || math.IsInf(dist, 0) {
@@ -53,7 +64,11 @@ func Size(accountRisk, entry, stop float64) float64 {
 	if math.IsNaN(accountRisk) || math.IsInf(accountRisk, 0) || accountRisk <= 0 {
 		return 0
 	}
-	return accountRisk / dist
+	out := accountRisk / dist
+	if math.IsNaN(out) || math.IsInf(out, 0) {
+		return 0
+	}
+	return out
 }
 
 // BuildRangePlan derives a plan from a candle series. RangeQuality is the
@@ -67,7 +82,7 @@ func BuildRangePlan(symbol, timeframe string, series domain.CandleSeries) RangeP
 		return plan
 	}
 
-	window := PlanWindowBars
+	window := WindowBars(timeframe)
 	if n < window {
 		window = n
 	}
@@ -88,7 +103,7 @@ func BuildRangePlan(symbol, timeframe string, series domain.CandleSeries) RangeP
 		price = last.Close()
 	}
 
-	quality := sidewaysQuality(series, timeframe)
+	quality := sidewaysQuality(slice, timeframe)
 
 	return finalizePlan(symbol, timeframe, low, high, mid, atr, price, quality)
 }
@@ -133,6 +148,9 @@ func finalizePlan(symbol, timeframe string, low, high, mid, atr, price, quality 
 
 	entryStop := plan.LongEntry - plan.LongStop // always 1.25×ATR when atr>0
 	plan.RiskReward = (plan.LongTarget - plan.LongEntry) / entryStop
+	if math.IsNaN(plan.RiskReward) || math.IsInf(plan.RiskReward, 0) {
+		plan.RiskReward = 0
+	}
 
 	if plan.LongStop <= 0 {
 		plan.Reason = "non-positive stop"
@@ -163,7 +181,9 @@ func clearLevels(p *RangePlan) {
 }
 
 // channelFromSwings sets Low/High from confirmed swing lows/highs (pivot=3).
-// Falls back to false when fewer than one swing of each side exists.
+// Uses plateau-tolerant pivots so equal high/low touches within the window
+// still confirm (aligned with Sideways V5 extrema). Falls back to false when
+// fewer than one swing of each side exists.
 func channelFromSwings(candles []domain.Candle) (low, high float64, ok bool) {
 	n := len(candles)
 	if n < 2*swingPivot+1 {
@@ -177,10 +197,10 @@ func channelFromSwings(candles []domain.Candle) (low, high float64, ok bool) {
 	}
 	var swingHighs, swingLows []float64
 	for i := swingPivot; i < n-swingPivot; i++ {
-		if scoring.IsPivotHigh(highs, i, swingPivot) {
+		if scoring.IsPivotHighAllowEqual(highs, i, swingPivot) {
 			swingHighs = append(swingHighs, highs[i])
 		}
-		if scoring.IsPivotLow(lows, i, swingPivot) {
+		if scoring.IsPivotLowAllowEqual(lows, i, swingPivot) {
 			swingLows = append(swingLows, lows[i])
 		}
 	}
@@ -203,7 +223,7 @@ func channelFromSwings(candles []domain.Candle) (low, high float64, ok bool) {
 }
 
 func clamp01(x float64) float64 {
-	if x < 0 {
+	if math.IsNaN(x) || math.IsInf(x, 0) || x < 0 {
 		return 0
 	}
 	if x > 1 {
@@ -212,7 +232,20 @@ func clamp01(x float64) float64 {
 	return x
 }
 
-func sidewaysQuality(series domain.CandleSeries, timeframe string) float64 {
+// sidewaysQuality scores the same candle window used for the channel/ATR.
+func sidewaysQuality(window []domain.Candle, timeframe string) float64 {
+	if len(window) == 0 {
+		return 0
+	}
+	sym := window[0].Symbol()
+	tf, err := domain.NewTimeframe(timeframe)
+	if err != nil {
+		tf = window[0].Timeframe()
+	}
+	series, err := domain.NewCandleSeries(sym, tf, window)
+	if err != nil {
+		return 0
+	}
 	calc := &scoring.SidewaysV5ScoreCalculator{
 		Config: scoring.NewSidewaysV5ConfigForTimeframe(timeframe),
 	}

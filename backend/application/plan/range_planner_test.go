@@ -178,6 +178,32 @@ func TestChannelFromSwings_IgnoresEdgeSpike(t *testing.T) {
 	}
 }
 
+func TestChannelFromSwings_EqualTouchesStillConfirm(t *testing.T) {
+	// Plateau highs/lows within the pivot window: strict pivots would reject
+	// both equal touches; AllowEqual must still yield a channel.
+	series := plateauRange(t, 110, 100, 110)
+	p := plan.BuildRangePlan("BTCUSDT", "1h", series)
+	if p.Reason == "degenerate channel" {
+		t.Fatal("equal high/low touches must not yield degenerate channel")
+	}
+	if math.Abs(p.High-110) > 0.5 {
+		t.Fatalf("High=%v want ~110", p.High)
+	}
+	if math.Abs(p.Low-100) > 0.5 {
+		t.Fatalf("Low=%v want ~100", p.Low)
+	}
+}
+
+func TestBuildRangePlanFromBounds_NaNPricePositionZero(t *testing.T) {
+	p := plan.BuildRangePlanFromBounds("BTCUSDT", "1h", 100, 110, math.NaN(), 1, 0.8)
+	if math.IsNaN(p.Position) || math.IsInf(p.Position, 0) {
+		t.Fatalf("Position=%v want finite", p.Position)
+	}
+	if p.Position != 0 {
+		t.Fatalf("Position=%v want 0 for NaN price", p.Position)
+	}
+}
+
 func TestSize(t *testing.T) {
 	got := plan.Size(100, 100.25, 99)
 	if math.Abs(got-80) > 1e-9 {
@@ -188,6 +214,16 @@ func TestSize(t *testing.T) {
 	}
 	if plan.Size(0, 100.25, 99) != 0 {
 		t.Fatal("non-positive risk must return 0")
+	}
+	// Finite operands can still overflow to +Inf; Size must not return Inf.
+	if out := plan.Size(math.MaxFloat64, 100.25, 100); math.IsInf(out, 0) || out != 0 {
+		t.Fatalf("Size=%v want 0 (non-finite result rejected)", out)
+	}
+}
+
+func TestWindowBars_MatchesSidewaysCandleCount(t *testing.T) {
+	if got := plan.WindowBars("1h"); got != 110 {
+		t.Fatalf("WindowBars(1h)=%d want 110 (Sideways default)", got)
 	}
 }
 
@@ -302,6 +338,41 @@ func oscillatingRange(t *testing.T, n int, low, high float64) domain.CandleSerie
 		t.Fatal(err)
 	}
 	return series
+}
+
+// plateauRange is like oscillatingRange but holds two consecutive bars at each
+// crest/trough with identical highs/lows — the case strict pivots reject.
+func plateauRange(t *testing.T, n int, low, high float64) domain.CandleSeries {
+	t.Helper()
+	series := oscillatingRange(t, n, low, high)
+	candles := append([]domain.Candle(nil), series.All()...)
+	sym := candles[0].Symbol()
+	tf := candles[0].Timeframe()
+	half := 11
+	period := 2 * half
+	for i := 0; i < n; i++ {
+		pos := i % period
+		// Crest at pos==half, trough at pos==0: duplicate onto the next bar.
+		if pos == half && i+1 < n {
+			c := candles[i]
+			candles[i+1] = domain.NewCandleUnsafe(
+				sym, tf, candles[i+1].Timestamp(),
+				c.Close(), c.High(), c.Low(), c.Close(), c.Volume(),
+			)
+		}
+		if pos == 0 && i+1 < n && i > 0 {
+			c := candles[i]
+			candles[i+1] = domain.NewCandleUnsafe(
+				sym, tf, candles[i+1].Timestamp(),
+				c.Close(), c.High(), c.Low(), c.Close(), c.Volume(),
+			)
+		}
+	}
+	out, err := domain.NewCandleSeries(sym, tf, candles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 type stubCandles struct {
