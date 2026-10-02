@@ -5,7 +5,11 @@
 // emission — independent of scoring.regime_model (heuristic or learned).
 // success is the separate outcome grade.
 //
-// Skips: unresolved rows; ExcludedFromHitRate outcome rules; rows missing
+// Snapshot: at start, asOf := now. Only signals with emitted_at < asOf and
+// outcomes with resolved_at ≤ asOf are eligible, so a concurrent evaluator
+// cannot change which rows belong in the CSV mid-export.
+//
+// Skips: unresolved (at asOf); ExcludedFromHitRate rules; rows missing
 // regime_code or any DefaultRegimeFeatures key (pre-PR-109 / incomplete).
 //
 // Rows are loaded in pages (bounded memory). -max-rows caps eligible written
@@ -49,12 +53,14 @@ func main() {
 	}
 	defer func() { _ = repo.Close() }()
 
-	base := domainsignal.Filter{OldestFirst: true}
+	// Freeze membership for the whole run (pages share one cutoff).
+	asOf := time.Now().UTC()
+	base := domainsignal.Filter{OldestFirst: true, Until: asOf}
 	if *kind != "" {
 		base.Kind = domainsignal.Kind(*kind)
 	}
 	if *sinceDays > 0 {
-		base.Since = time.Now().UTC().Add(-time.Duration(*sinceDays) * 24 * time.Hour)
+		base.Since = asOf.Add(-time.Duration(*sinceDays) * 24 * time.Hour)
 	}
 
 	f, err := os.Create(*outPath)
@@ -98,7 +104,7 @@ func main() {
 		scanned += len(rows)
 		stop := false
 		for _, row := range rows {
-			if row.Outcome == nil {
+			if !outcomeInSnapshot(row.Outcome, asOf) {
 				skippedNoOutcome++
 				continue
 			}
@@ -132,8 +138,20 @@ func main() {
 		os.Exit(1)
 	}
 	unlimited := *maxRows <= 0
-	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v page_size=%d oldest_first=true\n",
-		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited, exportPageSize)
+	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v page_size=%d as_of=%s oldest_first=true\n",
+		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited, exportPageSize, asOf.Format(time.RFC3339Nano))
+}
+
+// outcomeInSnapshot reports whether the outcome was already resolved at asOf.
+// Outcomes resolved after asOf are treated as unresolved for this export.
+func outcomeInSnapshot(oc *domainsignal.Outcome, asOf time.Time) bool {
+	if oc == nil {
+		return false
+	}
+	if oc.ResolvedAt.After(asOf) {
+		return false
+	}
+	return true
 }
 
 // hasTrainingFeatures requires regime_code and every DefaultRegimeFeatures key.
