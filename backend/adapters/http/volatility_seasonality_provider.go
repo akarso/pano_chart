@@ -128,9 +128,11 @@ func (p *VolatilitySeasonalityProvider) SetSectorHandlerFactory(fn func(path str
 	p.newSectorHandler = fn
 }
 
-// ReloadSectors reloads every loaded sector handler and clears negative
-// misses so newly written files are discovered — same cadence as the
-// market-wide volatilityReloadLoop (PR-108).
+// ReloadSectors clears negative misses so newly written files can be
+// discovered, and refreshes every loaded sector handler. A transient reload
+// failure keeps the last-good handler in cache (same as VolatilityHandler.Reload
+// preserving its snapshot) rather than dropping it into a miss that would force
+// market-wide for up to an hour — PR-108.
 func (p *VolatilitySeasonalityProvider) ReloadSectors() {
 	if p == nil {
 		return
@@ -154,21 +156,12 @@ func (p *VolatilitySeasonalityProvider) ReloadSectors() {
 	if logf == nil {
 		logf = log.Printf
 	}
-	var drop []string
 	for _, it := range toReload {
 		if err := it.h.Reload(); err != nil {
-			logf("[seasonality] sector %s reload failed (%v); dropping cache entry", it.id, err)
-			drop = append(drop, it.id)
+			// Keep the cached handler: Reload already left last-good data on it.
+			logf("[seasonality] sector %s reload failed (%v); keeping last-good profile", it.id, err)
 		}
 	}
-	if len(drop) == 0 {
-		return
-	}
-	p.mu.Lock()
-	for _, id := range drop {
-		delete(p.sectors, id)
-	}
-	p.mu.Unlock()
 }
 
 // CurrentSpikeProbability implements setups.SeasonalityProvider (market-wide).
@@ -254,11 +247,9 @@ func (p *VolatilitySeasonalityProvider) sectorSource(sector string) (volatilityR
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Another goroutine may have won the probe.
-	if e, ok := p.sectors[sector]; ok {
-		if e.missing || e.handler == nil {
-			return nil, false
-		}
+	// Another goroutine may have won the probe. Prefer a successful load over
+	// a concurrent miss (file may have appeared mid-probe).
+	if e, ok := p.sectors[sector]; ok && !e.missing && e.handler != nil {
 		return e.handler, true
 	}
 	p.sectors[sector] = &sectorEntry{handler: h}
@@ -268,7 +259,8 @@ func (p *VolatilitySeasonalityProvider) sectorSource(sector string) (volatilityR
 func (p *VolatilitySeasonalityProvider) storeSectorMiss(sector string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, ok := p.sectors[sector]; ok {
+	// Do not overwrite a concurrent successful load with a miss.
+	if e, ok := p.sectors[sector]; ok && !e.missing && e.handler != nil {
 		return
 	}
 	p.sectors[sector] = &sectorEntry{missing: true}

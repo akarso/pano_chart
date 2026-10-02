@@ -14,6 +14,8 @@ import (
 	vol "pano_chart/backend/infrastructure/volatility"
 )
 
+const atrPeriod = 14
+
 func main() {
 	symbolsFlag := flag.String("symbols", "", "comma-separated symbols (default: BTCUSDT)")
 	outPrefix := flag.String("out", "", "path stem for per-sector files (same as VOL_SECTOR_PREFIX; e.g. /data/vol → /data/vol_l1.json); empty skips sector files")
@@ -105,16 +107,25 @@ func main() {
 	}
 
 	for _, sec := range catalog.Sectors() {
-		group := bySector[sec.ID]
-		if len(group) == 0 {
-			continue
-		}
-		merged := vol.AverageFullResults(group)
 		outFile, perr := metrics.SectorProfilePath(prefix, sec.ID)
 		if perr != nil {
 			fmt.Fprintf(os.Stderr, "sector path %s: %v\n", sec.ID, perr)
 			os.Exit(1)
 		}
+		group := bySector[sec.ID]
+		if len(group) == 0 {
+			// Stale profile from a prior run would keep serving old seasonality;
+			// remove it so the API falls back to market-wide.
+			if err := os.Remove(outFile); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "remove stale %s: %v\n", outFile, err)
+				os.Exit(1)
+			}
+			if err == nil {
+				fmt.Printf("Sector %s: removed stale profile (no symbols in this run)\n", sec.ID)
+			}
+			continue
+		}
+		merged := vol.AverageFullResults(group)
 		if dir := filepath.Dir(outFile); dir != "." {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", dir, err)
@@ -184,7 +195,10 @@ func aggregateSymbol(
 				return vol.FullResult{}, fmt.Errorf("fetch: %w", ferr)
 			}
 			if len(candles) == 0 {
-				break
+				// Listing may post-date the lookback start; skip empty early
+				// windows and keep scanning toward `end`.
+				current = next
+				continue
 			}
 			if serr := cache.Store(symbol, candles); serr != nil {
 				return vol.FullResult{}, fmt.Errorf("store: %w", serr)
@@ -200,13 +214,17 @@ func aggregateSymbol(
 	if err != nil {
 		return vol.FullResult{}, fmt.Errorf("load: %w", err)
 	}
-	if len(candles) == 0 {
-		return vol.FullResult{}, fmt.Errorf("no candles loaded")
+	// ATR period needs atrPeriod prior bars; weekly slice starts at atrPeriod.
+	minCandles := atrPeriod + 1
+	if len(candles) < minCandles {
+		return vol.FullResult{}, fmt.Errorf(
+			"insufficient candles: got %d, need ≥ %d (ATR period %d + 1)",
+			len(candles), minCandles, atrPeriod,
+		)
 	}
 
 	result := vol.Aggregate(candles)
 	intraday := vol.BuildAllTimeframes(result.Buckets)
-	const atrPeriod = 14
 	atr := vol.ComputeATR(candles, atrPeriod)
 	weekly := vol.BuildWeekly(candles[atrPeriod:], atr[atrPeriod:])
 	dailyBuckets := vol.DeriveDailyOfWeek(weekly)

@@ -1058,7 +1058,7 @@ periods with durations.
 **Spec.**
 1. `cmd/vol_aggregate` accepts `--symbols` (comma list) and `--out` path **stem** (same as
    `VOL_SECTOR_PREFIX`); produce one result file per sector via `SectorProfilePath`
-   (`/data/vol` → `/data/vol_l1.json`) plus the market-wide `--market-symbol` file (default BTC).
+   (`/data/vol` → `/data/vol_l1.json`) plus the market-wide `--market-symbol` file (default `BTCUSDT`).
 2. `SeasonalityProvider` gains `CurrentSpikeProbabilityFor(ctx, sector, tf string)`; falls back
    to market-wide when the sector file is missing (negative-cached; reloaded hourly).
 3. `SetupService` resolves the symbol's sector (PR-098 config) and uses it.

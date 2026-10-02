@@ -17,10 +17,11 @@ func TestAverageFullResults_AveragesSpikeProb(t *testing.T) {
 					{MinuteOfDay: 11, AvgMove: 2, SpikeProb: 0.4, Normalized: 0.8},
 				},
 			},
+			// Coarse TF present in input must be ignored / re-derived from avg 1m.
 			{
 				Timeframe: vol.TF5m,
 				Buckets: []vol.BucketResult{
-					{MinuteOfDay: 0, AvgMove: 2, SpikeProb: 0.2, Normalized: 1},
+					{MinuteOfDay: 0, AvgMove: 99, SpikeProb: 0.99, Normalized: 1},
 				},
 			},
 		},
@@ -48,17 +49,30 @@ func TestAverageFullResults_AveragesSpikeProb(t *testing.T) {
 		}},
 	}
 	got := vol.AverageFullResults([]vol.FullResult{a, b})
-	if len(got.Intraday) != 2 {
-		t.Fatalf("intraday TF count=%d want 2", len(got.Intraday))
-	}
+
 	byMin := map[int]vol.BucketResult{}
+	var has1m, has5m, has1d bool
 	for _, tf := range got.Intraday {
-		if tf.Timeframe != vol.TF1m {
-			continue
+		switch tf.Timeframe {
+		case vol.TF1m:
+			has1m = true
+			for _, bk := range tf.Buckets {
+				byMin[bk.MinuteOfDay] = bk
+			}
+		case vol.TF5m:
+			has5m = true
+			// Must not carry the bogus input 5m spike 0.99.
+			for _, bk := range tf.Buckets {
+				if bk.SpikeProb > 0.9 {
+					t.Fatalf("5m must be re-derived from averaged 1m, got %+v", bk)
+				}
+			}
+		case vol.TF1d:
+			has1d = true
 		}
-		for _, bk := range tf.Buckets {
-			byMin[bk.MinuteOfDay] = bk
-		}
+	}
+	if !has1m || !has5m || !has1d {
+		t.Fatalf("expected 1m+derived TFs+1d, got %+v", got.Intraday)
 	}
 	if _, ok := byMin[11]; ok {
 		t.Fatal("exclusive minute 11 must be dropped when not in all members")
@@ -67,7 +81,6 @@ func TestAverageFullResults_AveragesSpikeProb(t *testing.T) {
 	if math.Abs(m10.SpikeProb-0.4) > 1e-9 || math.Abs(m10.AvgMove-2) > 1e-9 {
 		t.Fatalf("minute 10=%+v want avg spike 0.4 move 2", m10)
 	}
-	// Normalized recomputed from averaged AvgMove (only minute 10 survives).
 	if math.Abs(m10.Normalized-1.0) > 1e-9 {
 		t.Fatalf("normalized=%v want 1.0 after recompute", m10.Normalized)
 	}

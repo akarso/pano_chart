@@ -464,7 +464,7 @@ func (c *countingSectorHandler) Reload() error {
 	return c.reloadErr
 }
 
-func TestVolatilitySeasonalityProvider_ReloadSectors_ReloadFailureDoesNotHang(t *testing.T) {
+func TestVolatilitySeasonalityProvider_ReloadSectors_ReloadFailureKeepsLastGood(t *testing.T) {
 	market := &fakeVolatilityResultSource{result: &vol.FullResult{
 		Intraday: []vol.TimeframeResult{{
 			Timeframe: vol.TF1m,
@@ -493,8 +493,12 @@ func TestVolatilitySeasonalityProvider_ReloadSectors_ReloadFailureDoesNotHang(t 
 		}
 	})
 
-	if _, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m"); err != nil {
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if got != 0.9 {
+		t.Fatalf("got %v want 0.9", got)
 	}
 	if opens != 1 {
 		t.Fatalf("opens=%d want 1", opens)
@@ -515,6 +519,18 @@ func TestVolatilitySeasonalityProvider_ReloadSectors_ReloadFailureDoesNotHang(t 
 	}
 	if len(logs) == 0 {
 		t.Fatal("expected reload-failure log")
+	}
+
+	// After failed reload, last-good sector profile must still be served.
+	got2, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2 != 0.9 {
+		t.Fatalf("must keep last-good sector after reload fail, got %v", got2)
+	}
+	if opens != 1 {
+		t.Fatalf("must not reopen after failed reload, opens=%d", opens)
 	}
 }
 
@@ -586,6 +602,61 @@ func TestVolatilitySeasonalityProvider_MissingFileNegCacheSkipsSecondOpen(t *tes
 	_, _ = p.CurrentSpikeProbabilityFor(context.Background(), "defi", "15m")
 	if opens != 1 {
 		t.Fatalf("neg-cache must open once, opens=%d", opens)
+	}
+}
+
+func TestVolatilitySeasonalityProvider_SuccessfulLoadWinsOverConcurrentMiss(t *testing.T) {
+	market := &fakeVolatilityResultSource{result: &vol.FullResult{
+		Intraday: []vol.TimeframeResult{{
+			Timeframe: vol.TF1m,
+			Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.05}},
+		}},
+	}}
+	p := httpAdapter.NewVolatilitySeasonalityProviderWithClock(market, fixedNow)
+	p.SetSectorPrefix(t.TempDir() + "/vol")
+	p.SetLogger(func(string, ...any) {})
+
+	// First probe fails → miss cached.
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		return &failingSectorHandler{err: errors.New("not yet")}
+	})
+	got, err := p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.05 {
+		t.Fatalf("miss → market: got=%v err=%v", got, err)
+	}
+
+	// Clear only the miss by simulating ReloadSectors miss clear, then a
+	// successful load must stick even if a stale miss race tried to win.
+	p.ReloadSectors()
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		return &countingSectorHandler{
+			result: &vol.FullResult{
+				Intraday: []vol.TimeframeResult{{
+					Timeframe: vol.TF1m,
+					Buckets:   []vol.BucketResult{{MinuteOfDay: fixedMinuteOfDay, SpikeProb: 0.88}},
+				}},
+			},
+		}
+	})
+	got, err = p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.88 {
+		t.Fatalf("success after miss clear: got=%v err=%v", got, err)
+	}
+
+	// A concurrent miss store must not clobber the loaded handler.
+	// storeSectorMiss is unexported; exercise via a second factory that would
+	// fail if reopened — cached success must short-circuit.
+	opens := 0
+	p.SetSectorHandlerFactory(func(path string) httpAdapter.SectorProfileHandler {
+		opens++
+		return &failingSectorHandler{err: errors.New("should not reopen")}
+	})
+	got, err = p.CurrentSpikeProbabilityFor(context.Background(), "l1", "15m")
+	if err != nil || got != 0.88 {
+		t.Fatalf("cached success: got=%v err=%v", got, err)
+	}
+	if opens != 0 {
+		t.Fatalf("must not reopen cached sector, opens=%d", opens)
 	}
 }
 
