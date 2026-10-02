@@ -2,8 +2,6 @@ package scoring
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 )
 
@@ -67,28 +65,12 @@ func ValidateRegimeModelMode() error {
 	}
 }
 
-// RegimeModelPath resolves where to find regime_model.yaml.
-// Priority: Scoring.RegimeModelPath in config > $REGIME_MODEL_PATH >
-// sibling of config.yaml named regime_model.yaml > config/regime_model.yaml.
-func RegimeModelPath() string {
+// ConfiguredRegimeModelPath returns scoring.regime_model_path from the loaded
+// config, or empty when unset. Path resolution / env / filesystem discovery
+// live in infrastructure/scoring.
+func ConfiguredRegimeModelPath() string {
 	if cfg := GetConfig(); cfg != nil {
-		if p := cfg.Scoring.RegimeModelPath; p != "" {
-			return p
-		}
+		return cfg.Scoring.RegimeModelPath
 	}
-	if p := os.Getenv("REGIME_MODEL_PATH"); p != "" {
-		return p
-	}
-	if cfgPath := ConfigPath(); cfgPath != "" {
-		dir := filepath.Dir(cfgPath)
-		candidate := filepath.Join(dir, "regime_model.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-		candidate = filepath.Join(dir, "config", "regime_model.yaml")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return "config/regime_model.yaml"
+	return ""
 }

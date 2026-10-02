@@ -3,7 +3,6 @@ package scoring
 import (
 	"fmt"
 	"math"
-	"os"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -24,10 +23,25 @@ var RequiredRegimeClasses = []string{
 	ClassTrend, ClassSideways, ClassCompression, ClassExpansion,
 }
 
-// DefaultRegimeFeatures is the canonical feature order for export / training.
+// DefaultRegimeFeatures is the canonical feature order for setup export /
+// training. RS and alignment are omitted: the setup emit path does not
+// populate them, so advertising them would ship constant-zero columns.
 var DefaultRegimeFeatures = []string{
 	"trend", "sideways", "compression", "expansion",
-	"er", "vr", "atr_pct", "rs", "alignment",
+	"er", "vr", "atr_pct",
+}
+
+// knownFeatureSet is the union of names allowed in weight tables.
+func knownFeatureSet() map[string]struct{} {
+	out := make(map[string]struct{}, len(DefaultRegimeFeatures)+2)
+	for _, k := range DefaultRegimeFeatures {
+		out[k] = struct{}{}
+	}
+	// Optional enrichment keys (tape / future emitters); allowed in weights
+	// if present, but not required in setup CSV.
+	out["rs"] = struct{}{}
+	out["alignment"] = struct{}{}
+	return out
 }
 
 // ClassParams is one logistic head in a one-vs-rest regime model.
@@ -91,18 +105,15 @@ func ClassifyStructure(features map[string]float64, model Model) (trend, sideway
 	return norm[0], norm[1], norm[2], norm[3], order[bestI], true
 }
 
-// LoadRegimeModel reads a regime_model.yaml file.
-func LoadRegimeModel(path string) (*Model, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read regime model %s: %w", path, err)
-	}
+// ParseRegimeModelYAML unmarshals YAML bytes into a Model and runs Validate.
+// File I/O belongs in infrastructure (see infrastructure/scoring).
+func ParseRegimeModelYAML(data []byte) (*Model, error) {
 	var m Model
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse regime model %s: %w", path, err)
+		return nil, fmt.Errorf("parse regime model: %w", err)
 	}
 	if err := m.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid regime model %s: %w", path, err)
+		return nil, fmt.Errorf("invalid regime model: %w", err)
 	}
 	return &m, nil
 }
@@ -116,15 +127,16 @@ func (m Model) Validate() error {
 	if len(m.Weights) == 0 && len(m.Classes) == 0 {
 		return fmt.Errorf("model needs weights and/or classes")
 	}
-	if err := validateWeights(m.Weights); err != nil {
-		return fmt.Errorf("binary weights: %w", err)
+	known := knownFeatureSet()
+	if err := validateWeightKeys(m.Weights, known, "binary"); err != nil {
+		return err
 	}
 	if math.IsNaN(m.Bias) || math.IsInf(m.Bias, 0) {
 		return fmt.Errorf("binary bias is non-finite")
 	}
 	for name, cp := range m.Classes {
-		if err := validateWeights(cp.Weights); err != nil {
-			return fmt.Errorf("class %s weights: %w", name, err)
+		if err := validateWeightKeys(cp.Weights, known, "class "+name); err != nil {
+			return err
 		}
 		if math.IsNaN(cp.Bias) || math.IsInf(cp.Bias, 0) {
 			return fmt.Errorf("class %s bias is non-finite", name)
@@ -133,7 +145,8 @@ func (m Model) Validate() error {
 	return nil
 }
 
-// ValidateForInference requires a non-placeholder model with all four classes.
+// ValidateForInference requires a non-placeholder model with all four classes,
+// each having at least one weight whose feature name is known.
 func (m Model) ValidateForInference() error {
 	if m.Placeholder {
 		return fmt.Errorf("placeholder model cannot be used for inference")
@@ -141,18 +154,41 @@ func (m Model) ValidateForInference() error {
 	if err := m.Validate(); err != nil {
 		return err
 	}
+	known := knownFeatureSet()
+	// If Features is declared, it must be non-empty and every entry known;
+	// class weight keys must then be ⊆ Features.
+	allowed := known
+	if len(m.Features) > 0 {
+		allowed = make(map[string]struct{}, len(m.Features))
+		for _, f := range m.Features {
+			if _, ok := known[f]; !ok {
+				return fmt.Errorf("features list contains unknown name %q", f)
+			}
+			allowed[f] = struct{}{}
+		}
+	}
 	for _, name := range RequiredRegimeClasses {
-		if _, ok := m.Classes[name]; !ok {
+		cp, ok := m.Classes[name]
+		if !ok {
 			return fmt.Errorf("missing class %q", name)
+		}
+		if len(cp.Weights) == 0 {
+			return fmt.Errorf("class %q has no weights (constant head)", name)
+		}
+		if err := validateWeightKeys(cp.Weights, allowed, "class "+name); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-func validateWeights(w map[string]float64) error {
+func validateWeightKeys(w map[string]float64, allowed map[string]struct{}, label string) error {
 	for k, v := range w {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return fmt.Errorf("%q is non-finite", k)
+			return fmt.Errorf("%s weight %q is non-finite", label, k)
+		}
+		if _, ok := allowed[k]; !ok {
+			return fmt.Errorf("%s weight names unknown feature %q", label, k)
 		}
 	}
 	return nil
@@ -197,32 +233,26 @@ func ClosesFromCandles(candles []domain.Candle) []float64 {
 	return out
 }
 
-// BuildRegimeFeatures assembles the feature map used by Predict / ClassifyStructure.
-// rs and alignment are optional (0 when unknown — typical on the tape path).
-// atr must be the same Wilder TrueATR(14) used by ScoreMarketTape when the
-// training target is tape structure; setup path uses the same TrueATR for
-// emit/classify parity.
+// BuildRegimeFeatures assembles the feature map used by Predict / ClassifyStructure
+// and setup export (DefaultRegimeFeatures). atr should be Wilder TrueATR(14)
+// when available; atr_pct is 0 when atr/price is undefined.
 func BuildRegimeFeatures(
 	trend, sideways, compression, expansion float64,
 	closes []float64,
 	atr, price float64,
-	rs, alignment float64,
 ) map[string]float64 {
 	atrPct := 0.0
 	if price > 0 && atr > 0 && !math.IsNaN(atr) && !math.IsInf(atr, 0) {
 		atrPct = atr / price
 	}
-	vr := VarianceRatio(closes, 4)
 	return map[string]float64{
 		"trend":       trend,
 		"sideways":    sideways,
 		"compression": compression,
 		"expansion":   expansion,
 		"er":          EfficiencyRatio(closes),
-		"vr":          vr,
+		"vr":          VarianceRatio(closes, 4),
 		"atr_pct":     atrPct,
-		"rs":          rs,
-		"alignment":   alignment,
 	}
 }
 

@@ -2,13 +2,12 @@
 // regime-model training (PR-109).
 //
 // IMPORTANT: Collect training CSVs while scoring.regime_model is heuristic.
-// regime_label comes from regime_code at emission (result.Regime). Under a
-// learned model that label is the model's own prediction — not ground truth.
+// regime_label is the four-way raw-score argmax at emission (regime_code).
+// Under a learned model that label follows the live classifier — not ground
+// truth for retraining.
 //
-// Features come from signal.Context (setupRegimeFeatures at emit). atr_pct is
-// taken only from Context (Wilder TrueATR/price); missing → empty cell (no
-// SimpleATR backfill from the atr column). success is the outcome grade —
-// train OVR structure heads on regime_label, not success.
+// Skips: unresolved rows; ExcludedFromHitRate outcome rules; rows missing
+// regime_code or any DefaultRegimeFeatures key (pre-PR-109 / incomplete).
 //
 // Default: kind=setup, oldest-first. Use -max-rows to cap memory on large DBs
 // (0 = unlimited).
@@ -49,7 +48,6 @@ func main() {
 	}
 	defer func() { _ = repo.Close() }()
 
-	// Limit < 0 → unlimited; OldestFirst → ASC for training splits.
 	limit := -1
 	if *maxRows > 0 {
 		limit = *maxRows
@@ -90,9 +88,19 @@ func main() {
 	scanned := len(rows)
 	written := 0
 	skippedNoOutcome := 0
+	skippedExcluded := 0
+	skippedIncomplete := 0
 	for _, row := range rows {
 		if row.Outcome == nil {
 			skippedNoOutcome++
+			continue
+		}
+		if domainsignal.ExcludedFromHitRate(row.Outcome.Rule) {
+			skippedExcluded++
+			continue
+		}
+		if !hasTrainingFeatures(row.Signal.Context) {
+			skippedIncomplete++
 			continue
 		}
 		rec := recordFor(row)
@@ -108,32 +116,37 @@ func main() {
 		os.Exit(1)
 	}
 	unlimited := *maxRows <= 0
-	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d out=%s kind=%q max_rows=%d unlimited=%v oldest_first=true\n",
-		scanned, written, skippedNoOutcome, *outPath, *kind, *maxRows, unlimited)
+	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v oldest_first=true\n",
+		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited)
 	fmt.Fprintf(os.Stderr, "note: collect training CSVs under scoring.regime_model=heuristic so regime_label is independent of a learned classifier\n")
+}
+
+// hasTrainingFeatures requires regime_code and every DefaultRegimeFeatures key.
+func hasTrainingFeatures(ctx map[string]float64) bool {
+	if ctx == nil {
+		return false
+	}
+	if _, ok := ctx["regime_code"]; !ok {
+		return false
+	}
+	for _, k := range scoring.DefaultRegimeFeatures {
+		if _, ok := ctx[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func recordFor(row domainsignal.SignalWithOutcome) []string {
 	sig := row.Signal
 	oc := row.Outcome
 	ctx := sig.Context
-	if ctx == nil {
-		ctx = map[string]float64{}
-	}
 	feat := func(k string) string {
-		v, ok := ctx[k]
-		if !ok {
-			return ""
-		}
-		return fmtFloat(v)
+		return fmtFloat(ctx[k])
 	}
 	success := "0"
 	if oc.Success {
 		success = "1"
-	}
-	regimeLabel := ""
-	if code, ok := ctx["regime_code"]; ok {
-		regimeLabel = decodeRegimeCode(code)
 	}
 	out := []string{
 		sig.ID,
@@ -149,7 +162,7 @@ func recordFor(row domainsignal.SignalWithOutcome) []string {
 	for _, k := range scoring.DefaultRegimeFeatures {
 		out = append(out, feat(k))
 	}
-	out = append(out, regimeLabel, success, fmtFloat(oc.ForwardReturn), oc.Rule)
+	out = append(out, decodeRegimeCode(ctx["regime_code"]), success, fmtFloat(oc.ForwardReturn), oc.Rule)
 	return out
 }
 
@@ -159,6 +172,8 @@ func decodeRegimeCode(code float64) string {
 		return "trend"
 	case 2:
 		return "compression"
+	case 3:
+		return "expansion"
 	default:
 		return "sideways"
 	}

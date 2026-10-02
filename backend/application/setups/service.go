@@ -270,12 +270,15 @@ func (s *SetupService) emitSetupSignal(ctx context.Context, result setup.SetupSc
 		"market_effective": result.MarketEffective,
 	}
 	// Same feature builder as dominantRegimeLearned (PR-109 train/serve parity).
-	for k, v := range setupRegimeFeatures(stats.Scores, series) {
+	feats := setupRegimeFeatures(stats.Scores, series)
+	for k, v := range feats {
 		ctxNums[k] = v
 	}
-	// Structure-training label (distinct from outcome success). Encoded because
-	// Context is map[string]float64; export_dataset decodes to regime_label.
-	ctxNums["regime_code"] = regimeCode(result.Regime)
+	// Structure-training label from four-way raw-score argmax (includes
+	// expansion). Distinct from result.Regime, which folds expansion→sideways.
+	ctxNums["regime_code"] = structureRegimeCode(
+		feats["trend"], feats["sideways"], feats["compression"], feats["expansion"],
+	)
 	if label == "range" || label == "compression" {
 		hi, lo := recentExtremes(series)
 		ctxNums["range_low"] = lo
@@ -311,20 +314,27 @@ func setupRegimeFeatures(scores map[string]float64, series domain.CandleSeries) 
 	if n := len(closes); n > 0 {
 		price = closes[n-1]
 	}
-	return scoring.BuildRegimeFeatures(trend, sideways, compression, expansion, closes, atr, price, 0, 0)
+	return scoring.BuildRegimeFeatures(trend, sideways, compression, expansion, closes, atr, price)
 }
 
-// regimeCode encodes result.Regime for Context / export (PR-109).
-// 0=sideways, 1=trend, 2=compression. Expansion folds to sideways in setups.
-func regimeCode(regime string) float64 {
-	switch regime {
-	case "uptrend", "downtrend":
-		return 1
-	case "compression":
-		return 2
-	default:
-		return 0
+// structureRegimeCode encodes the four-way argmax of raw scores for export
+// training (0=sideways, 1=trend, 2=compression, 3=expansion). Independent of
+// result.Regime, which folds expansion into sideways for setup labels.
+func structureRegimeCode(trend, sideways, compression, expansion float64) float64 {
+	code := 0.0
+	best := sideways
+	if trend >= best {
+		best = trend
+		code = 1
 	}
+	if compression >= best {
+		best = compression
+		code = 2
+	}
+	if expansion >= best {
+		code = 3
+	}
+	return code
 }
 
 func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
@@ -337,8 +347,12 @@ func seriesPriceATR(series domain.CandleSeries) (price, atr float64) {
 		return 0, 0
 	}
 	price = last.Close()
-	// Wilder TrueATR(14) — same definition as setupRegimeFeatures / atr_pct.
+	// Prefer Wilder TrueATR(14) when the series is long enough; fall back to
+	// SimpleATR so short series (2–14 bars) still grade with a positive ATR.
 	atr = scoring.TrueATR(series.All(), 14)
+	if atr <= 0 {
+		atr = usecases.SimpleATR(series, 14)
+	}
 	return price, atr
 }
 

@@ -199,8 +199,8 @@ func main() {
 		log.Fatalf("[main] %v", err)
 	}
 	if scoring.RegimeModelMode() == "learned" {
-		path := scoring.RegimeModelPath()
-		model, err := scoring.LoadRegimeModel(path)
+		path := infrascoring.ResolveRegimeModelPath(scoring.ConfigPath(), scoring.ConfiguredRegimeModelPath())
+		model, err := infrascoring.LoadRegimeModelFile(path)
 		if err != nil {
 			log.Fatalf("[main] regime_model=learned but load failed: %v", err)
 		}

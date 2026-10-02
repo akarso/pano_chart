@@ -110,7 +110,10 @@ func TestClassifyTapeLearned_LowTrendIndecisive(t *testing.T) {
 	model := scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend": {}, "sideways": {}, "compression": {}, "expansion": {},
+			"trend":       {Weights: map[string]float64{"trend": 1}},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}},
+			"compression": {Weights: map[string]float64{"compression": 1}},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}},
 		},
 	}
 	tape, ok := classifyTapeLearned(nil, model, "neutral", 0, 0, 0.2)
@@ -130,10 +133,10 @@ func TestClassifyTapeLearned_LowTrendCompressionDominant(t *testing.T) {
 	model := scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend":       {Bias: -8},
-			"sideways":    {Bias: -8},
-			"compression": {Bias: 5},
-			"expansion":   {Bias: -8},
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: -8},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: 5},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}, Bias: -8},
 		},
 	}
 	tape, ok := classifyTapeLearned(nil, model, "neutral", 0, 0, 0.2)

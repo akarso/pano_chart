@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"pano_chart/backend/domain/scoring"
+	infrascoring "pano_chart/backend/infrastructure/scoring"
 )
 
 func TestPredict_MatchesHandComputedSigmoid(t *testing.T) {
@@ -31,6 +32,10 @@ func TestPredict_MissingFeaturesAreZero(t *testing.T) {
 		Weights: map[string]float64{"trend": 1.0, "missing": 10.0},
 		Bias:    0,
 	}
+	if err := model.Validate(); err == nil {
+		t.Fatal("unknown feature key must fail Validate")
+	}
+	model.Weights = map[string]float64{"trend": 1.0}
 	got := scoring.Predict(map[string]float64{"trend": 1.0}, model)
 	want := 1 / (1 + math.Exp(-1.0))
 	if math.Abs(got-want) > 1e-12 {
@@ -69,7 +74,8 @@ func TestClassifyStructure_PlaceholderOrIncomplete_NotOK(t *testing.T) {
 	_, _, _, _, _, ok := scoring.ClassifyStructure(nil, scoring.Model{
 		Placeholder: true,
 		Classes: map[string]scoring.ClassParams{
-			"trend": {}, "sideways": {}, "compression": {}, "expansion": {},
+			"trend": {Weights: map[string]float64{"trend": 1}}, "sideways": {Weights: map[string]float64{"sideways": 1}},
+			"compression": {Weights: map[string]float64{"compression": 1}}, "expansion": {Weights: map[string]float64{"expansion": 1}},
 		},
 	})
 	if ok {
@@ -82,22 +88,32 @@ func TestClassifyStructure_PlaceholderOrIncomplete_NotOK(t *testing.T) {
 		t.Fatal("binary-only model must not classify structure")
 	}
 	_, _, _, _, _, ok = scoring.ClassifyStructure(nil, scoring.Model{
-		Classes: map[string]scoring.ClassParams{"trend": {}},
+		Classes: map[string]scoring.ClassParams{"trend": {Weights: map[string]float64{"trend": 1}}},
 	})
 	if ok {
 		t.Fatal("partial classes must not classify")
 	}
 }
 
-func TestValidateForInference_RequiresFourClasses(t *testing.T) {
+func TestValidateForInference_RequiresWeightsAndKnownFeatures(t *testing.T) {
 	m := scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend": {}, "sideways": {}, "compression": {},
+			"trend": {}, "sideways": {Weights: map[string]float64{"sideways": 1}},
+			"compression": {Weights: map[string]float64{"compression": 1}},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}},
 		},
 	}
 	if err := m.ValidateForInference(); err == nil {
-		t.Fatal("expected error for missing expansion")
+		t.Fatal("expected error for empty trend weights")
+	}
+	m.Classes["trend"] = scoring.ClassParams{Weights: map[string]float64{"nope": 1}}
+	if err := m.ValidateForInference(); err == nil {
+		t.Fatal("expected error for unknown feature")
+	}
+	m.Classes["trend"] = scoring.ClassParams{Weights: map[string]float64{"trend": 1}}
+	if err := m.ValidateForInference(); err != nil {
+		t.Fatalf("valid model: %v", err)
 	}
 }
 
@@ -111,7 +127,7 @@ func TestValidate_RejectsNonFinite(t *testing.T) {
 	}
 }
 
-func TestLoadRegimeModel_StubFileIsPlaceholder(t *testing.T) {
+func TestParseRegimeModel_StubFileIsPlaceholder(t *testing.T) {
 	candidates := []string{
 		filepath.Join("..", "..", "..", "config", "regime_model.yaml"),
 		filepath.Join("config", "regime_model.yaml"),
@@ -126,9 +142,9 @@ func TestLoadRegimeModel_StubFileIsPlaceholder(t *testing.T) {
 	if path == "" {
 		t.Fatal("regime_model.yaml not found")
 	}
-	m, err := scoring.LoadRegimeModel(path)
+	m, err := infrascoring.LoadRegimeModelFile(path)
 	if err != nil {
-		t.Fatalf("LoadRegimeModel: %v", err)
+		t.Fatalf("LoadRegimeModelFile: %v", err)
 	}
 	if !m.Placeholder {
 		t.Fatal("shipped stub must be placeholder: true")
@@ -183,13 +199,9 @@ func TestValidateRegimeModelMode_RejectsTypo(t *testing.T) {
 	}
 }
 
-func TestRegimeModelPath_ConfigOverride(t *testing.T) {
-	scoring.ResetConfig()
-	t.Cleanup(scoring.ResetConfig)
-	scoring.ReplaceConfigForTest(&scoring.AppConfig{
-		Scoring: scoring.ScoringYAML{RegimeModelPath: "/tmp/custom_regime.yaml"},
-	})
-	if got := scoring.RegimeModelPath(); got != "/tmp/custom_regime.yaml" {
+func TestResolveRegimeModelPath_ConfigOverride(t *testing.T) {
+	got := infrascoring.ResolveRegimeModelPath("config.yaml", "/tmp/custom_regime.yaml")
+	if got != "/tmp/custom_regime.yaml" {
 		t.Fatalf("path=%q", got)
 	}
 }

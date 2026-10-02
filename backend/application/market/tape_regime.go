@@ -100,7 +100,7 @@ func ScoreMarketTape(series domain.CandleSeries, timeframe, source string) TapeR
 	if model := scoring.ActiveRegimeModel(); model != nil {
 		features := scoring.BuildRegimeFeatures(
 			trendScore, sideways, compression, expansion,
-			closes, atr14, price, 0, 0,
+			closes, atr14, price,
 		)
 		if learned, ok := classifyTapeLearned(features, *model, trendBias, effectiveTrend, breakdownRate, trendScore); ok {
 			tape = learned

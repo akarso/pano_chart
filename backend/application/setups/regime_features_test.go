@@ -25,10 +25,10 @@ func TestDominantRegimeLearned_CompressionAndExpansionFold(t *testing.T) {
 	scoring.SetRegimeModel(&scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend":       {Bias: -8},
-			"sideways":    {Bias: -8},
-			"compression": {Bias: 5},
-			"expansion":   {Bias: -8},
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: -8},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: 5},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}, Bias: -8},
 		},
 	})
 	got, ok := dominantRegimeLearned(scores, series)
@@ -39,10 +39,10 @@ func TestDominantRegimeLearned_CompressionAndExpansionFold(t *testing.T) {
 	scoring.SetRegimeModel(&scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend":       {Bias: -8},
-			"sideways":    {Bias: -8},
-			"compression": {Bias: -8},
-			"expansion":   {Bias: 5},
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: -8},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: -8},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}, Bias: 5},
 		},
 	})
 	got, ok = dominantRegimeLearned(scores, series)
@@ -66,10 +66,10 @@ func TestDominantRegimeLearned_TrendResolvesDirection(t *testing.T) {
 	scoring.SetRegimeModel(&scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend":       {Bias: 5},
-			"sideways":    {Bias: -8},
-			"compression": {Bias: -8},
-			"expansion":   {Bias: -8},
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: 5},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: -8},
+			"expansion":   {Weights: map[string]float64{"expansion": 1}, Bias: -8},
 		},
 	})
 	got := dominantRegime(scores, series, "up", nil)
@@ -103,26 +103,45 @@ func TestSetupRegimeFeatures_EmitClassifyParity(t *testing.T) {
 		t.Fatalf("emit ATR vs feature atr_pct: feats=%.12f atr/price=%.12f", feats["atr_pct"], wantPct)
 	}
 
-	// dominantRegimeLearned must see the same feature vector (shared helper).
 	scoring.ClearRegimeModel()
 	t.Cleanup(scoring.ClearRegimeModel)
 	scoring.SetRegimeModel(&scoring.Model{
 		Type: "logistic",
 		Classes: map[string]scoring.ClassParams{
-			"trend":       {Bias: -8},
-			"sideways":    {Bias: -8},
-			"compression": {Bias: -8},
+			"trend":       {Weights: map[string]float64{"trend": 1}, Bias: -8},
+			"sideways":    {Weights: map[string]float64{"sideways": 1}, Bias: -8},
+			"compression": {Weights: map[string]float64{"compression": 1}, Bias: -8},
 			"expansion":   {Weights: map[string]float64{"expansion": 20}, Bias: 0},
 		},
 	})
 	got, ok := dominantRegimeLearned(scores, series)
-	if !ok || got != "sideways" { // expansion folds to sideways
+	if !ok || got != "sideways" {
 		t.Fatalf("dominantRegimeLearned=(%q,%v) want sideways from expansion head", got, ok)
 	}
-	// Sanity: ClassifyStructure on the same feats picks expansion.
 	_, _, _, _, dom, ok := scoring.ClassifyStructure(feats, *scoring.ActiveRegimeModel())
 	if !ok || dom != scoring.ClassExpansion {
 		t.Fatalf("ClassifyStructure on setupRegimeFeatures dom=%q ok=%v", dom, ok)
+	}
+}
+
+func TestStructureRegimeCode_IncludesExpansion(t *testing.T) {
+	code := structureRegimeCode(0.1, 0.2, 0.15, 0.9)
+	if code != 3 {
+		t.Fatalf("code=%v want 3 (expansion)", code)
+	}
+	if structureRegimeCode(0.8, 0.1, 0.1, 0.1) != 1 {
+		t.Fatal("want trend")
+	}
+	if structureRegimeCode(0.1, 0.1, 0.9, 0.1) != 2 {
+		t.Fatal("want compression")
+	}
+}
+
+func TestSeriesPriceATR_ShortSeriesFallback(t *testing.T) {
+	series := risingSeries(t, 5) // < TrueATR period+1
+	_, atr := seriesPriceATR(series)
+	if atr <= 0 {
+		t.Fatalf("short series atr=%v want SimpleATR fallback >0", atr)
 	}
 }
 

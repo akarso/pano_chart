@@ -8,7 +8,7 @@
 # binary `weights`/`bias` are for setup-success notebooks only — not structure.
 model: logistic
 placeholder: true
-features: [trend, sideways, compression, expansion, er, vr, atr_pct, rs, alignment]
+features: [trend, sideways, compression, expansion, er, vr, atr_pct]
 weights:
   trend: 0.5
   sideways: 0.2
