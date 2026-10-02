@@ -164,7 +164,6 @@ class PlanPanel extends StatelessWidget {
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: _submitRisk,
-                onEditingComplete: () => _submitRisk(riskController.text),
               ),
             ),
             const Spacer(),
