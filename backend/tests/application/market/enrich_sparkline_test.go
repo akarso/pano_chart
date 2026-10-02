@@ -69,12 +69,69 @@ func TestEnrichFromSparkline_TooShort(t *testing.T) {
 }
 
 func TestEnrichFromSparkline_ATRComputation(t *testing.T) {
-	// Sparkline: 100, 102, 100, 102 → moves: 2, 2, 2 → ATR = 2.0
+	// Sparkline: 100, 102, 100, 102 → moves: 2, 2, 2 → mean |Δ| ATR = 2.0
 	snap := domain.EvaluationSnapshot{}
 	sparkline := []float64{100, 102, 100, 102}
 	appmarket.EnrichFromSparkline(&snap, sparkline)
 
 	if math.Abs(snap.ATR-2.0) > 0.01 {
 		t.Errorf("expected ATR≈2.0, got %f", snap.ATR)
+	}
+}
+
+func TestEnrichFromSparkline_WilderATR14WhenLong(t *testing.T) {
+	// Early large steps, then tiny ones: mean |Δ| stays elevated; Wilder
+	// decays toward recent small TRs — formulas must diverge.
+	spark := make([]float64, 30)
+	spark[0] = 100
+	for i := 1; i < 30; i++ {
+		step := 0.1
+		if i <= 5 {
+			step = 10
+		}
+		spark[i] = spark[i-1] + step
+	}
+	var absSum float64
+	for i := 1; i < len(spark); i++ {
+		absSum += math.Abs(spark[i] - spark[i-1])
+	}
+	meanAbs := absSum / float64(len(spark)-1)
+
+	snap := domain.EvaluationSnapshot{}
+	appmarket.EnrichFromSparkline(&snap, spark)
+	if math.Abs(snap.ATR-meanAbs) < 0.4 {
+		t.Fatalf("Wilder ATR=%f should diverge from mean|Δ|=%f", snap.ATR, meanAbs)
+	}
+	if snap.ATR <= 0 || snap.ATR >= meanAbs {
+		t.Fatalf("expected 0 < Wilder ATR < mean|Δ|, got ATR=%f mean=%f", snap.ATR, meanAbs)
+	}
+}
+
+func TestEnrichFromSparkline_RecentReturnUsesMeanAbsDenom(t *testing.T) {
+	// Full-window return / mean|Δ| — not Wilder ATR (silent/bias scale).
+	spark := make([]float64, 30)
+	spark[0] = 100
+	for i := 1; i < 30; i++ {
+		step := 0.1
+		if i <= 5 {
+			step = 10
+		}
+		spark[i] = spark[i-1] + step
+	}
+	var absSum float64
+	for i := 1; i < len(spark); i++ {
+		absSum += math.Abs(spark[i] - spark[i-1])
+	}
+	meanAbs := absSum / float64(len(spark)-1)
+
+	snap := domain.EvaluationSnapshot{}
+	appmarket.EnrichFromSparkline(&snap, spark)
+	want := (spark[len(spark)-1] - spark[0]) / meanAbs
+	if math.Abs(snap.RecentReturn-want) > 0.01 {
+		t.Fatalf("RecentReturn=%f want mean|Δ| scale %f (ATR=%f)", snap.RecentReturn, want, snap.ATR)
+	}
+	wilderReturn := (spark[len(spark)-1] - spark[0]) / snap.ATR
+	if math.Abs(snap.RecentReturn-wilderReturn) < 0.2 {
+		t.Fatalf("RecentReturn should differ from Wilder-scaled %f, got %f", wilderReturn, snap.RecentReturn)
 	}
 }

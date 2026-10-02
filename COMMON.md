@@ -242,10 +242,15 @@ Tape captions (`label`) match `state`:
 
 The adverse-move (crash/squeeze) penalty looks at the last 8 bars' return in
 Wilder true-ATR units, not the full-window net. Compression/expansion on the
-tape still use their own SMA ATR (`rollingATR`); only TapeTrend and tape
-health use Wilder `TrueATR`. The participation fallback still uses the older
-V1 label thresholds when `state` is `trend`, and the same state-matched
-captions otherwise, until PR-106.
+tape still use their own SMA ATR (`rollingATR`); only TapeTrend and tape /
+participation health use Wilder `TrueATR` when a long enough series is
+available. Participation fallback captions follow the headline `state` via
+`BuildTapeLabel` (same V2 health cutovers as the tape when `state` is
+`trend`):
+* "Strong trend" (health > 0.75), "Trend weakening" (> 0.4), or
+  "Trend breaking down"
+and the same state-matched captions otherwise. Snapshot `RecentReturn` used
+by silent/bias overrides is full-window / mean|Δclose| (not Wilder).
 
 ### Participation (metrics)
 

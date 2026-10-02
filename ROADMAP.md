@@ -988,8 +988,9 @@ score ≥ 0.7; uniform noise → ≈ 0.5 ± 0.15.
 ### PR-106 — Trend health v2 (true ATR, wider tolerance)
 
 **Layer:** application. **Depends on:** PR-088. **Note:** PR-115 (hotfix) pulls items 1–3
-forward for the tape and removes dampening from `ScoreMarketTape` entirely; after PR-115 this
-slice applies to the participation fallback only and item 4 is moot.
+forward for the tape and removes dampening from `ScoreMarketTape` entirely; after PR-115 the
+remaining work is participation fallback V2 + `DampenTrendByHealth` floor (item 4 applies
+only to participation dampening).
 
 **Context.** `health.go` → `ComputeTrendHealth`: health = `1 − (high − price)/atr` clamped;
 `atr` is mean |Δclose| (from `EnrichFromSparkline` / `sparklineStats`). One average bar below
@@ -1004,12 +1005,15 @@ the window high = health 0. Real uptrends spend most of their life 1–3 ATR und
    - health `= ddScore × staleScore`
 2. `atr14` = true ATR (Wilder, 14) — add `TrueATR(candles, 14)` in `domain/scoring/stats.go`
    (reuse `rollingATR` from compression if signature fits).
-3. `ScoreMarketTape` uses V2 (it has the full OHLC series). Participation fallback keeps V1.
+3. `ScoreMarketTape` uses V2 (it has the full OHLC series). Participation fallback
+   also uses V2 via `TrendHealthFromSnapshot` (PR-106; PR-115 left this on V1).
 4. `DampenTrendByHealth`: change floor from 0.1 to 0.35 — dampening should never turn a
-   dominant trend into a 5% bar by itself.
+   dominant trend into a 5% bar by itself. Participation captions (`BuildMarketLabel`)
+   use the same V2 effectiveTrend thresholds as the tape (strong > 0.75, weakening > 0.4).
 
-**Tests.** Price 2 ATR under high → health ≈ 0.6 (not 0). Golden `messy_uptrend` tape:
-`Structure.Trend` after dampening ≥ 0.8 × before dampening.
+**Tests.** Price 2 ATR under high → health ≈ 0.6 (not 0). Participation sparkline path
+and positive V2 breakdownRate covered in `health_test.go`. (Tape dampening ratio on
+`messy_uptrend` is N/A after PR-115 removed tape dampening.)
 
 ---
 
