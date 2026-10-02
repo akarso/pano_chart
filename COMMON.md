@@ -357,6 +357,61 @@ candle fetch or rescoring) across the fixed timeframe set `15m`, `1h`, `4h`,
 | `alignment` | Share of present `frames` whose `dominant` matches the most common one (0–1); `0` with an empty `frames[]` |
 | `alignedState` | That most-common `dominant` when `alignment ≥ 0.75`, else `indecisive` |
 
+### Range trade plan (PR-110)
+
+`GET /api/symbol/{symbol}/plan?timeframe=1h&risk=100` derives a range-reversion
+sketch from confirmed swing pivots over the last 110 bars (3-bar pivot rule;
+only bars with three neighbors on each side can confirm — so a last-bar wick
+cannot move High/Low, but an interior wick that forms a confirmed pivot can)
+and Wilder ATR(14) on that same window:
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "low": 100,
+  "high": 110,
+  "mid": 105,
+  "atr": 1,
+  "price": 105,
+  "longEntry": 100.25,
+  "longStop": 99,
+  "longTarget": 105,
+  "longTargetFull": 109.75,
+  "shortEntry": 109.75,
+  "shortStop": 111,
+  "shortTarget": 105,
+  "shortTargetFull": 100.25,
+  "riskReward": 3.8,
+  "rangeQuality": 0.72,
+  "position": 0.5,
+  "valid": true,
+  "size": 80,
+  "shortSize": 80
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `low` / `high` / `mid` | Channel from max confirmed swing high / min confirmed swing low |
+| `longEntry` / `longStop` / `longTarget` | Long: `Low+0.25×ATR`, `Low−1×ATR`, conservative Mid |
+| `longTargetFull` | Aggressive long target `High−0.25×ATR` |
+| `short*` | Mirror of long |
+| `riskReward` | Mid-target `(longTarget−longEntry)/(longEntry−longStop)`; for this geometry equals `widthATR/2.5 − 0.2` |
+| `rangeQuality` | Sideways V5 score (channel-aligned; **not** Lo–MacKinlay MRS) |
+| `position` | `(price−low)/(high−low)` clamped to `[0,1]` — 0 at support, 1 at resistance |
+| `valid` | `rangeQuality≥0.5` && `(high−low)/atr≥3.5` (width≥3.5 already implies Mid RR≥1.2) |
+| `reason` | Present when `valid=false` (`range quality`, `channel width`, `non-positive stop`, …) |
+| `size` / `shortSize` | `risk / \|entry−stop\|` when `risk>0` and `valid`; else 0 |
+
+When `valid=false`, entry/stop/target fields and sizes are zeroed; channel
+`low`/`high`/`mid`, `atr`, `rangeQuality`, `position`, and `riskReward` may
+still be set for diagnostics. Clients must not use `riskReward` (or zeroed
+levels) for sizing or trade display when `valid=false` — treat `riskReward` as
+read-only context only. Default `timeframe` is `1h`. Invalid
+symbol/timeframe/risk → 400. Candle data missing/empty → 422
+`DATA_UNAVAILABLE`. Client cancel → 499; deadline exceeded → 504.
+
 `GET /api/rankings?mtf=1` adds `alignment` / `alignedState` (omitempty) to
 each row of the **current page only** — a per-row store read, not a
 per-request recomputation over the full universe. Rows are read concurrently

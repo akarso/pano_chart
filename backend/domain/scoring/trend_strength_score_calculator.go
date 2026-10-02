@@ -110,10 +110,10 @@ func swingStructureScore(highs, lows []float64, er float64) float64 {
 	const pivot = 3
 	var swingHighs, swingLows []float64
 	for i := pivot; i < len(highs)-pivot; i++ {
-		if isPivotHigh(highs, i, pivot) {
+		if IsPivotHigh(highs, i, pivot) {
 			swingHighs = append(swingHighs, highs[i])
 		}
-		if isPivotLow(lows, i, pivot) {
+		if IsPivotLow(lows, i, pivot) {
 			swingLows = append(swingLows, lows[i])
 		}
 	}
@@ -127,30 +127,6 @@ func swingStructureScore(highs, lows []float64, er float64) float64 {
 	swingUp := (hh + hl) / 2
 	swingDown := (lh + ll) / 2
 	return clamp01(math.Max(swingUp, swingDown))
-}
-
-func isPivotHigh(vals []float64, i, w int) bool {
-	for j := i - w; j <= i+w; j++ {
-		if j == i {
-			continue
-		}
-		if vals[j] >= vals[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func isPivotLow(vals []float64, i, w int) bool {
-	for j := i - w; j <= i+w; j++ {
-		if j == i {
-			continue
-		}
-		if vals[j] <= vals[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func consecutiveHigherFraction(vals []float64) float64 {

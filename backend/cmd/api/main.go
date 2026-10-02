@@ -27,6 +27,7 @@ import (
 	"pano_chart/backend/application/market/regimehistory"
 	"pano_chart/backend/application/market/transition"
 	"pano_chart/backend/application/mtf"
+	"pano_chart/backend/application/plan"
 	apprisk "pano_chart/backend/application/risk"
 	appscoring "pano_chart/backend/application/scoring"
 	"pano_chart/backend/application/setups"
@@ -853,6 +854,8 @@ func main() {
 		adhttp.NewSymbolDetailHandler(getSymbolDetailUC),
 		adhttp.NewMTFHandler(mtfService),
 	)
+	planSvc := plan.NewService(candleRepo)
+	symbolRouter.SetPlanHandler(adhttp.NewPlanHandler(planSvc))
 	mux.Handle("/api/symbol/", symbolRouter)
 	mux.Handle("/api/v1/fear-greed", adhttp.NewFearGreedHandler(fearGreedUC))
 	mux.Handle("/api/news", adhttp.NewNewsHandler(newsUC))
