@@ -58,12 +58,15 @@ func LoadSectorCatalog(path string) (*SectorCatalog, error) {
 	seenID := make(map[string]struct{}, len(raw.Sectors))
 
 	for _, s := range raw.Sectors {
-		id := strings.TrimSpace(s.ID)
+		id, idErr := NormalizeSectorID(s.ID)
 		name := strings.TrimSpace(s.Name)
-		if id == "" || name == "" {
+		if idErr != nil || name == "" {
+			if idErr != nil {
+				return nil, fmt.Errorf("sectors config %s: %w", path, idErr)
+			}
 			return nil, fmt.Errorf("sectors config %s: sector missing id or name", path)
 		}
-		if strings.EqualFold(id, reservedSectorOther) {
+		if id == reservedSectorOther {
 			return nil, fmt.Errorf("sectors config %s: id %q is reserved", path, reservedSectorOther)
 		}
 		if _, dup := seenID[id]; dup {
@@ -135,9 +138,13 @@ func (c *SectorCatalog) Members(sectorID string, universe []string) []string {
 	if c == nil {
 		return nil
 	}
+	id, err := NormalizeSectorID(sectorID)
+	if err != nil {
+		return nil
+	}
 	out := make([]string, 0)
 	for _, sym := range universe {
-		if c.ForSymbol(sym) == sectorID {
+		if c.ForSymbol(sym) == id {
 			out = append(out, sym)
 		}
 	}

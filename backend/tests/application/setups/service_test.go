@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -57,17 +58,45 @@ func (f *fakeFragilityProvider) Get(_ context.Context, _, _ string) (domainrisk.
 }
 
 // fakeSeasonalityProvider lets a test control CurrentSpikeProbability's
-// result/error — see the SetSeasonalityProvider tests below (PR-082).
+// result/error — see the SetSeasonalityProvider tests below (PR-082 / PR-108).
 type fakeSeasonalityProvider struct {
-	spikeProb float64
-	err       error
+	spikeProb  float64
+	sectorProb map[string]float64
+	err        error
+	lastSector string
 }
 
 func (f *fakeSeasonalityProvider) CurrentSpikeProbability(_ context.Context, _ string) (float64, error) {
+	f.lastSector = ""
 	if f.err != nil {
 		return 0, f.err
 	}
 	return f.spikeProb, nil
+}
+
+func (f *fakeSeasonalityProvider) CurrentSpikeProbabilityFor(_ context.Context, sector, tf string) (float64, error) {
+	if sector == "" || strings.EqualFold(sector, "other") {
+		return f.CurrentSpikeProbability(context.Background(), tf)
+	}
+	f.lastSector = sector
+	if f.err != nil {
+		return 0, f.err
+	}
+	if f.sectorProb != nil {
+		if v, ok := f.sectorProb[sector]; ok {
+			return v, nil
+		}
+	}
+	return f.spikeProb, nil
+}
+
+type fakeSectorResolver map[string]string
+
+func (f fakeSectorResolver) ForSymbol(sym string) string {
+	if id, ok := f[strings.ToUpper(sym)]; ok {
+		return id
+	}
+	return "other"
 }
 
 type fakeScorer struct {
@@ -607,6 +636,58 @@ func TestSetupService_SeasonalityProvider_ComputesFitFromSpikeProbability(t *tes
 	}
 	if result.SeasonalityFit != 1.0 {
 		t.Errorf("expected SeasonalityFit 1.0 for zero spike probability, got %f", result.SeasonalityFit)
+	}
+}
+
+func TestSetupService_SeasonalityUsesSectorCurve(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	prov := &fakeSeasonalityProvider{
+		spikeProb:  0.0,                             // market-wide calm → fit 1.0
+		sectorProb: map[string]float64{"defi": 0.5}, // sector elevated → fit 0.0 at ref 0.5
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetSeasonalityProvider(prov)
+	svc.SetSectorResolver(fakeSectorResolver{"UNIUSDT": "defi"})
+
+	result, err := svc.Evaluate(context.Background(), "UNIUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prov.lastSector != "defi" {
+		t.Fatalf("expected sector lookup defi, got %q", prov.lastSector)
+	}
+	if result.SeasonalityFit != 0.0 {
+		t.Errorf("expected SeasonalityFit 0 from sector spike 0.5, got %f", result.SeasonalityFit)
+	}
+}
+
+func TestSetupService_UnmappedSymbolUsesMarketSeasonality(t *testing.T) {
+	series := makeSeries(50)
+	repo := &fakeCandleRepo{series: series}
+	scorer := &fakeScorer{stats: usecases.SymbolStats{
+		Scores: map[string]float64{"Compression": 0.5, "Trend Predictability": 0.5},
+	}}
+	prov := &fakeSeasonalityProvider{
+		spikeProb:  0.0,
+		sectorProb: map[string]float64{"defi": 0.5},
+	}
+	svc := setups.NewSetupService(repo, scorer, setups.NewEngine())
+	svc.SetSeasonalityProvider(prov)
+	svc.SetSectorResolver(fakeSectorResolver{}) // everything → other
+
+	result, err := svc.Evaluate(context.Background(), "BTCUSDT", "4h")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if prov.lastSector != "" {
+		t.Fatalf("other/unmapped must use market CurrentSpikeProbability, lastSector=%q", prov.lastSector)
+	}
+	if result.SeasonalityFit != 1.0 {
+		t.Errorf("expected market calm fit 1.0, got %f", result.SeasonalityFit)
 	}
 }
 

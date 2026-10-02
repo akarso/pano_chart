@@ -41,8 +41,19 @@ type FragilityProvider interface {
 // (5m/15m/1h/4h) group 1-minute buckets by array position, not by an
 // explicit time range each bucket covers, so matching "the bucket
 // containing right now" is unambiguous only at 1-minute granularity.
+//
+// CurrentSpikeProbabilityFor (PR-108) prefers a per-sector profile when
+// available and falls back to the market-wide curve when the sector file
+// is missing or sector is empty/"other".
 type SeasonalityProvider interface {
 	CurrentSpikeProbability(ctx context.Context, timeframe string) (float64, error)
+	CurrentSpikeProbabilityFor(ctx context.Context, sector, timeframe string) (float64, error)
+}
+
+// SectorResolver maps a symbol to a sector id (PR-098 catalog).
+// Optional on SetupService; nil → seasonality uses the market-wide curve.
+type SectorResolver interface {
+	ForSymbol(sym string) string
 }
 
 // SetupService orchestrates candle retrieval, score computation, and setup
@@ -54,6 +65,7 @@ type SetupService struct {
 	marketProvider      MarketProvider        // optional; nil means no market modifier
 	fragilityProvider   FragilityProvider     // optional; nil means crowding = 0
 	seasonalityProvider SeasonalityProvider   // optional; nil means SeasonalityFit = neutral 0.5
+	sectorResolver      SectorResolver        // optional; nil → market-wide seasonality only
 	evalStore           ports.EvaluationStore // optional; nil → always re-score
 	signalEmitter       ports.SignalEmitter   // optional; nil = no signal log (PR-090)
 	// trendDir recovers trend magnitude+bias for overlay / dominantRegime.
@@ -123,6 +135,13 @@ func (s *SetupService) SetFragilityProvider(fp FragilityProvider) {
 // (optional).
 func (s *SetupService) SetSeasonalityProvider(sp SeasonalityProvider) {
 	s.seasonalityProvider = sp
+}
+
+// SetSectorResolver injects the symbol→sector map used for per-sector
+// seasonality (PR-108). Optional; without it, setups always use the
+// market-wide spike curve.
+func (s *SetupService) SetSectorResolver(r SectorResolver) {
+	s.sectorResolver = r
 }
 
 // SetEvaluationStore injects the shared evaluation store (optional, PR-089b).
@@ -195,7 +214,11 @@ func (s *SetupService) Evaluate(ctx context.Context, symbol, timeframe string) (
 	// ctx.Err() check below does for Crowding — see PR-082.
 	result.SeasonalityFit = 0.5
 	if s.seasonalityProvider != nil {
-		if spikeProb, err := s.seasonalityProvider.CurrentSpikeProbability(ctx, timeframe); err == nil {
+		sector := ""
+		if s.sectorResolver != nil {
+			sector = s.sectorResolver.ForSymbol(symbol)
+		}
+		if spikeProb, serr := s.seasonalityProvider.CurrentSpikeProbabilityFor(ctx, sector, timeframe); serr == nil {
 			result.SeasonalityFit = SeasonalityFit(spikeProb)
 		}
 	}

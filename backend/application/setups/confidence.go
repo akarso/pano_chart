@@ -56,9 +56,9 @@ func SeasonalityFit(spikeProb float64) float64 {
 // and "seasonality" (historical, forward-looking — SeasonalityFit) at a 2:1
 // ratio, favoring the realized signal since it's a direct read of actual
 // recent price action; seasonality is a coarser prior derived from
-// historical time-of-day statistics, and — per PR-082's own scoping
-// caveat — currently computed from a single reference symbol (BTCUSDT)
-// applied market-wide, not per-symbol. Each regime's total confidence-
+// historical time-of-day statistics. Per-sector curves (PR-108) are used when
+// a sector profile exists; otherwise the market-wide BTC curve remains the
+// prior. Each regime's total confidence-
 // weight distribution across trend/market/crowding/(volatility+seasonality)
 // is unchanged from before this split — only the volatility-related slice
 // is subdivided.

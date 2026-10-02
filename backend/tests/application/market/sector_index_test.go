@@ -89,6 +89,32 @@ sectors:
 	}
 }
 
+func TestSectorCatalog_NormalizesIDAndRejectsPathChars(t *testing.T) {
+	path := writeTempSectorsYAML(t, `
+sectors:
+  - id: L1
+    name: Layer 1
+    symbols: [BTCUSDT]
+`)
+	cat, err := metrics.LoadSectorCatalog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cat.ForSymbol("BTCUSDT") != "l1" {
+		t.Fatalf("id=%q want l1", cat.ForSymbol("BTCUSDT"))
+	}
+
+	bad := writeTempSectorsYAML(t, `
+sectors:
+  - id: ../evil
+    name: Evil
+    symbols: [ETHUSDT]
+`)
+	if _, err := metrics.LoadSectorCatalog(bad); err == nil {
+		t.Fatal("expected invalid sector id error")
+	}
+}
+
 func TestSectorCatalog_RejectsEmpty(t *testing.T) {
 	path := writeTempSectorsYAML(t, `sectors: []`)
 	if _, err := metrics.LoadSectorCatalog(path); err == nil {

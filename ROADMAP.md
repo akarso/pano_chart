@@ -1053,13 +1053,15 @@ periods with durations.
 ### PR-108 — Volatility seasonality per sector
 
 **Layer:** infrastructure + application. **Depends on:** PR-098, PR-082.
+**Spec file:** `backend/docs/v2/PR-108.md`.
 
 **Spec.**
-1. `cmd/vol_aggregate` accepts `--symbols` (comma list) and `--out` prefix; produce one result
-   file per sector (`vol_l1.json`, `vol_defi.json`, …) plus the existing market-wide BTC file.
+1. `cmd/vol_aggregate` accepts `--symbols` (comma list) and `--out` path **stem** (same as
+   `VOL_SECTOR_PREFIX`); produce one result file per sector via `SectorProfilePath`
+   (`/data/vol` → `/data/vol_l1.json`) plus the market-wide `--market-symbol` file (default BTC).
 2. `SeasonalityProvider` gains `CurrentSpikeProbabilityFor(ctx, sector, tf string)`; falls back
-   to market-wide when the sector file is missing.
-3. `SetupService.buildContext` resolves the symbol's sector (PR-098 config) and uses it.
+   to market-wide when the sector file is missing (negative-cached; reloaded hourly).
+3. `SetupService` resolves the symbol's sector (PR-098 config) and uses it.
 
 **Tests.** Missing sector file → fallback value equals market-wide value.
 
