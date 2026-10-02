@@ -420,6 +420,47 @@ void main() {
       );
     });
 
+    testWidgets('in-flight live auto-refresh does not overwrite replay load',
+        (tester) async {
+      final composite = _GatedCompositeApi(_baseComposite(n: 110));
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(MaterialApp(
+        home: MarketPulseScreen(
+          marketStateApi: _FakeStateApi(_baseState()),
+          compositeIndexApi: composite,
+          regimeApi: _FakeRegimeApi(_trendRegime(windowBars: 110)),
+          isProUser: true,
+          replayController: replay,
+          initialTimeframe: '1m',
+        ),
+      ));
+      await tester.pump();
+      composite.releaseAll();
+      await tester.pumpAndSettle();
+
+      // Fire the 10s 1m auto-refresh; leave it gated.
+      await tester.pump(const Duration(seconds: 11));
+      expect(composite.pending, greaterThan(0));
+
+      replay.enter(timeframe: '1m', now: now);
+      await tester.pump();
+      composite.releaseAll();
+      await tester.pumpAndSettle();
+
+      expect(
+        composite.asOfCalls.last,
+        DateTime.utc(2025, 9, 16, 10, 17).millisecondsSinceEpoch ~/ 1000,
+      );
+      expect(find.byKey(const Key('replay-banner')), findsOneWidget);
+    });
+
     testWidgets('stale overlapping load does not overwrite newer asOf',
         (tester) async {
       final composite = _GatedCompositeApi(_baseComposite(n: 110));

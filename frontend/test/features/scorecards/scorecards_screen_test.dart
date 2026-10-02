@@ -8,6 +8,7 @@ class _ListApi implements ScorecardApi {
   int summaries = 0;
   Object? error;
   String? openedLabel;
+  String? lastSince;
   bool failGet = false;
   ScorecardSummary payload = const ScorecardSummary(
     timeframe: '1h',
@@ -22,6 +23,7 @@ class _ListApi implements ScorecardApi {
     String since = '30d',
   }) async {
     summaries++;
+    lastSince = since;
     if (error != null) throw error!;
     return payload;
   }
@@ -34,6 +36,7 @@ class _ListApi implements ScorecardApi {
     String since = '30d',
   }) async {
     openedLabel = label;
+    lastSince = since;
     if (failGet) throw Exception('down');
     return ScorecardDetail(
       kind: kind,
@@ -156,5 +159,29 @@ void main() {
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
     expect(find.text('0–10'), findsOneWidget);
+  });
+
+  testWidgets('forwards a replay since window into summary and deciles', (
+    tester,
+  ) async {
+    final api = _ListApi()
+      ..payload = ScorecardSummary(
+        timeframe: '1h',
+        since: '',
+        sinceRaw: '2025-08-17T08:00:00.000Z',
+        items: [_row(n: 40)],
+      );
+    const since = '2025-08-17T08:00:00.000Z';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ScorecardsScreen(api: api, timeframe: '1h', since: since),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(api.lastSince, since);
+
+    await tester.tap(find.text('Badge · trend up'));
+    await tester.pumpAndSettle();
+    expect(api.lastSince, since);
   });
 }

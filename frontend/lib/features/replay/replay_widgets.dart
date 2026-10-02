@@ -164,7 +164,9 @@ class ReplayScrubber extends StatelessWidget {
     final last = DateTime(lastUtc.year, lastUtc.month, lastUtc.day);
     final picked = await showDatePicker(
       context: context,
-      initialDate: initial.isAfter(last) ? last : initial,
+      initialDate: initial.isBefore(first)
+          ? first
+          : (initial.isAfter(last) ? last : initial),
       firstDate: first,
       lastDate: last,
       helpText: 'Select UTC date',

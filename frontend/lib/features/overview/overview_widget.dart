@@ -385,16 +385,19 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 
   Future<void> _loadScorecards() {
-    final asOf = widget.replayController?.asOfFor(_timeframe);
-    final since = asOf != null ? replayScorecardSince(asOf) : '30d';
     return _scorecards.load(
       api: widget.scorecardApi,
       timeframe: _timeframe,
-      since: since,
+      since: _scorecardSince,
       notify: () {
         if (mounted) setState(() {});
       },
     );
+  }
+
+  String get _scorecardSince {
+    final asOf = widget.replayController?.asOfFor(_timeframe);
+    return asOf != null ? replayScorecardSince(asOf) : '30d';
   }
 
   @override
@@ -1125,12 +1128,19 @@ class OverviewWidgetState extends State<OverviewWidget>
                       _autoRefreshTimer?.stop();
                       final replay = widget.replayController;
                       if (replay?.isActive == true) {
-                        // Re-align for the new TF. setAsOf may no-op when
-                        // the aligned unix is unchanged — always reload.
-                        replay!.setAsOf(_timeframe, replay.asOf!);
-                        _syncViewModelEntitlement();
-                        _loadScorecards();
-                        vm.loadInitial(_timeframe);
+                        // Re-align for the new TF. When setAsOf changes the
+                        // instant, the reload listener fetches once; when it
+                        // no-ops, reload here.
+                        final changed = replay!.setAsOf(
+                          _timeframe,
+                          replay.asOf!,
+                          immediateReload: true,
+                        );
+                        if (!changed) {
+                          _syncViewModelEntitlement();
+                          _loadScorecards();
+                          vm.loadInitial(_timeframe);
+                        }
                       } else {
                         _loadScorecards();
                         _syncViewModelEntitlement();
@@ -1365,6 +1375,7 @@ class OverviewWidgetState extends State<OverviewWidget>
                         builder: (_) => ScorecardsScreen(
                           api: widget.scorecardApi!,
                           timeframe: _timeframe,
+                          since: _scorecardSince,
                         ),
                       ),
                     );
