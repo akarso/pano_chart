@@ -447,7 +447,7 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 	if filter.OldestFirst {
 		order = "ASC"
 	}
-	// Limit < 0 → unlimited (export). Limit == 0 → scorecard default 500.
+	// Limit < 0 → unlimited (no LIMIT/OFFSET). Limit == 0 → scorecard default 500.
 	limitSQL := ""
 	if filter.Limit < 0 {
 		// no LIMIT clause
@@ -458,6 +458,10 @@ func (r *SQLiteRepository) Query(ctx context.Context, filter domainsignal.Filter
 		}
 		limitSQL = " LIMIT ?"
 		args = append(args, limit)
+		if filter.Offset > 0 {
+			limitSQL += " OFFSET ?"
+			args = append(args, filter.Offset)
+		}
 	}
 
 	q := fmt.Sprintf(`SELECT s.id, s.kind, s.symbol, s.timeframe, s.label, s.score, s.price, s.atr,

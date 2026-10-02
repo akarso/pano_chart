@@ -132,6 +132,19 @@ func TestSQLiteRepository_QueryUnlimitedOldestFirst(t *testing.T) {
 	if all[0].Signal.ID != "s0000" || all[n-1].Signal.ID != "s0519" {
 		t.Fatalf("order: first=%s last=%s", all[0].Signal.ID, all[n-1].Signal.ID)
 	}
+	// Offset pagination for export pages.
+	page, err := repo.Query(context.Background(), domainsignal.Filter{
+		Kind: domainsignal.KindSetup, Limit: 100, Offset: 500, OldestFirst: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 20 {
+		t.Fatalf("offset page len=%d want 20", len(page))
+	}
+	if page[0].Signal.ID != "s0500" {
+		t.Fatalf("offset first=%s want s0500", page[0].Signal.ID)
+	}
 }
 
 func TestSQLiteRepository_ChronologicalOrderAcrossSubsecond(t *testing.T) {

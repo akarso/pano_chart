@@ -45,8 +45,11 @@ type Filter struct {
 	Since     time.Time
 	Until     time.Time
 	// Limit caps rows. Limit == 0 → default 500 (scorecard). Limit < 0 →
-	// unlimited (export_dataset). Positive values are honored as-is.
+	// unlimited. Positive values are honored as-is.
 	Limit int
+	// Offset skips the first N rows after ORDER BY (export pagination).
+	// Ignored when Limit < 0 (unlimited).
+	Offset int
 	// OldestFirst orders by emitted_at ASC (default DESC). Use for
 	// reproducible training splits.
 	OldestFirst bool

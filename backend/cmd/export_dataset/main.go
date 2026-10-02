@@ -8,8 +8,8 @@
 // Skips: unresolved rows; ExcludedFromHitRate outcome rules; rows missing
 // regime_code or any DefaultRegimeFeatures key (pre-PR-109 / incomplete).
 //
-// Default: kind=setup, oldest-first. -max-rows caps eligible written rows
-// (DB load is uncapped so excluded/incomplete rows do not consume the budget).
+// Rows are loaded in pages (bounded memory). -max-rows caps eligible written
+// rows; the scanner stops once that many eligible rows are written.
 //
 //	export_dataset -db ./signals.sqlite -out ./dataset.csv
 package main
@@ -28,12 +28,14 @@ import (
 	infrasignal "pano_chart/backend/infrastructure/signal"
 )
 
+const exportPageSize = 1000
+
 func main() {
 	dbPath := flag.String("db", envOr("PC_SIGNAL_DB", "./signals.sqlite"), "signals sqlite path")
 	outPath := flag.String("out", "dataset.csv", "output CSV path")
 	kind := flag.String("kind", "setup", "signal kind filter (default setup; empty = all kinds — incomplete features)")
 	sinceDays := flag.Int("since-days", 0, "only signals emitted in the last N days (0 = all)")
-	maxRows := flag.Int("max-rows", 0, "cap eligible written rows (0 = unlimited); DB query is always uncapped")
+	maxRows := flag.Int("max-rows", 0, "cap eligible written rows (0 = unlimited); DB is scanned in pages")
 	flag.Parse()
 
 	if *kind == "" {
@@ -47,20 +49,12 @@ func main() {
 	}
 	defer func() { _ = repo.Close() }()
 
-	// Always load uncapped; apply -max-rows after eligibility filters so
-	// unresolved / excluded / incomplete rows cannot exhaust the budget.
-	filter := domainsignal.Filter{Limit: -1, OldestFirst: true}
+	base := domainsignal.Filter{OldestFirst: true}
 	if *kind != "" {
-		filter.Kind = domainsignal.Kind(*kind)
+		base.Kind = domainsignal.Kind(*kind)
 	}
 	if *sinceDays > 0 {
-		filter.Since = time.Now().UTC().Add(-time.Duration(*sinceDays) * 24 * time.Hour)
-	}
-
-	rows, err := repo.Query(context.Background(), filter)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "query: %v\n", err)
-		os.Exit(1)
+		base.Since = time.Now().UTC().Add(-time.Duration(*sinceDays) * 24 * time.Hour)
 	}
 
 	f, err := os.Create(*outPath)
@@ -82,42 +76,64 @@ func main() {
 		os.Exit(1)
 	}
 
-	scanned := len(rows)
+	scanned := 0
 	written := 0
 	skippedNoOutcome := 0
 	skippedExcluded := 0
 	skippedIncomplete := 0
-	for _, row := range rows {
-		if row.Outcome == nil {
-			skippedNoOutcome++
-			continue
-		}
-		if domainsignal.ExcludedFromHitRate(row.Outcome.Rule) {
-			skippedExcluded++
-			continue
-		}
-		if !hasTrainingFeatures(row.Signal.Context) {
-			skippedIncomplete++
-			continue
-		}
-		if *maxRows > 0 && written >= *maxRows {
-			break
-		}
-		rec := recordFor(row)
-		if err := w.Write(rec); err != nil {
-			fmt.Fprintf(os.Stderr, "write row: %v\n", err)
+	offset := 0
+
+	for {
+		filter := base
+		filter.Limit = exportPageSize
+		filter.Offset = offset
+		rows, err := repo.Query(context.Background(), filter)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "query: %v\n", err)
 			os.Exit(1)
 		}
-		written++
+		if len(rows) == 0 {
+			break
+		}
+		scanned += len(rows)
+		stop := false
+		for _, row := range rows {
+			if row.Outcome == nil {
+				skippedNoOutcome++
+				continue
+			}
+			if domainsignal.ExcludedFromHitRate(row.Outcome.Rule) {
+				skippedExcluded++
+				continue
+			}
+			if !hasTrainingFeatures(row.Signal.Context) {
+				skippedIncomplete++
+				continue
+			}
+			if *maxRows > 0 && written >= *maxRows {
+				stop = true
+				break
+			}
+			if err := w.Write(recordFor(row)); err != nil {
+				fmt.Fprintf(os.Stderr, "write row: %v\n", err)
+				os.Exit(1)
+			}
+			written++
+		}
+		if stop || len(rows) < exportPageSize {
+			break
+		}
+		offset += len(rows)
 	}
+
 	w.Flush()
 	if err := w.Error(); err != nil {
 		fmt.Fprintf(os.Stderr, "flush: %v\n", err)
 		os.Exit(1)
 	}
 	unlimited := *maxRows <= 0
-	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v oldest_first=true\n",
-		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited)
+	fmt.Printf("scanned=%d resolved_written=%d skipped_no_outcome=%d skipped_excluded=%d skipped_incomplete=%d out=%s kind=%q max_rows=%d unlimited=%v page_size=%d oldest_first=true\n",
+		scanned, written, skippedNoOutcome, skippedExcluded, skippedIncomplete, *outPath, *kind, *maxRows, unlimited, exportPageSize)
 }
 
 // hasTrainingFeatures requires regime_code and every DefaultRegimeFeatures key.

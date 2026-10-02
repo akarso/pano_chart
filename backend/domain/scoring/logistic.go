@@ -5,8 +5,6 @@ import (
 	"math"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"pano_chart/backend/domain"
 )
 
@@ -46,23 +44,25 @@ func knownFeatureSet() map[string]struct{} {
 
 // ClassParams is one logistic head in a one-vs-rest regime model.
 type ClassParams struct {
-	Weights map[string]float64 `yaml:"weights"`
-	Bias    float64            `yaml:"bias"`
+	Weights map[string]float64
+	Bias    float64
 }
 
-// Model is a logistic regression shipped as YAML (PR-109).
+// Model is a logistic regression used for regime Structure (PR-109).
 //
 // Structure inference uses one-vs-rest Classes (not the binary Weights/Bias
 // head). Binary Weights/Bias are for notebooks predicting setup Success only.
 // Placeholder models refuse ClassifyStructure so heuristic classification
 // remains active until a real scorecard model is shipped.
+//
+// YAML loading lives in infrastructure/scoring; this type is format-agnostic.
 type Model struct {
-	Type        string                 `yaml:"model"` // "logistic"
-	Features    []string               `yaml:"features"`
-	Weights     map[string]float64     `yaml:"weights"`
-	Bias        float64                `yaml:"bias"`
-	Classes     map[string]ClassParams `yaml:"classes"`
-	Placeholder bool                   `yaml:"placeholder"` // true → ClassifyStructure ok=false
+	Type        string // "logistic"
+	Features    []string
+	Weights     map[string]float64
+	Bias        float64
+	Classes     map[string]ClassParams
+	Placeholder bool
 }
 
 // Predict returns σ(bias + Σ w_i x_i) using the binary Weights/Bias head.
@@ -103,19 +103,6 @@ func ClassifyStructure(features map[string]float64, model Model) (trend, sideway
 		}
 	}
 	return norm[0], norm[1], norm[2], norm[3], order[bestI], true
-}
-
-// ParseRegimeModelYAML unmarshals YAML bytes into a Model and runs Validate.
-// File I/O belongs in infrastructure (see infrastructure/scoring).
-func ParseRegimeModelYAML(data []byte) (*Model, error) {
-	var m Model
-	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse regime model: %w", err)
-	}
-	if err := m.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid regime model: %w", err)
-	}
-	return &m, nil
 }
 
 // Validate checks Type, finite coefficients, and that Weights and/or Classes exist.

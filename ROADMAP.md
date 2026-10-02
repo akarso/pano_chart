@@ -1078,7 +1078,7 @@ periods with durations.
    `signal.Context` at emission (four raw scores, ER, VR, ATR pct);
    `regime_label` is the raw-score structure argmax (independent of
    `regime_model`); `success` is a separate outcome column.
-   Query is uncapped; `-max-rows` caps eligible written rows.
+   Query is paged; `-max-rows` caps eligible written rows.
 2. Training is **out of repo** (notebook); ship the result as `config/regime_model.yaml`
    with one-vs-rest `classes` (plus optional binary `weights`/`bias` for success-only
    notebooks). Shipped stub is `placeholder: true` (not usable for inference).
