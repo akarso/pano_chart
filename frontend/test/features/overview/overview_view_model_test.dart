@@ -32,6 +32,7 @@ class _FakeGetOverview extends GetOverview {
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
     // Capture the call index at invocation time (before any awaits).
     final callIdx = calls.length;
@@ -69,6 +70,7 @@ class _FailAfterFirstPageGetOverview extends GetOverview {
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
     calls++;
     if (calls == 1) {

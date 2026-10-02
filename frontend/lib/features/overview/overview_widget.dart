@@ -61,6 +61,9 @@ import 'overview_state.dart';
 import 'overview_view_model.dart';
 import 'relative_strength_chip.dart';
 import '../watchlist/watchlist_controller.dart';
+import '../replay/replay_asof.dart';
+import '../replay/replay_controller.dart';
+import '../replay/replay_widgets.dart';
 
 /// Overview widget that displays a scrollable grid of market sparklines.
 ///
@@ -91,6 +94,7 @@ class OverviewWidget extends StatefulWidget {
   final SocialFeedViewModel? socialFeedViewModel;
   final NotificationConfigApi? notificationConfigApi;
   final ScorecardApi? scorecardApi;
+  final ReplayController? replayController;
 
   /// Shared watchlist. When null, this widget owns a local controller
   /// backed by [prefs] so the grid star still paints from the cache.
@@ -122,6 +126,7 @@ class OverviewWidget extends StatefulWidget {
     this.socialFeedViewModel,
     this.notificationConfigApi,
     this.scorecardApi,
+    this.replayController,
     this.watchlist,
   }) : super(key: key);
 
@@ -209,6 +214,60 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// can change mid-lifetime (purchase/restore).
   void _syncViewModelEntitlement() {
     vm.isProUser = _isProUser;
+    vm.asOfUnix = widget.replayController?.asOfUnixFor(_timeframe);
+  }
+
+  /// Immediate UI / timer reaction to scrub (banner, scrubber, pause refresh).
+  void _onReplayUiChanged() {
+    if (!mounted) return;
+    _syncAutoRefreshWithReplay();
+    setState(() {});
+  }
+
+  /// Debounced (or enter/exit-immediate) fetch reload. Skipped while Pulse
+  /// owns the shared controller so notification + menu routes don't double
+  /// the replay rate budget.
+  void _onReplayReload() {
+    if (!mounted) return;
+    if (widget.replayController?.isPulseForeground == true) return;
+    _syncViewModelEntitlement();
+    _loadScorecards();
+    vm.loadInitial(_timeframe);
+  }
+
+  void _syncAutoRefreshWithReplay() {
+    if (widget.replayController?.isActive == true) {
+      _autoRefreshTimer?.stop();
+      return;
+    }
+    _ensureAutoRefreshRunning();
+  }
+
+  /// Starts or resumes the Pro auto-refresh timer when appropriate.
+  /// Does not depend on a successful fetch (exit-from-replay DoD).
+  void _ensureAutoRefreshRunning() {
+    if (!_isProUser) return;
+    if (widget.replayController?.isActive == true) return;
+    // Empty fail-closed replay grid still arms the timer so exit recovers.
+    final count = vm.state.items.length;
+    final n = count == 0 ? 1 : count;
+    if (_autoRefreshTimer == null) {
+      _autoRefreshTimer = AutoRefreshTimer(
+        interval: overviewAutoRefreshInterval(n),
+        onTick: _autoRefresh,
+      );
+    }
+    _autoRefreshTimer!.start();
+  }
+
+  void _attachReplay(ReplayController? c) {
+    c?.addListener(_onReplayUiChanged);
+    c?.addReloadListener(_onReplayReload);
+  }
+
+  void _detachReplay(ReplayController? c) {
+    c?.removeListener(_onReplayUiChanged);
+    c?.removeReloadListener(_onReplayReload);
   }
 
   @override
@@ -216,6 +275,8 @@ class OverviewWidgetState extends State<OverviewWidget>
     super.initState();
     vm = widget.viewModel;
     _bindWatchlist();
+    _attachReplay(widget.replayController);
+    vm.asOfUnix = widget.replayController?.asOfUnixFor(_timeframe);
 
     // ---- staleness tracker ----
     _stalenessTracker
@@ -324,13 +385,27 @@ class OverviewWidgetState extends State<OverviewWidget>
   }
 
   Future<void> _loadScorecards() {
+    final asOf = widget.replayController?.asOfFor(_timeframe);
+    final since = asOf != null ? replayScorecardSince(asOf) : '30d';
     return _scorecards.load(
       api: widget.scorecardApi,
       timeframe: _timeframe,
+      since: since,
       notify: () {
         if (mounted) setState(() {});
       },
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant OverviewWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.replayController, widget.replayController)) {
+      _detachReplay(oldWidget.replayController);
+      _attachReplay(widget.replayController);
+      _syncViewModelEntitlement();
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -357,7 +432,7 @@ class OverviewWidgetState extends State<OverviewWidget>
           _stalenessTracker.stop();
         },
         onResume: () {
-          _autoRefreshTimer?.start();
+          _syncAutoRefreshWithReplay();
           _stalenessTracker.start();
           // A notification shade is inactive → resumed and never paused.
           // That transition restarts timers and does not spend a watchlist
@@ -373,6 +448,7 @@ class OverviewWidgetState extends State<OverviewWidget>
 
   @override
   void dispose() {
+    _detachReplay(widget.replayController);
     _watchlist.removeListener(_onWatchlistChanged);
     if (_ownsWatchlist) _watchlist.dispose();
     if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
@@ -539,7 +615,12 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// Initialises the auto-refresh timer the first time we have data.
   /// Subsequent calls are no-ops (the timer is already running).
   void _maybeStartAutoRefresh(int symbolCount) {
-    if (!_isProUser || _autoRefreshTimer != null || symbolCount == 0) return;
+    if (!_isProUser || symbolCount == 0) return;
+    if (widget.replayController?.isActive == true) return;
+    if (_autoRefreshTimer != null) {
+      _autoRefreshTimer!.start();
+      return;
+    }
     _autoRefreshTimer = AutoRefreshTimer(
       interval: overviewAutoRefreshInterval(symbolCount),
       onTick: _autoRefresh,
@@ -551,6 +632,7 @@ class OverviewWidgetState extends State<OverviewWidget>
   /// data (the flash-dot trigger happens in the [onChanged] listener),
   /// then notifies staleness tracker.
   Future<void> _autoRefresh() async {
+    if (widget.replayController?.isActive == true) return;
     _captureSparklineValues();
     _isRefreshing = true;
     _isAutoRefreshing = true;
@@ -737,6 +819,8 @@ class OverviewWidgetState extends State<OverviewWidget>
   @override
   Widget build(BuildContext context) {
     final state = vm.state;
+    final replay = widget.replayController;
+    final asOf = replay?.asOfFor(_timeframe);
 
     return SafeArea(
       bottom: false,
@@ -754,7 +838,15 @@ class OverviewWidgetState extends State<OverviewWidget>
               children: [_buildNavBar(), _buildOverlayPanel(state)],
             ),
           ),
+          if (asOf != null)
+            ReplayBanner(
+              asOf: asOf,
+              onExit: () => replay?.exit(),
+              footnote: kReplayBannerFootnote,
+            ),
           Expanded(child: _buildBody(state)),
+          if (asOf != null && replay != null)
+            ReplayScrubber(controller: replay, timeframe: _timeframe),
           _buildTrialBanner(),
         ],
       ),
@@ -886,8 +978,38 @@ class OverviewWidgetState extends State<OverviewWidget>
                 ),
               ),
               const SizedBox(width: 8),
+              if (_isProUser && widget.replayController != null)
+                IconButton(
+                  key: const Key('replay-toggle'),
+                  tooltip: widget.replayController!.isActive
+                      ? 'Exit replay'
+                      : 'Replay',
+                  padding: EdgeInsets.zero,
+                  constraints: BoxConstraints.tightFor(
+                    width: iconBox,
+                    height: iconBox,
+                  ),
+                  icon: Icon(
+                    Icons.history,
+                    size: tight ? 20 : 22,
+                    color: widget.replayController!.isActive
+                        ? Colors.lightBlueAccent
+                        : Colors.white70,
+                  ),
+                  onPressed: () {
+                    final replay = widget.replayController!;
+                    if (replay.isActive) {
+                      replay.exit();
+                    } else {
+                      replay.enter(timeframe: _timeframe);
+                    }
+                  },
+                ),
+              if (_isProUser && widget.replayController != null)
+                const SizedBox(width: 4),
               // Settings icon
               _NavBarIcon(
+                key: const ValueKey('overview-settings-nav-icon'),
                 isActive: _overlay == _OverlayKind.settings,
                 svgAsset: 'assets/gear-setting-settings.svg',
                 onTap: () => _toggleOverlay(_OverlayKind.settings),
@@ -996,13 +1118,24 @@ class OverviewWidgetState extends State<OverviewWidget>
                       setState(() => _timeframe = v ?? '1h');
                       _prefs?.timeframe = _timeframe;
                       _stalenessTracker.setTimeframe(_timeframe);
-                      _loadScorecards();
                       // Pause auto-refresh during reload; it resumes via
-                      // _maybeStartAutoRefresh once new data arrives.
+                      // _maybeStartAutoRefresh once new data arrives (or
+                      // immediately on exit-from-replay via
+                      // _syncAutoRefreshWithReplay).
                       _autoRefreshTimer?.stop();
-                      _autoRefreshTimer = null;
-                      _syncViewModelEntitlement();
-                      vm.loadInitial(_timeframe);
+                      final replay = widget.replayController;
+                      if (replay?.isActive == true) {
+                        // Re-align for the new TF. setAsOf may no-op when
+                        // the aligned unix is unchanged — always reload.
+                        replay!.setAsOf(_timeframe, replay.asOf!);
+                        _syncViewModelEntitlement();
+                        _loadScorecards();
+                        vm.loadInitial(_timeframe);
+                      } else {
+                        _loadScorecards();
+                        _syncViewModelEntitlement();
+                        vm.loadInitial(_timeframe);
+                      }
                     },
                   ),
                   ctrlFontSize,
@@ -1320,10 +1453,10 @@ class OverviewWidgetState extends State<OverviewWidget>
           _menuRow(
             icon: Icons.pie_chart,
             label: 'Market Pulse',
-            onTap: () {
+            onTap: () async {
               setState(() => _overlay = _OverlayKind.none);
               if (!_requireAccess()) return;
-              Navigator.of(context).push(
+              await Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => MarketPulseScreen(
                     marketStateApi: widget.marketStateApi!,
@@ -1334,9 +1467,15 @@ class OverviewWidgetState extends State<OverviewWidget>
                     sectorRotationApi: widget.sectorRotationApi,
                     scorecardApi: widget.scorecardApi,
                     isProUser: _isProUser,
+                    replayController: widget.replayController,
+                    initialTimeframe: _timeframe,
                   ),
                 ),
               );
+              // Pulse releasePulseSurface already triggers one Overview reload.
+              if (!mounted) return;
+              _syncAutoRefreshWithReplay();
+              setState(() {});
             },
           ),
         if (widget.marketStateApi != null) _menuDivider(),

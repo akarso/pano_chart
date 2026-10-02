@@ -13,6 +13,7 @@ class ScorecardCatalog {
     required ScorecardApi? api,
     required String timeframe,
     required void Function() notify,
+    String since = '30d',
   }) async {
     if (api == null) return;
     final generation = ++_generation;
@@ -23,7 +24,7 @@ class ScorecardCatalog {
       notify();
     }
     try {
-      final summary = await api.summary(timeframe: timeframe, since: '30d');
+      final summary = await api.summary(timeframe: timeframe, since: since);
       if (generation != _generation) return;
       items = indexScorecards(summary.items);
       notify();

@@ -6,6 +6,7 @@ import 'overview_state.dart';
 ///
 /// Currently ignores page/sort/snapshot — MVP uses a single
 /// limit-based fetch. Pagination will be added in PR-014.
+/// Does not support replay `asOf` — production uses [GetRankingsImpl].
 class GetOverviewImpl implements GetOverview {
   final OverviewApi api;
 
@@ -20,7 +21,13 @@ class GetOverviewImpl implements GetOverview {
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
+    if (asOf != null) {
+      throw UnsupportedError(
+        'GetOverviewImpl does not support asOf; use GetRankingsImpl',
+      );
+    }
     final dto = await api.fetchOverview(
       timeframe: timeframe,
       limit: 30,

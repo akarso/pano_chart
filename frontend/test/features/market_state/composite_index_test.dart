@@ -333,7 +333,7 @@ class _NeverCompleteStateApi implements MarketStateApi {
 
 class _NeverCompleteCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) {
     return Completer<CompositeIndexData>().future;
   }
 }
@@ -347,7 +347,7 @@ class _ErrorStateApi implements MarketStateApi {
 
 class _ErrorCompositeApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) async {
     throw Exception('network error');
   }
 }
@@ -365,5 +365,5 @@ class _FakeCompositeApi implements CompositeIndexApi {
   _FakeCompositeApi(this.data);
 
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit}) async => data;
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) async => data;
 }

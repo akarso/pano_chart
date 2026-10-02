@@ -1179,17 +1179,21 @@ change.
 
 ### PR-112b — Replay mode (frontend scrubber)
 
-**Layer:** frontend. **Depends on:** PR-112a.
+**Layer:** frontend. **Depends on:** PR-112a (must ship first — UI gated by
+`kReplayUiEnabled`, default off, until `?asOf=` is live).
+
+**Spec file:** `frontend/docs/v2/PR-112b.md`.
 
 **Spec.**
 1. Market Pulse and grid get a "Replay" toggle (Pro). When on, a bottom scrubber with a date
    picker and step buttons (−1 bar / +1 bar / −1 day / +1 day) sets `asOf`.
-2. All API calls carry `asOf`; a persistent banner "Replay: Sep 16 08:30 UTC" with an Exit
-   button. Auto-refresh paused while in replay.
-3. If PR-093 is present, show the scorecard chip for the replayed signal as it would have been
-   known **then** (`since` ≤ `asOf`).
+2. Capable API calls carry TF-aligned `asOf`; a persistent banner "Replay: Sep 16 08:30 UTC" with an Exit
+   button. Auto-refresh paused while in replay and restarted on exit.
+3. If PR-093 is present, scorecard chips use `since = asOf − 30d` as a **window start**
+   (full “known then” needs backend `until=asOf`, deferred). Live-only Pulse cards are hidden in replay.
 
-**Tests.** Scrubber emits `asOf` aligned to the bar; auto-refresh timer is paused in replay.
+**Tests.** Scrubber emits `asOf` aligned to the bar; auto-refresh timer is paused in replay;
+Overview TF change under replay reloads; rankings cache skipped under `asOf`.
 
 ---
 

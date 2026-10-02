@@ -22,6 +22,8 @@ import 'package:pano_chart_frontend/features/overview/overview_widget.dart';
 import 'package:pano_chart_frontend/features/overview/overview_view_model.dart';
 import 'package:pano_chart_frontend/features/overview/get_overview.dart';
 import 'package:pano_chart_frontend/features/overview/overview_state.dart';
+import 'package:pano_chart_frontend/features/replay/replay_asof.dart';
+import 'package:pano_chart_frontend/features/replay/replay_controller.dart';
 import 'package:pano_chart_frontend/features/scorecards/http_scorecard_api.dart';
 import 'package:pano_chart_frontend/features/scorecards/scorecard_data.dart';
 import 'package:pano_chart_frontend/features/watchlist/watchlist_api.dart';
@@ -60,6 +62,7 @@ class _FakeGetOverview extends GetOverview {
   final List<int> pageCalls = [];
   final List<bool> mtfCalls = [];
   final List<List<String>> symbolCalls = [];
+  final List<int?> asOfCalls = [];
 
   _FakeGetOverview({this.delay = Duration.zero, required this.result});
 
@@ -72,10 +75,12 @@ class _FakeGetOverview extends GetOverview {
     String sidewaysAlgo = 'v1',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
     pageCalls.add(page);
     mtfCalls.add(mtf);
     symbolCalls.add(List.of(symbols));
+    asOfCalls.add(asOf);
     if (delay != Duration.zero) await Future.delayed(delay);
     return result;
   }
@@ -169,6 +174,7 @@ Widget _wrap(Widget w) => MaterialApp(home: Scaffold(body: w));
 
 class _FakeScorecardApi implements ScorecardApi {
   final List<ScorecardSummaryItem> items;
+  final List<String> sinceCalls = [];
 
   _FakeScorecardApi({this.items = const []});
 
@@ -177,6 +183,7 @@ class _FakeScorecardApi implements ScorecardApi {
     required String timeframe,
     String since = '30d',
   }) async {
+    sinceCalls.add(since);
     return ScorecardSummary(
       timeframe: timeframe,
       since: since,
@@ -1770,6 +1777,228 @@ void main() {
       },
     );
   });
+
+  group('PR-112b replay scrubber', () {
+    final replayItems = [
+      const OverviewItem(
+        symbol: 'BTCUSDT',
+        totalScore: 2.75,
+        sparkline: [100.0, 105.0, 110.0],
+        badgeComponent: 'trend',
+      ),
+    ];
+
+    testWidgets('scrubber steps emit bar-aligned asOf and pause auto-refresh',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await PreferencesService.create();
+      prefs.hasSeenAbout = true;
+      final overview = _FakeGetOverview(
+        result: OverviewResult(items: replayItems, hasMore: false),
+      );
+      final scorecards = _FakeScorecardApi();
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      await tester.pumpWidget(
+        _wrap(
+          OverviewWidget(
+            viewModel: OverviewViewModel(overview),
+            getCandleSeries: _FakeGetCandleSeries(),
+            prefs: prefs,
+            billingManager: billing,
+            replayController: replay,
+            scorecardApi: scorecards,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(overview.asOfCalls, [null]);
+      expect(find.byKey(const Key('replay-toggle')), findsOneWidget);
+
+      replay.enter(timeframe: '1h', now: now);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('replay-banner')), findsOneWidget);
+      expect(find.byKey(const Key('replay-banner-footnote')), findsOneWidget);
+      expect(find.byKey(const Key('replay-scrubber')), findsOneWidget);
+      expect(overview.asOfCalls.length, 2);
+      expect(overview.asOfCalls.last, replay.asOfUnixFor('1h', now: now));
+      expect(
+        overview.asOfCalls.last,
+        alignAsOfToBar(now, '1h').millisecondsSinceEpoch ~/ 1000,
+      );
+      expect(scorecards.sinceCalls.last, isNot('30d'));
+      expect(
+        DateTime.parse(scorecards.sinceCalls.last).isBefore(replay.asOf!),
+        isTrue,
+      );
+
+      final afterEnter = overview.asOfCalls.length;
+      await tester.pump(const Duration(seconds: 30));
+      expect(overview.asOfCalls.length, afterEnter,
+          reason: 'auto-refresh must stay paused in replay');
+
+      await tester.tap(find.byKey(const Key('replay-step-bar-minus')));
+      await tester.pumpAndSettle();
+      expect(overview.asOfCalls.length, afterEnter + 1);
+      final stepped = DateTime.fromMillisecondsSinceEpoch(
+        overview.asOfCalls.last! * 1000,
+        isUtc: true,
+      );
+      expect(stepped.minute, 0);
+      expect(stepped.second, 0);
+      expect(
+        stepped,
+        alignAsOfToBar(now, '1h').subtract(const Duration(hours: 1)),
+      );
+
+      replay.exit();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('replay-banner')), findsNothing);
+      expect(overview.asOfCalls.last, isNull);
+    });
+
+    testWidgets('TF change under replay reloads even when aligned unix matches',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await PreferencesService.create();
+      prefs.hasSeenAbout = true;
+      prefs.timeframe = '4h';
+      final overview = _FakeGetOverview(
+        result: OverviewResult(items: replayItems, hasMore: false),
+      );
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      await tester.pumpWidget(
+        _wrap(
+          OverviewWidget(
+            viewModel: OverviewViewModel(overview),
+            getCandleSeries: _FakeGetCandleSeries(),
+            prefs: prefs,
+            billingManager: billing,
+            replayController: replay,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      replay.enter(timeframe: '4h', now: now);
+      await tester.pumpAndSettle();
+      final afterEnter = overview.asOfCalls.length;
+      final asOf4h = overview.asOfCalls.last;
+      expect(asOf4h, isNotNull);
+      // 1h alignment of the same instant yields the same unix (08:00).
+      expect(
+        replay.setAsOf('1h', replay.asOf!, now: now),
+        isFalse,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('overview-settings-nav-icon')));
+      await tester.pumpAndSettle();
+      // Open the timeframe dropdown (shows current '4h'), then pick '1h'.
+      await tester.tap(find.text('4h'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('1h').last);
+      await tester.pumpAndSettle();
+
+      expect(overview.asOfCalls.length, greaterThan(afterEnter),
+          reason: 'TF change must reload even when setAsOf does not notify');
+      expect(overview.asOfCalls.last, asOf4h);
+    });
+
+    testWidgets('exit restarts auto-refresh even if reload fails',
+        (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await PreferencesService.create();
+      prefs.hasSeenAbout = true;
+      final overview = _FailAfterNOverview(
+        succeedCount: 2,
+        result: OverviewResult(items: replayItems, hasMore: false),
+      );
+      final replay = ReplayController(reloadDebounce: Duration.zero);
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: true);
+      final now = DateTime.utc(2025, 9, 16, 10, 17);
+
+      await tester.pumpWidget(
+        _wrap(
+          OverviewWidget(
+            viewModel: OverviewViewModel(overview),
+            getCandleSeries: _FakeGetCandleSeries(),
+            prefs: prefs,
+            billingManager: billing,
+            replayController: replay,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      replay.enter(timeframe: '1h', now: now);
+      await tester.pumpAndSettle();
+      expect(overview.calls, 2);
+
+      replay.exit();
+      await tester.pumpAndSettle();
+      // Call 3 (exit reload) failed — timer must still tick.
+      final callsBefore = overview.calls;
+      await tester.pump(const Duration(seconds: 30));
+      expect(overview.calls, greaterThan(callsBefore),
+          reason: 'auto-refresh must restart after exit even if reload failed');
+    });
+
+    testWidgets('free tier hides the replay toggle', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await PreferencesService.create();
+      prefs.hasSeenAbout = true;
+      final billing = _TestBillingManager()..debugSetAccess(fullAccess: false);
+
+      await tester.pumpWidget(
+        _wrap(
+          OverviewWidget(
+            viewModel: OverviewViewModel(
+              _FakeGetOverview(
+                result: OverviewResult(items: replayItems, hasMore: false),
+              ),
+            ),
+            getCandleSeries: _FakeGetCandleSeries(),
+            prefs: prefs,
+            billingManager: billing,
+            replayController: ReplayController(reloadDebounce: Duration.zero),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('replay-toggle')), findsNothing);
+    });
+  });
+}
+
+/// Succeeds [succeedCount] times, then throws — for exit/reload failure tests.
+class _FailAfterNOverview extends GetOverview {
+  _FailAfterNOverview({required this.succeedCount, required this.result});
+
+  final int succeedCount;
+  final OverviewResult result;
+  int calls = 0;
+
+  @override
+  Future<OverviewResult> call({
+    required String timeframe,
+    required int page,
+    required String sort,
+    String? snapshot,
+    String sidewaysAlgo = 'v1',
+    List<String> symbols = const [],
+    bool mtf = false,
+    int? asOf,
+  }) async {
+    calls++;
+    if (calls <= succeedCount) return result;
+    throw Exception('network down');
+  }
 }
 
 class _OneCandleSeries implements GetCandleSeries {
@@ -1803,7 +2032,7 @@ class _NeverCalledMarketStateApi implements MarketStateApi {
 
 class _NeverCalledCompositeIndexApi implements CompositeIndexApi {
   @override
-  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 100}) {
+  Future<CompositeIndexData> fetch({String timeframe = '4h', int limit = 100, int? asOf}) {
     fail(
       'CompositeIndexApi.fetch should never be called — access was not granted',
     );

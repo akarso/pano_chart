@@ -1,10 +1,11 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../replay/replay_asof.dart';
 import 'regime_history_data.dart';
 
 /// Fetches regime history from the backend.
 abstract class RegimeHistoryApi {
-  Future<RegimeHistoryData> fetch({String timeframe});
+  Future<RegimeHistoryData> fetch({String timeframe, int? asOf});
 }
 
 class HttpRegimeHistoryApi implements RegimeHistoryApi {
@@ -14,9 +15,10 @@ class HttpRegimeHistoryApi implements RegimeHistoryApi {
   HttpRegimeHistoryApi({required this.client, required this.baseUrl});
 
   @override
-  Future<RegimeHistoryData> fetch({String timeframe = '4h'}) async {
-    final uri = Uri.parse(
+  Future<RegimeHistoryData> fetch({String timeframe = '4h', int? asOf}) async {
+    var uri = Uri.parse(
         '$baseUrl/api/market/regime/history?timeframe=$timeframe');
+    uri = uriWithAsOf(uri, asOf);
     final response =
         await client.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) {

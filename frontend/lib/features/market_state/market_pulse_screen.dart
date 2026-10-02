@@ -29,6 +29,9 @@ import '../scorecards/reliability_chip.dart';
 import '../scorecards/scorecard_catalog.dart';
 import '../scorecards/scorecard_data.dart';
 import '../scorecards/scorecards_screen.dart';
+import '../replay/replay_asof.dart';
+import '../replay/replay_controller.dart';
+import '../replay/replay_widgets.dart';
 
 /// Full-page Market Pulse screen showing market state, participation, and
 /// composite index chart. Designed for extensibility with future stats.
@@ -40,6 +43,7 @@ class MarketPulseScreen extends StatefulWidget {
   final RegimeHistoryApi? regimeHistoryApi;
   final SectorRotationApi? sectorRotationApi;
   final ScorecardApi? scorecardApi;
+  final ReplayController? replayController;
   final String? initialTimeframe;
   final bool isProUser;
 
@@ -52,6 +56,7 @@ class MarketPulseScreen extends StatefulWidget {
     this.regimeHistoryApi,
     this.sectorRotationApi,
     this.scorecardApi,
+    this.replayController,
     this.initialTimeframe,
     this.isProUser = false,
   }) : super(key: key);
@@ -73,11 +78,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   SectorRotationData? _sectorData;
   /// Sector tapped to overlay its sparkline on the composite chart (PR-098b).
   String? _selectedSectorId;
-  /// Bumped by every `_loadAll()` call. A sector fetch started by an older
-  /// load (or an auto-refresh tick that straddled a timeframe change/reload)
-  /// carries its generation and is dropped on arrival if superseded, so a
-  /// slow, stale response can never clobber a newer one.
-  int _sectorLoadGeneration = 0;
+  /// Bumped by every `_loadAll()` call. Main Future.wait and sector fetches
+  /// capture the generation at start; stale responses are dropped so a slow
+  /// scrub response cannot clobber a newer asOf.
+  int _loadGeneration = 0;
   final ScorecardCatalog _scorecards = ScorecardCatalog();
   String? _error;
   bool _loading = true;
@@ -103,7 +107,56 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     if (initial != null && _supportedTimeframes.contains(initial)) {
       _timeframe = initial;
     }
+    _attachReplay(widget.replayController);
+    widget.replayController?.acquirePulseSurface();
     _initializeData();
+  }
+
+  @override
+  void didUpdateWidget(covariant MarketPulseScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.replayController, widget.replayController)) {
+      _detachReplay(oldWidget.replayController);
+      oldWidget.replayController?.releasePulseSurface();
+      _attachReplay(widget.replayController);
+      widget.replayController?.acquirePulseSurface();
+      _syncAutoRefreshWithReplay();
+      _loadAll();
+    }
+  }
+
+  void _attachReplay(ReplayController? c) {
+    c?.addListener(_onReplayUiChanged);
+    c?.addReloadListener(_onReplayReload);
+  }
+
+  void _detachReplay(ReplayController? c) {
+    c?.removeListener(_onReplayUiChanged);
+    c?.removeReloadListener(_onReplayReload);
+  }
+
+  void _onReplayUiChanged() {
+    if (!mounted) return;
+    _syncAutoRefreshWithReplay();
+    setState(() {});
+  }
+
+  void _onReplayReload() {
+    if (!mounted) return;
+    _loadAll();
+  }
+
+  int? get _asOfUnix =>
+      widget.replayController?.asOfUnixFor(_timeframe);
+
+  bool get _replayActive => widget.replayController?.isActive == true;
+
+  void _syncAutoRefreshWithReplay() {
+    if (_replayActive) {
+      _autoRefreshTimer?.stop();
+    } else {
+      _startAutoRefresh();
+    }
   }
 
   Future<void> _initializeData() async {
@@ -138,7 +191,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       if (_lifecycleManager != null) {
         _pausable = Pausable(
           onPause: () => _autoRefreshTimer?.stop(),
-          onResume: () => _autoRefreshTimer?.start(),
+          onResume: () => _syncAutoRefreshWithReplay(),
         );
         _lifecycleManager!.addPausable(_pausable!);
       }
@@ -147,6 +200,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   @override
   void dispose() {
+    // Detach before release so this route's reload listener is not invoked
+    // while the element is already defunct.
+    _detachReplay(widget.replayController);
+    widget.replayController?.releasePulseSurface();
     if (_pausable != null) _lifecycleManager?.removePausable(_pausable!);
     _autoRefreshTimer?.dispose();
     super.dispose();
@@ -156,6 +213,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
     _autoRefreshTimer?.dispose();
     _autoRefreshTimer = null;
     if (!widget.isProUser) return;
+    if (_replayActive) return;
     final interval = kChartRefreshIntervals[_timeframe];
     if (interval == null) return;
     _autoRefreshTimer = AutoRefreshTimer(
@@ -170,6 +228,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       return await widget.compositeIndexApi.fetch(
         timeframe: _timeframe,
         limit: tapeMetricsWindow,
+        asOf: _asOfUnix,
       );
     } catch (_) {
       // Optional scored-window series — must not block market data.
@@ -178,6 +237,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   Future<SectorRotationData?> _fetchSectorRotation() async {
+    // Sector rotation has no asOf — skip while replaying to avoid mixed eras.
+    if (_replayActive) return null;
     final api = widget.sectorRotationApi;
     if (api == null) return null;
     try {
@@ -190,7 +251,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   Future<void> _autoRefreshData() async {
     if (!mounted) return;
-    _applySectorRotation(_fetchSectorRotation(), _sectorLoadGeneration);
+    if (_replayActive) return;
+    _applySectorRotation(_fetchSectorRotation(), _loadGeneration);
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
@@ -198,13 +260,15 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
           limit: compositeChartLimit,
+          asOf: _asOfUnix,
         ),
         if (widget.regimeApi != null)
-          widget.regimeApi!.fetch(timeframe: _timeframe),
+          widget.regimeApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.transitionApi != null)
-          widget.transitionApi!.fetch(timeframe: _timeframe),
+          widget.transitionApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.regimeHistoryApi != null)
-          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
+          widget.regimeHistoryApi!
+              .fetch(timeframe: _timeframe, asOf: _asOfUnix),
       ];
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
@@ -253,7 +317,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   ) {
     sectorFuture.then((sectors) {
       if (!mounted) return;
-      if (generation != _sectorLoadGeneration) return;
+      if (generation != _loadGeneration) return;
       setState(() {
         _sectorData = sectors;
         _pruneSectorSelectionIfMissing();
@@ -262,7 +326,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   Future<void> _loadAll() async {
-    final generation = ++_sectorLoadGeneration;
+    final generation = ++_loadGeneration;
+    final replay = _replayActive;
     setState(() {
       _loading = true;
       _error = null;
@@ -274,46 +339,58 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       // once that response arrives) still clears it if the sector is gone
       // or no longer RS-available.
       _sectorData = null;
+      if (replay) {
+        // Live-only surfaces must not linger under a Replay banner.
+        _stateData = null;
+      }
     });
     _loadScorecards();
-    _applySectorRotation(_fetchSectorRotation(), generation);
+    if (!replay) {
+      _applySectorRotation(_fetchSectorRotation(), generation);
+    }
     try {
       final tapeFuture = _fetchTapeComposite();
       final futures = <Future>[
-        widget.marketStateApi.fetch(timeframe: _timeframe),
+        // /state has no asOf — skip in replay so the screen does not mix eras.
+        if (!replay) widget.marketStateApi.fetch(timeframe: _timeframe),
         widget.compositeIndexApi.fetch(
           timeframe: _timeframe,
           limit: compositeChartLimit,
+          asOf: _asOfUnix,
         ),
         if (widget.regimeApi != null)
-          widget.regimeApi!.fetch(timeframe: _timeframe),
+          widget.regimeApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.transitionApi != null)
-          widget.transitionApi!.fetch(timeframe: _timeframe),
+          widget.transitionApi!.fetch(timeframe: _timeframe, asOf: _asOfUnix),
         if (widget.regimeHistoryApi != null)
-          widget.regimeHistoryApi!.fetch(timeframe: _timeframe),
+          widget.regimeHistoryApi!
+              .fetch(timeframe: _timeframe, asOf: _asOfUnix),
       ];
       final results = await Future.wait(futures);
       final tape = await tapeFuture;
       if (!mounted) return;
-      int idx = 2;
+      if (generation != _loadGeneration) return;
+      MarketStateData? state;
+      var idx = 0;
+      if (!replay) {
+        state = results[idx++] as MarketStateData;
+      }
+      final composite = results[idx++] as CompositeIndexData;
       RegimeData? regime;
       TransitionData? trans;
       RegimeHistoryData? history;
       if (widget.regimeApi != null) {
-        regime = results[idx] as RegimeData;
-        idx++;
+        regime = results[idx++] as RegimeData;
       }
       if (widget.transitionApi != null) {
-        trans = results[idx] as TransitionData;
-        idx++;
+        trans = results[idx++] as TransitionData;
       }
       if (widget.regimeHistoryApi != null) {
-        history = results[idx] as RegimeHistoryData;
-        idx++;
+        history = results[idx++] as RegimeHistoryData;
       }
       setState(() {
-        _stateData = results[0] as MarketStateData;
-        _compositeData = results[1] as CompositeIndexData;
+        _stateData = state;
+        _compositeData = composite;
         _tapeCompositeData = tape;
         _regimeData = regime;
         _transitionData = trans;
@@ -323,6 +400,7 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
       });
     } catch (e) {
       if (!mounted) return;
+      if (generation != _loadGeneration) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -369,6 +447,8 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final replay = widget.replayController;
+    final asOf = replay?.asOfFor(_timeframe);
     return Scaffold(
       backgroundColor: const Color(0xFF0D0D0D),
       appBar: AppBar(
@@ -380,6 +460,22 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
         title: const Text('Market Pulse'),
         centerTitle: true,
         actions: [
+          if (widget.isProUser && replay != null)
+            IconButton(
+              key: const Key('replay-toggle'),
+              tooltip: asOf == null ? 'Replay' : 'Exit replay',
+              icon: Icon(
+                Icons.history,
+                color: asOf != null ? Colors.lightBlueAccent : Colors.white70,
+              ),
+              onPressed: () {
+                if (asOf == null) {
+                  replay.enter(timeframe: _timeframe);
+                } else {
+                  replay.exit();
+                }
+              },
+            ),
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: DropdownButtonHideUnderline(
@@ -400,6 +496,10 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
                   if (v != null && v != _timeframe) {
                     setState(() => _timeframe = v);
                     _persistTimeframe(v);
+                    if (replay?.isActive == true) {
+                      // May no-op on unchanged aligned unix — always reload.
+                      replay!.setAsOf(v, replay.asOf!);
+                    }
                     _loadAll();
                     _startAutoRefresh();
                   }
@@ -409,7 +509,19 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
           ),
         ],
       ),
-      body: _buildBody(),
+      body: Column(
+        children: [
+          if (asOf != null)
+            ReplayBanner(
+              asOf: asOf,
+              onExit: () => replay?.exit(),
+              footnote: kReplayBannerFootnote,
+            ),
+          Expanded(child: _buildBody()),
+          if (asOf != null && replay != null)
+            ReplayScrubber(controller: replay, timeframe: _timeframe),
+        ],
+      ),
     );
   }
 
@@ -464,15 +576,21 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
               child: _buildCompositeCard(_compositeData!),
             ),
           if (_compositeData != null) const SizedBox(height: 16),
-          if (_sectorData != null && _sectorData!.sectors.isNotEmpty)
+          if (!_replayActive &&
+              _sectorData != null &&
+              _sectorData!.sectors.isNotEmpty)
             KeyedSubtree(
               key: const Key('mp-sector-rotation'),
               child: _buildSectorRotationCard(_sectorData!),
             ),
-          if (_sectorData != null && _sectorData!.sectors.isNotEmpty)
+          if (!_replayActive &&
+              _sectorData != null &&
+              _sectorData!.sectors.isNotEmpty)
             const SizedBox(height: 16),
           Builder(
             builder: (context) {
+              // Participation can fall back to live /state — hide in replay.
+              if (_replayActive) return const SizedBox.shrink();
               final participation = ParticipationCardModel.resolve(
                 regime: _regimeData,
                 state: _stateData,
@@ -1732,9 +1850,13 @@ class _MarketPulseScreenState extends State<MarketPulseScreen> {
   }
 
   Future<void> _loadScorecards() {
+    final asOf = widget.replayController?.asOfFor(_timeframe);
+    final since =
+        asOf != null ? replayScorecardSince(asOf) : '30d';
     return _scorecards.load(
       api: widget.scorecardApi,
       timeframe: _timeframe,
+      since: since,
       notify: () {
         if (mounted) setState(() {});
       },

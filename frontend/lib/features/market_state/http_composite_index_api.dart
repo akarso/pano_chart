@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../replay/replay_asof.dart';
 import 'composite_index_data.dart';
 
 /// Candle window used by backend `CalculateTape` (`candleMetricsWindow`).
@@ -15,7 +16,7 @@ bool isKnownCompositeSource(String src) =>
 
 /// Fetches the composite market index from the backend.
 abstract class CompositeIndexApi {
-  Future<CompositeIndexData> fetch({String timeframe, int limit});
+  Future<CompositeIndexData> fetch({String timeframe, int limit, int? asOf});
 }
 
 class HttpCompositeIndexApi implements CompositeIndexApi {
@@ -28,10 +29,12 @@ class HttpCompositeIndexApi implements CompositeIndexApi {
   Future<CompositeIndexData> fetch({
     String timeframe = '4h',
     int limit = compositeChartLimit,
+    int? asOf,
   }) async {
-    final uri = Uri.parse(
+    var uri = Uri.parse(
       '$baseUrl/api/market/composite?timeframe=$timeframe&limit=$limit',
     );
+    uri = uriWithAsOf(uri, asOf);
     final response = await client.get(uri).timeout(const Duration(seconds: 15));
     if (response.statusCode != 200) {
       throw HttpCompositeIndexApiException(

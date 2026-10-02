@@ -330,7 +330,7 @@ class _FakeCompositeApi implements CompositeIndexApi {
 
   @override
   Future<CompositeIndexData> fetch(
-      {String timeframe = '4h', int limit = compositeChartLimit}) async =>
+      {String timeframe = '4h', int limit = compositeChartLimit, int? asOf}) async =>
       data;
 }
 
@@ -339,7 +339,7 @@ class _FakeRegimeApi implements RegimeApi {
   _FakeRegimeApi(this.data);
 
   @override
-  Future<RegimeData> fetch({String timeframe = '4h'}) async => data;
+  Future<RegimeData> fetch({String timeframe = '4h', int? asOf}) async => data;
 }
 
 class _FakeTransitionApi implements TransitionApi {
@@ -347,7 +347,7 @@ class _FakeTransitionApi implements TransitionApi {
   _FakeTransitionApi(this.data);
 
   @override
-  Future<TransitionData> fetch({String timeframe = '4h'}) async => data;
+  Future<TransitionData> fetch({String timeframe = '4h', int? asOf}) async => data;
 }
 
 class _FakeRegimeHistoryApi implements RegimeHistoryApi {
@@ -355,5 +355,5 @@ class _FakeRegimeHistoryApi implements RegimeHistoryApi {
   _FakeRegimeHistoryApi(this.data);
 
   @override
-  Future<RegimeHistoryData> fetch({String timeframe = '4h'}) async => data;
+  Future<RegimeHistoryData> fetch({String timeframe = '4h', int? asOf}) async => data;
 }

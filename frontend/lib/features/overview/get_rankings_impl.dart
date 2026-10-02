@@ -20,6 +20,7 @@ class GetRankingsImpl implements GetOverview {
     String sidewaysAlgo = 'v5',
     List<String> symbols = const [],
     bool mtf = false,
+    int? asOf,
   }) async {
     final dto = await api.fetchRankings(
       timeframe: timeframe,
@@ -29,6 +30,7 @@ class GetRankingsImpl implements GetOverview {
       sidewaysAlgo: sidewaysAlgo,
       symbols: symbols,
       mtf: mtf,
+      asOf: asOf,
     );
 
     final items = dto.results
