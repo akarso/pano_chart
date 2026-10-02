@@ -1101,6 +1101,8 @@ model is absent / placeholder; learned Structure keeps trend gate; export Query 
 
 **Layer:** application + adapters. **Depends on:** PR-104, setups service.
 
+**Spec file:** `backend/docs/v2/PR-110.md`.
+
 **Spec.**
 1. `application/plan/range_planner.go`:
    ```go
@@ -1111,14 +1113,19 @@ model is absent / placeholder; learned Structure keeps trend gate; export Query 
        LongEntry, LongStop, LongTarget    float64 // entry = Low + 0.25×ATR, stop = Low − 1.0×ATR, target = Mid (conservative) and High − 0.25×ATR (full)
        ShortEntry, ShortStop, ShortTarget float64 // mirror
        RiskReward        float64   // (target − entry)/(entry − stop) for the conservative target
-       RangeQuality      float64   // sideways × mean-reversion (PR-104) — see note below
-       Position          float64   // (price − Low)/(High − Low): 0 = at support, 1 = at resistance
-       Valid             bool      // RangeQuality ≥ 0.5 && RiskReward ≥ 1.2 && (High−Low)/ATR ≥ 3
+       RangeQuality      float64   // Sideways V5 (channel-aligned; not LM MRS — PR-104)
+       Position          float64   // clamp01((price − Low)/(High − Low)): 0 = at support, 1 = at resistance
+       Valid             bool      // RangeQuality ≥ 0.5 && (High−Low)/ATR ≥ 3.5 (implies Mid RR ≥ 1.2)
        Reason            string    // why invalid, if !Valid
    }
    ```
-   **PR-104 caveat:** Lo–MacKinlay MRS ≠ channel quality (`tight_range` MRS≈0). Amend this
-   gate before enabling it, or use a channel-aligned quality signal instead of LM MRS.
+   **PR-104 caveat:** Lo–MacKinlay MRS ≠ channel quality (`tight_range` MRS≈0). Use
+   Sideways V5 as the quality gate, not LM MRS.
+   Channel Low/High come from confirmed 3-bar swing pivots (shared
+   `scoring.IsPivotHigh`/`IsPivotLow`; not raw min/max). Width≥3.5 is the
+   binding geometry gate for Mid targets — RR is reported but not a separate
+   public reason. When `!Valid`, entry/stop/target fields are zeroed;
+   `riskReward` may remain for diagnostics.
 2. Position sizing helper (pure): `Size(accountRisk, entry, stop float64) float64 =
    accountRisk / |entry − stop|` — the client passes `accountRisk` in quote currency.
 3. Endpoint `GET /api/symbol/{symbol}/plan?timeframe=&risk=100` → plan + `size`.
